@@ -1,0 +1,138 @@
+<!DOCTYPE html>
+<html lang="tr">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Courty</title>
+    <link rel="icon" type="image/svg+xml" href="logo.svg">
+    <link rel="stylesheet" href="styles.css">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+</head>
+<body>
+    <header class="header">
+        <nav class="nav">
+            <div class="nav-container">
+                <div class="logo">
+                    <img src="logo.svg" alt="Courty Logo" class="logo-image">
+                </div>
+                <ul class="nav-menu">
+                    <li><a href="index.html" class="nav-link">Ana Sayfa</a></li>
+                    <li><a href="features.html" class="nav-link">Courty Nedir?</a></li>
+                    <li><a href="partners.html" class="nav-link">Partnerlerimiz</a></li>
+                    <li><a href="privacy.html" class="nav-link">Gizlilik Politikası</a></li>
+                    <li><a href="terms.html" class="nav-link">Kullanım Şartları</a></li>
+                    <li><a href="acik-riza.html" class="nav-link">Açık Rıza</a></li>
+                    <li><a href="contact.html" class="nav-link active">İletişim</a></li>
+                </ul>
+                <div class="hamburger">
+                    <span class="bar"></span>
+                    <span class="bar"></span>
+                    <span class="bar"></span>
+                </div>
+            </div>
+        </nav>
+    </header>
+
+    <main>
+        <section class="section">
+            <div class="container">
+                <div class="content-header">
+                    <h1>İletişim</h1>
+                    <p>Courty hakkında sorularınız için bizimle iletişime geçin</p>
+                </div>
+                
+                <div class="contact-content">
+                    <div class="contact-info-card">
+                        <h2>İletişim Bilgileri</h2>
+                        <div class="contact-details">
+                            <div class="contact-item">
+                                <h3>İletişim</h3>
+                                <p>info.courty@gmail.com</p>
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <div class="contact-form-card">
+                        <h2>Bize Ulaşın</h2>
+                        <form class="contact-form">
+                            <div class="form-group">
+                                <label for="name">Ad Soyad</label>
+                                <input type="text" id="name" name="name" required>
+                            </div>
+                            <div class="form-group">
+                                <label for="email">E-posta</label>
+                                <input type="email" id="email" name="email" required>
+                            </div>
+                            <div class="form-group">
+                                <label for="subject">Konu</label>
+                                <select id="subject" name="subject" required>
+                                    <option value="">Konu seçin</option>
+                                    <option value="general">Genel Sorular</option>
+                                    <option value="privacy">Gizlilik</option>
+                                    <option value="terms">Kullanım Şartları</option>
+                                    <option value="technical">Teknik Destek</option>
+                                    <option value="account">Hesap İşlemleri</option>
+                                    <option value="deletion">Hesap Silme</option>
+                                    <option value="other">Diğer</option>
+                                </select>
+                            </div>
+                            <div class="form-group">
+                                <label for="message">Mesaj</label>
+                                <textarea id="message" name="message" rows="5" required></textarea>
+                            </div>
+                            <button type="submit" class="btn btn-primary">Gönder</button>
+                        </form>
+                    </div>
+                </div>
+
+                <!-- Hesap Silme Linki -->
+                <div class="account-actions">
+                    <div class="action-card">
+                        <h3>Hesap İşlemleri</h3>
+                        <p>Hesabınızı silmek istiyorsanız:</p>
+                        <a href="account-deletion.html" class="btn btn-danger">Hesabımı Sil</a>
+                    </div>
+                </div>
+            </div>
+        </section>
+    </main>
+
+    <footer class="footer">
+        <div class="container">
+            <div class="footer-content">
+                <div class="footer-logo">
+                    <img src="logo.svg" alt="Courty Logo" class="logo-image footer-logo-img">
+                    <p>Tenis kortu rezervasyonu ve antrenör bulma platformu</p>
+                </div>
+                <div class="footer-links">
+                    <div class="footer-section">
+                        <h4>Hızlı Linkler</h4>
+                        <ul>
+                            <li><a href="index.html">Ana Sayfa</a></li>
+                            <li><a href="features.html">Courty Nedir?</a></li>
+                            <li><a href="partners.html">Partnerlerimiz</a></li>
+                            <li><a href="privacy.html">Gizlilik Politikası</a></li>
+                            <li><a href="terms.html">Kullanım Şartları</a></li>
+                            <li><a href="acik-riza.html">Açık Rıza</a></li>
+                            <li><a href="contact.html">İletişim</a></li>
+                        </ul>
+                    </div>
+                    <div class="footer-section">
+                        <h4>Destek</h4>
+                        <ul>
+                            <li><a href="mailto:info.courty@gmail.com">İletişim</a></li>
+                            <li><a href="account-deletion.html">Hesap Silme</a></li>
+                        </ul>
+                    </div>
+                </div>
+            </div>
+            <div class="footer-bottom">
+                <p>&copy; 2024 Courty. Tüm hakları saklıdır.</p>
+            </div>
+        </div>
+    </footer>
+
+    <script src="config.js"></script>
+    <script src="script.js"></script>
+</body>
+</html>

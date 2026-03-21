@@ -1,0 +1,493 @@
+/* Email Confirmation Sayfası Stilleri - Modern Gradient */
+.email-confirmation-body {
+    background: linear-gradient(135deg, #0f2027 0%, #203a43 50%, #2c5364 100%);
+    min-height: 100vh;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 2rem 1rem;
+    margin: 0;
+    position: relative;
+    overflow: hidden;
+}
+
+.email-confirmation-body::before {
+    content: '';
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    background: radial-gradient(circle at 30% 40%, rgba(67, 233, 123, 0.15) 0%, transparent 50%),
+                radial-gradient(circle at 70% 60%, rgba(79, 172, 254, 0.15) 0%, transparent 50%);
+    animation: bodyGlow 10s ease-in-out infinite alternate;
+}
+
+@keyframes bodyGlow {
+    0% { opacity: 0.5; transform: scale(1); }
+    100% { opacity: 1; transform: scale(1.05); }
+}
+
+.email-confirmation-container {
+    width: 100%;
+    max-width: 500px;
+    position: relative;
+    z-index: 1;
+}
+
+.email-confirmation-card {
+    background: rgba(255, 255, 255, 0.95);
+    backdrop-filter: blur(20px);
+    -webkit-backdrop-filter: blur(20px);
+    border-radius: 24px;
+    padding: 3rem;
+    box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3),
+                0 0 0 1px rgba(255, 255, 255, 0.1);
+    position: relative;
+    overflow: hidden;
+    animation: cardFadeIn 0.6s ease-out;
+}
+
+@keyframes cardFadeIn {
+    from {
+        opacity: 0;
+        transform: translateY(30px);
+    }
+    to {
+        opacity: 1;
+        transform: translateY(0);
+    }
+}
+
+.email-confirmation-card::before {
+    content: '';
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    height: 4px;
+    background: linear-gradient(90deg, #4facfe 0%, #00f2fe 100%);
+}
+
+.email-confirmation-card::after {
+    content: '';
+    position: absolute;
+    top: -50%;
+    right: -50%;
+    width: 200%;
+    height: 200%;
+    background: radial-gradient(circle, rgba(79, 172, 254, 0.03) 0%, transparent 70%);
+    animation: cardGlow 8s ease-in-out infinite;
+    pointer-events: none;
+}
+
+@keyframes cardGlow {
+    0%, 100% { transform: translate(0, 0); }
+    50% { transform: translate(-10%, -10%); }
+}
+
+/* Logo Section */
+.logo-section {
+    text-align: center;
+    margin-bottom: 2rem;
+}
+
+.app-icon-large {
+    width: 160px;
+    height: 160px;
+    background: linear-gradient(135deg, #4facfe 0%, #00f2fe 100%);
+    border-radius: 36px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    margin: 0 auto 2rem;
+    box-shadow: 0 20px 50px rgba(79, 172, 254, 0.6),
+                0 0 0 6px rgba(255, 255, 255, 0.2);
+    animation: iconFloat 3s ease-in-out infinite;
+    position: relative;
+    z-index: 1;
+}
+
+.app-icon-large img {
+    width: 80%;
+    height: 80%;
+    object-fit: contain;
+    filter: drop-shadow(0 2px 8px rgba(0, 0, 0, 0.15));
+}
+
+@keyframes iconFloat {
+    0%, 100% { 
+        transform: translateY(0) scale(1); 
+        box-shadow: 0 20px 50px rgba(79, 172, 254, 0.6),
+                    0 0 0 6px rgba(255, 255, 255, 0.2);
+    }
+    50% { 
+        transform: translateY(-15px) scale(1.05); 
+        box-shadow: 0 25px 60px rgba(79, 172, 254, 0.7),
+                    0 0 0 6px rgba(255, 255, 255, 0.25);
+    }
+}
+
+/* Logo Styles for Email Confirmation */
+.logo-image-large {
+    height: 140px;
+    width: auto;
+    max-width: 180px;
+}
+
+
+.logo-section h1 {
+    font-size: 2rem;
+    font-weight: 700;
+    color: var(--brand-purple);
+    margin-bottom: 0.5rem;
+}
+
+.subtitle {
+    color: var(--gray);
+    font-size: 1rem;
+    margin: 0;
+}
+
+/* Confirmation Sections */
+.confirmation-section {
+    display: none;
+    text-align: center;
+}
+
+.confirmation-section.active {
+    display: block;
+}
+
+.confirmation-section h2 {
+    font-size: 1.5rem;
+    font-weight: 600;
+    color: var(--brand-purple);
+    margin-bottom: 1rem;
+}
+
+.confirmation-section > p {
+    color: var(--gray);
+    margin-bottom: 2rem;
+    line-height: 1.6;
+}
+
+/* Loading Section */
+.loading-spinner {
+    margin-bottom: 2rem;
+}
+
+.spinner {
+    width: 60px;
+    height: 60px;
+    border: 4px solid #e9ecef;
+    border-top: 4px solid var(--brand-blue);
+    border-radius: 50%;
+    animation: spin 1s linear infinite;
+    margin: 0 auto;
+}
+
+@keyframes spin {
+    0% { transform: rotate(0deg); }
+    100% { transform: rotate(360deg); }
+}
+
+/* Success Section */
+.success-icon {
+    margin: 0 auto 2rem;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+}
+
+.success-details {
+    background-color: #d4edda;
+    border: 1px solid #c3e6cb;
+    border-radius: var(--border-radius);
+    padding: 1.5rem;
+    margin: 2rem 0;
+    text-align: left;
+}
+
+.detail-item {
+    display: flex;
+    align-items: center;
+    margin-bottom: 0.75rem;
+    color: var(--dark-gray);
+}
+
+.detail-item:last-child {
+    margin-bottom: 0;
+}
+
+.detail-item.error {
+    color: #721c24;
+}
+
+.detail-icon {
+    width: 20px;
+    height: 20px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    margin-right: 0.75rem;
+    font-size: 0.875rem;
+    font-weight: bold;
+    flex-shrink: 0;
+}
+
+.detail-item:not(.error) .detail-icon {
+    color: var(--accent-teal);
+}
+
+.detail-item.error .detail-icon {
+    color: #dc3545;
+}
+
+/* Error Section */
+.error-icon {
+    margin: 0 auto 2rem;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+}
+
+.error-details {
+    background-color: #f8d7da;
+    border: 1px solid #f5c6cb;
+    border-radius: var(--border-radius);
+    padding: 1.5rem;
+    margin: 2rem 0;
+    text-align: left;
+}
+
+.error-help {
+    background-color: #f8f9fa;
+    border: 1px solid #e9ecef;
+    border-radius: var(--border-radius);
+    padding: 1.5rem;
+    margin: 2rem 0;
+    text-align: left;
+}
+
+.error-help h3 {
+    color: var(--brand-purple);
+    margin-bottom: 1rem;
+    font-size: 1.1rem;
+    font-weight: 600;
+}
+
+.error-help ul {
+    margin: 0;
+    padding-left: 1.5rem;
+}
+
+.error-help li {
+    color: var(--gray);
+    margin-bottom: 0.5rem;
+    font-size: 0.9rem;
+}
+
+.error-help li:last-child {
+    margin-bottom: 0;
+}
+
+/* Action Buttons */
+.action-buttons {
+    display: flex;
+    gap: 1rem;
+    justify-content: center;
+    margin-top: 2rem;
+    flex-wrap: wrap;
+}
+
+.btn {
+    display: inline-block;
+    padding: 1.125rem 2.5rem;
+    border-radius: 16px;
+    text-decoration: none;
+    font-weight: 600;
+    font-size: 1rem;
+    transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+    border: none;
+    cursor: pointer;
+    text-align: center;
+    min-width: 140px;
+    position: relative;
+    overflow: hidden;
+}
+
+.btn::before {
+    content: '';
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    background: linear-gradient(135deg, rgba(255, 255, 255, 0.2) 0%, rgba(255, 255, 255, 0) 100%);
+    opacity: 0;
+    transition: opacity 0.3s ease;
+}
+
+.btn:hover::before {
+    opacity: 1;
+}
+
+.btn-primary {
+    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+    color: var(--white);
+    box-shadow: 0 4px 15px rgba(102, 126, 234, 0.4);
+}
+
+.btn-primary:hover {
+    transform: translateY(-3px);
+    box-shadow: 0 8px 25px rgba(102, 126, 234, 0.5);
+}
+
+.btn-secondary {
+    background: linear-gradient(135deg, #6c757d 0%, #495057 100%);
+    color: var(--white);
+    box-shadow: 0 4px 15px rgba(108, 117, 125, 0.3);
+}
+
+.btn-secondary:hover {
+    transform: translateY(-3px);
+    box-shadow: 0 8px 25px rgba(108, 117, 125, 0.4);
+}
+
+/* Help Section */
+.help-section {
+    text-align: center;
+    margin-top: 2rem;
+    padding-top: 2rem;
+    border-top: 1px solid #e9ecef;
+}
+
+.help-section p {
+    color: var(--gray);
+    margin-bottom: 0.5rem;
+    font-size: 0.875rem;
+}
+
+.help-link {
+    color: var(--brand-blue);
+    text-decoration: none;
+    font-weight: 500;
+    font-size: 0.875rem;
+}
+
+.help-link:hover {
+    color: var(--brand-purple);
+    text-decoration: underline;
+}
+
+/* Responsive Design */
+@media (max-width: 480px) {
+    .email-confirmation-body {
+        padding: 1rem 0.5rem;
+    }
+    
+    .email-confirmation-card {
+        padding: 2rem 1.5rem;
+    }
+    
+    .logo-section h1 {
+        font-size: 1.75rem;
+    }
+    
+    .app-icon-large {
+        width: 130px;
+        height: 130px;
+    }
+
+    .app-icon-large img {
+        width: 75%;
+        height: 75%;
+    }
+    
+    .app-icon-large span {
+        font-size: 2rem;
+    }
+    
+    .confirmation-section h2 {
+        font-size: 1.25rem;
+    }
+    
+    .success-details,
+    .error-details,
+    .error-help {
+        padding: 1rem;
+    }
+    
+    .action-buttons {
+        flex-direction: column;
+        align-items: center;
+    }
+    
+    .btn {
+        width: 100%;
+        max-width: 200px;
+    }
+}
+
+/* Animation for section transitions */
+.confirmation-section {
+    opacity: 0;
+    transform: translateY(20px);
+    transition: all 0.5s ease;
+}
+
+.confirmation-section.active {
+    opacity: 1;
+    transform: translateY(0);
+}
+
+/* Success animation */
+.success-icon svg {
+    animation: successPulse 0.6s ease-in-out;
+}
+
+@keyframes successPulse {
+    0% {
+        transform: scale(0.8);
+        opacity: 0;
+    }
+    50% {
+        transform: scale(1.1);
+    }
+    100% {
+        transform: scale(1);
+        opacity: 1;
+    }
+}
+
+/* Error animation */
+.error-icon svg {
+    animation: errorShake 0.6s ease-in-out;
+}
+
+@keyframes errorShake {
+    0%, 100% {
+        transform: translateX(0);
+    }
+    25% {
+        transform: translateX(-5px);
+    }
+    75% {
+        transform: translateX(5px);
+    }
+}
+
+/* Loading animation enhancement */
+.loading-spinner .spinner {
+    animation: spin 1s linear infinite, pulse 2s ease-in-out infinite;
+}
+
+@keyframes pulse {
+    0%, 100% {
+        opacity: 1;
+    }
+    50% {
+        opacity: 0.7;
+    }
+}

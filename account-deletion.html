@@ -1,0 +1,137 @@
+<!DOCTYPE html>
+<html lang="tr">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Courty</title>
+    <link rel="icon" type="image/svg+xml" href="logo.svg">
+    <link rel="stylesheet" href="styles.css">
+    <link rel="stylesheet" href="account-deletion.css">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+</head>
+<body class="account-deletion-body">
+    <div class="account-deletion-container">
+        <div class="account-deletion-card">
+            <div class="logo-section">
+                <div class="app-icon-large">
+                    <img src="logo.svg" alt="Courty Logo" class="logo-image-large">
+                </div>
+                <h1>Courty</h1>
+                <p class="subtitle">Hesap Silme</p>
+            </div>
+
+            <!-- Uyarı Bölümü -->
+            <div class="warning-section">
+                <div class="warning-icon">
+                    <svg width="60" height="60" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+                        <circle cx="12" cy="12" r="10" fill="#ffc107"/>
+                        <path d="M12 8v4M12 16h.01" stroke="#000" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+                    </svg>
+                </div>
+                <h2>Hesabınızı Silmek İstediğinizden Emin misiniz?</h2>
+                <p>Bu işlem geri alınamaz ve tüm verileriniz kalıcı olarak silinecektir.</p>
+            </div>
+
+            <!-- Silinecek Veriler -->
+            <div class="deletion-details">
+                <h3>Silinecek Veriler:</h3>
+                <ul class="deletion-list">
+                    <li>✓ Profil bilgileriniz (ad, soyad, e-posta)</li>
+                    <li>✓ Rezervasyon geçmişiniz</li>
+                    <li>✓ Ödeme bilgileriniz</li>
+                    <li>✓ Değerlendirmeleriniz ve yorumlarınız</li>
+                    <li>✓ Uygulama ayarlarınız</li>
+                    <li>✓ Tüm kişisel verileriniz</li>
+                </ul>
+            </div>
+
+            <!-- Hesap Silme Açıklaması -->
+            <div class="deletion-instructions">
+                <h3>Hesabınızı Nasıl Silersiniz?</h3>
+                <p>Hesap silme işlemi uygulama içinden yapılabilir. İşte adım adım nasıl yapacağınız:</p>
+                
+                <div class="instruction-steps">
+                    <div class="step">
+                        <div class="step-number">1</div>
+                        <div class="step-content">
+                            <h4>Uygulamaya Giriş Yapın</h4>
+                            <p>Courty uygulamasını açın ve hesabınızla giriş yapın.</p>
+                        </div>
+                    </div>
+                    
+                    <div class="step">
+                        <div class="step-number">2</div>
+                        <div class="step-content">
+                            <h4>Profil Sayfasına Gidin</h4>
+                            <p>Ana ekranda <strong>Profil</strong> butonuna tıklayın.</p>
+                        </div>
+                    </div>
+                    
+                    <div class="step">
+                        <div class="step-number">3</div>
+                        <div class="step-content">
+                            <h4>Hamburger Menüyü Açın</h4>
+                            <p>Profil sayfasının sağ üst köşesindeki <strong>hamburger menü</strong> (☰) butonuna tıklayın.</p>
+                        </div>
+                    </div>
+                    
+                    <div class="step">
+                        <div class="step-number">4</div>
+                        <div class="step-content">
+                            <h4>Hesabımı Sil Seçeneğini Bulun</h4>
+                            <p>Açılan menüden <strong>"Hesabımı Sil"</strong> seçeneğini bulun ve tıklayın.</p>
+                        </div>
+                    </div>
+                    
+                    <div class="step">
+                        <div class="step-number">5</div>
+                        <div class="step-content">
+                            <h4>Onay Kutucuğunu İşaretleyin</h4>
+                            <p>Karşınıza çıkan uyarı kutucuğunu okuyun ve onay kutucuğunu işaretleyin.</p>
+                        </div>
+                    </div>
+                    
+                    <div class="step">
+                        <div class="step-number">6</div>
+                        <div class="step-content">
+                            <h4>Hesabınızı Silin</h4>
+                            <p>Onay verdiğinizde hesabınız kalıcı olarak silinecektir.</p>
+                        </div>
+                    </div>
+                </div>
+                
+                <div class="important-note">
+                    <h4>⚠️ Önemli Uyarı</h4>
+                    <ul>
+                        <li>Hesap silme işlemi <strong>geri alınamaz</strong></li>
+                        <li>Tüm verileriniz (rezervasyonlar, ödemeler, yorumlar) kalıcı olarak silinir</li>
+                        <li>Hesap silindikten sonra aynı e-posta ile yeni hesap oluşturabilirsiniz</li>
+                    </ul>
+                </div>
+                
+                <div class="action-buttons">
+                    <button type="button" class="btn btn-secondary" onclick="cancelDeletion()">
+                        Geri Dön
+                    </button>
+                    <a href="https://apps.apple.com/app/courty" class="btn btn-primary" target="_blank">
+                        Courty Uygulamasını İndir
+                    </a>
+                </div>
+            </div>
+
+            <!-- Yardım Bölümü -->
+            <div class="help-section">
+                <h4>Yardıma mı ihtiyacınız var?</h4>
+                <p>Hesap silme işlemi hakkında sorularınız için:</p>
+                <a href="mailto:info.courty@gmail.com" class="help-link">
+                    info.courty@gmail.com
+                </a>
+            </div>
+        </div>
+    </div>
+
+    <script src="config.js"></script>
+    <script src="account-deletion.js"></script>
+</body>
+</html>
