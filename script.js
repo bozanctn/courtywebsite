@@ -236,6 +236,11 @@ document.addEventListener('DOMContentLoaded', () => {
         scrollObserver.observe(stat);
     });
 
+    // Observe all remaining fade-in elements (features page, etc.)
+    document.querySelectorAll('.fade-in').forEach(el => {
+        scrollObserver.observe(el);
+    });
+
     // Animate accordion items
     const accordionItems = document.querySelectorAll('.accordion-item');
     accordionItems.forEach((item, index) => {

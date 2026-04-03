@@ -6,6 +6,7 @@
     <title>Courty Nedir? - Courty</title>
     <link rel="icon" type="image/svg+xml" href="logo.svg">
     <link rel="stylesheet" href="styles.css">
+    <link rel="stylesheet" href="features.css">
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
 </head>
 <body>
@@ -34,222 +35,463 @@
     </header>
 
     <main>
-        <!-- Özellikler Bölümü -->
-        <section id="features" class="section features-section">
+
+        <!-- Page Hero -->
+        <section class="features-hero">
             <div class="container">
-                <!-- Başlık ve Açıklama -->
-                <div class="features-header fade-in">
-                    <h2 class="features-title">Courty - Tenis Dünyasını Birleştiren Platform</h2>
-                    <p class="features-subtitle">Kort rezervasyonu, antrenör bulma ve tenis topluluğu - tek bir uygulamada.</p>
-                </div>
-
-                <!-- Kimler İçin -->
-                <div class="features-grid fade-in">
-                    <h3 class="section-title">Kimler İçin?</h3>
-
-                    <div class="accordion-container">
-                        <!-- Oyuncular -->
-                        <div class="accordion-item">
-                            <button class="accordion-header">
-                                <span class="accordion-icon">🎾</span>
-                                <span class="accordion-title">Oyuncular İçin</span>
-                                <span class="accordion-arrow">▼</span>
-                            </button>
-                            <div class="accordion-content">
-                                <ul class="feature-list">
-                                    <li><strong>Anında Kort Rezervasyonu</strong> - En yakın kulüpleri keşfedin, rezervasyon yapın</li>
-                                    <li><strong>Antrenör Arama</strong> - Profesyonel koçlarla iletişime geçin</li>
-                                    <li><strong>Partner Bulma</strong> - Seviyenize uygun oyun arkadaşları bulun</li>
-                                    <li><strong>Kredi Sistemi</strong> - Kolay ödeme ve rezervasyon yönetimi</li>
-                                    <li><strong>Arkadaş Ağı</strong> - Tenis dostlarınızla birlikte oynayın</li>
-                                </ul>
-                            </div>
-                        </div>
-
-                        <!-- Kulüpler -->
-                        <div class="accordion-item">
-                            <button class="accordion-header">
-                                <span class="accordion-icon">🏢</span>
-                                <span class="accordion-title">Kulüpler İçin</span>
-                                <span class="accordion-arrow">▼</span>
-                            </button>
-                            <div class="accordion-content">
-                                <ul class="feature-list">
-                                    <li><strong>Kort & Rezervasyon Yönetimi</strong> - Otomatik rezervasyon sistemi</li>
-                                    <li><strong>Koç Yönetimi</strong> - Kulübünüzdeki koçları organize edin</li>
-                                    <li><strong>Finansal Kontrol</strong> - Gelir-gider takibi, detaylı raporlama</li>
-                                    <li><strong>Analitik Dashboard</strong> - Rezervasyon ve gelir istatistikleri</li>
-                                    <li><strong>Değerlendirme Sistemi</strong> - Kullanıcı yorumlarını yönetin</li>
-                                </ul>
-                            </div>
-                        </div>
-
-                        <!-- Koçlar -->
-                        <div class="accordion-item">
-                            <button class="accordion-header">
-                                <span class="accordion-icon">🎓</span>
-                                <span class="accordion-title">Koçlar İçin</span>
-                                <span class="accordion-arrow">▼</span>
-                            </button>
-                            <div class="accordion-content">
-                                <ul class="feature-list">
-                                    <li><strong>Ders Yönetimi</strong> - Program oluşturun ve yönetin</li>
-                                    <li><strong>Öğrenci Takibi</strong> - Gelişimi izleyin ve kaydedin</li>
-                                    <li><strong>Kulüp Bağlantıları</strong> - Birden fazla kulüpte çalışın</li>
-                                    <li><strong>Ders Talepleri</strong> - Otomatik talep yönetimi</li>
-                                    <li><strong>Takvim Senkronizasyonu</strong> - Tüm dersler tek ekranda</li>
-                                </ul>
-                            </div>
-                        </div>
-                    </div>
-                </div>
-
-                <!-- Öne Çıkan Özellikler -->
-                <div class="features-grid fade-in">
-                    <h3 class="section-title">Öne Çıkan Özellikler</h3>
-
-                    <div class="accordion-container">
-                        <!-- İletişim -->
-                        <div class="accordion-item">
-                            <button class="accordion-header">
-                                <span class="accordion-icon">💬</span>
-                                <span class="accordion-title">İletişim & Sosyal</span>
-                                <span class="accordion-arrow">▼</span>
-                            </button>
-                            <div class="accordion-content">
-                                <ul class="feature-list">
-                                    <li><strong>Anlık Mesajlaşma</strong> - Oyuncular, koçlar ve kulüpler arasında direkt iletişim</li>
-                                    <li><strong>Akıllı Bildirimler</strong> - Rezervasyon, ders ve davet bildirimleri</li>
-                                    <li><strong>Değerlendirme Sistemi</strong> - Kulüp ve koç yorumları, şeffaf topluluk</li>
-                                </ul>
-                            </div>
-                        </div>
-
-                        <!-- Rezervasyon -->
-                        <div class="accordion-item">
-                            <button class="accordion-header">
-                                <span class="accordion-icon">🎯</span>
-                                <span class="accordion-title">Akıllı Rezervasyon</span>
-                                <span class="accordion-arrow">▼</span>
-                            </button>
-                            <div class="accordion-content">
-                                <ul class="feature-list">
-                                    <li><strong>Gerçek Zamanlı Müsaitlik</strong> - Anında kort durumu kontrolü</li>
-                                    <li><strong>Otomatik Fiyatlandırma</strong> - Kredi hesaplaması ve ödeme</li>
-                                    <li><strong>Hava Durumu Entegrasyonu</strong> - Akıllı rezervasyon önerileri</li>
-                                    <li><strong>Kolay İptal & Değişiklik</strong> - Esnek rezervasyon yönetimi</li>
-                                </ul>
-                            </div>
-                        </div>
-
-                        <!-- Finansal -->
-                        <div class="accordion-item">
-                            <button class="accordion-header">
-                                <span class="accordion-icon">💰</span>
-                                <span class="accordion-title">Finansal Yönetim</span>
-                                <span class="accordion-arrow">▼</span>
-                            </button>
-                            <div class="accordion-content">
-                                <ul class="feature-list">
-                                    <li><strong>Güvenli Ödeme</strong> - Kredi paketi satın alma sistemi</li>
-                                    <li><strong>Kulüp Cüzdanı</strong> - Gelir-gider yönetimi</li>
-                                    <li><strong>Detaylı Raporlar</strong> - İşlem geçmişi ve analizler</li>
-                                    <li><strong>Şeffaf Fiyatlandırma</strong> - Net ve anlaşılır ücretler</li>
-                                </ul>
-                            </div>
-                        </div>
-
-                        <!-- Konum -->
-                        <div class="accordion-item">
-                            <button class="accordion-header">
-                                <span class="accordion-icon">📍</span>
-                                <span class="accordion-title">Konum Bazlı Hizmetler</span>
-                                <span class="accordion-arrow">▼</span>
-                            </button>
-                            <div class="accordion-content">
-                                <ul class="feature-list">
-                                    <li><strong>Yakınındaki Kulüpler</strong> - Mesafe bazlı arama</li>
-                                    <li><strong>Harita Görünümü</strong> - Görsel kulüp keşfi</li>
-                                    <li><strong>Yol Tarifi Entegrasyonu</strong> - Tek tıkla navigasyon</li>
-                                </ul>
-                            </div>
-                        </div>
-                    </div>
-                </div>
-
-                <!-- Neden Courty -->
-                <div class="why-courty fade-in">
-                    <h3 class="section-title">Neden Courty?</h3>
-                    <div class="benefits-grid">
-                        <div class="benefit-card">
-                            <div class="benefit-icon">⚡</div>
-                            <h4>Tek Platform</h4>
-                            <p>Tüm ihtiyaçlar bir arada</p>
-                        </div>
-                        <div class="benefit-card">
-                            <div class="benefit-icon">⏱️</div>
-                            <h4>Zaman Tasarrufu</h4>
-                            <p>Anında rezervasyon, telefon yok</p>
-                        </div>
-                        <div class="benefit-card">
-                            <div class="benefit-icon">🔍</div>
-                            <h4>Şeffaflık</h4>
-                            <p>Net fiyatlar, yorumlar, müsaitlik</p>
-                        </div>
-                        <div class="benefit-card">
-                            <div class="benefit-icon">🤝</div>
-                            <h4>Topluluk</h4>
-                            <p>Tenis tutkunlarıyla bağlantı</p>
-                        </div>
-                        <div class="benefit-card">
-                            <div class="benefit-icon">🛠️</div>
-                            <h4>Profesyonel Araçlar</h4>
-                            <p>Kulüp ve koçlar için güçlü yönetim</p>
-                        </div>
-                        <div class="benefit-card">
-                            <div class="benefit-icon">🔐</div>
-                            <h4>Güvenlik</h4>
-                            <p>Modern teknoloji, güvenli ödeme</p>
-                        </div>
-                    </div>
-                </div>
-
-                <!-- Courty Bir Bakışta -->
-                <div class="courty-stats fade-in">
-                    <div class="stats-grid">
-                        <div class="stat-item">
-                            <span class="stat-icon">✅</span>
-                            <h4>3 Kullanıcı Tipi</h4>
-                            <p>Oyuncu, Kulüp, Koç</p>
-                        </div>
-                        <div class="stat-item">
-                            <span class="stat-icon">✅</span>
-                            <h4>20+ Özellik</h4>
-                            <p>Zengin fonksiyon seti</p>
-                        </div>
-                        <div class="stat-item">
-                            <span class="stat-icon">✅</span>
-                            <h4>Gerçek Zamanlı</h4>
-                            <p>Anlık güncelleme ve bildirim</p>
-                        </div>
-                        <div class="stat-item">
-                            <span class="stat-icon">✅</span>
-                            <h4>Güvenli & Hızlı</h4>
-                            <p>Modern altyapı</p>
-                        </div>
-                    </div>
-                </div>
-
-                <!-- CTA -->
-                <div class="features-cta fade-in">
-                    <h3>Courty ile tenis deneyiminizi yükseltin!</h3>
-                    <div class="cta-buttons">
-                        <a href="#" class="btn btn-primary">📲 App Store</a>
-                        <a href="#" class="btn btn-primary">🤖 Google Play</a>
+                <div class="features-hero-inner fade-in">
+                    <span class="features-hero-badge">Platform</span>
+                    <h1 class="features-hero-title">Courty Nedir?</h1>
+                    <p class="features-hero-desc">Oyuncuları, antrenörleri ve tenis kulüplerini tek çatı altında buluşturan akıllı tenis platformu. Kulübünü yönet, kort rezervasyonu yap, partner bul — hepsi bir uygulamada.</p>
+                    <div class="features-hero-tabs">
+                        <a href="#clubs" class="ftab ftab-club">🏢 Kulüpler İçin</a>
+                        <a href="#players" class="ftab ftab-player">🎾 Oyuncular İçin</a>
                     </div>
                 </div>
             </div>
         </section>
+
+        <!-- ── KULÜPLER İÇİN ── -->
+        <section id="clubs" class="audience-section club-section">
+            <div class="container">
+                <div class="audience-header fade-in">
+                    <div class="audience-badge club-badge">🏢 Kulüpler İçin</div>
+                    <h2 class="audience-title">Kulübünüzü Uçtan Uca Yönetin</h2>
+                    <p class="audience-subtitle">Rezervasyondan finanslara, hocalardan turnuvalara — tüm kulüp operasyonları tek panel üzerinden.</p>
+                </div>
+
+                <div class="showcase fade-in">
+                    <!-- Phone Carousel -->
+                    <div class="phone-showcase club-showcase">
+                        <div class="showcase-phone">
+                            <div class="sp-notch"></div>
+                            <div class="sp-screen">
+                                <img src="screenshots/club/club-01-dashboard.jpeg" alt="Dashboard" class="sp-img active" id="club-img-0">
+                                <img src="screenshots/club/club-02-reservations.jpeg" alt="Rezervasyonlar" class="sp-img" id="club-img-1">
+                                <img src="screenshots/club/club-03-courts.jpeg" alt="Kortlar" class="sp-img" id="club-img-2">
+                                <img src="screenshots/club/club-04-lessons.jpeg" alt="Dersler" class="sp-img" id="club-img-3">
+                                <img src="screenshots/club/club-05-coaches.jpeg" alt="Hocalar" class="sp-img" id="club-img-4">
+                                <img src="screenshots/club/club-06-finance.jpeg" alt="Finansal" class="sp-img" id="club-img-5">
+                                <img src="screenshots/club/club-07-schedule.jpeg" alt="Programım" class="sp-img" id="club-img-6">
+                                <img src="screenshots/club/club-08-tournament-create.jpeg" alt="Turnuva Oluştur" class="sp-img" id="club-img-7">
+                                <img src="screenshots/club/club-09-tournament-standings.jpeg" alt="Turnuva Sıralama" class="sp-img" id="club-img-8">
+                                <img src="screenshots/club/club-10-profile.jpeg" alt="Profil" class="sp-img" id="club-img-9">
+                            </div>
+                            <div class="sp-dots" id="club-dots">
+                                <span class="sp-dot active" data-target="0"></span>
+                                <span class="sp-dot" data-target="1"></span>
+                                <span class="sp-dot" data-target="2"></span>
+                                <span class="sp-dot" data-target="3"></span>
+                                <span class="sp-dot" data-target="4"></span>
+                                <span class="sp-dot" data-target="5"></span>
+                                <span class="sp-dot" data-target="6"></span>
+                                <span class="sp-dot" data-target="7"></span>
+                                <span class="sp-dot" data-target="8"></span>
+                                <span class="sp-dot" data-target="9"></span>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Feature List -->
+                    <div class="feature-details club-features">
+
+                        <div class="fd-item active" data-img="0" data-group="club">
+                            <div class="fd-icon club-icon">📊</div>
+                            <div class="fd-body">
+                                <h3>Yönetim Paneli</h3>
+                                <ul>
+                                    <li>Onaylı & bekleyen rezervasyon sayacı anlık olarak görüntülenir</li>
+                                    <li>Kortlar, Analiz, Hocalar, Dersler ve Turnuvalar için hızlı işlem kısayolları</li>
+                                    <li>Son rezervasyonlar; oyuncu adı, kort ve durum bilgisiyle listelenir</li>
+                                    <li>Bugünkü dersler (sistem + manuel) tek ekranda birleştirilir</li>
+                                    <li>Okunmamış bildirim rozeti ile anlık haberdar olun</li>
+                                </ul>
+                            </div>
+                        </div>
+
+                        <div class="fd-item" data-img="1" data-group="club">
+                            <div class="fd-icon club-icon">📅</div>
+                            <div class="fd-body">
+                                <h3>Rezervasyon Yönetimi</h3>
+                                <ul>
+                                    <li>Güne ve korta göre filtreli rezervasyon takvimi</li>
+                                    <li>Tek tıkla Onayla / Tamamla / İptal Et işlemleri</li>
+                                    <li>Kulüp adına yeni rezervasyon oluşturma (kort, tarih, saat, oyuncu seçimi)</li>
+                                    <li>Onay bekleyen ve ödeme bekleyen rezervasyonlar ayrı sayaçlarla gösterilir</li>
+                                    <li>Rezervasyondaki tüm oyuncuların isimleri görüntülenir</li>
+                                </ul>
+                            </div>
+                        </div>
+
+                        <div class="fd-item" data-img="2" data-group="club">
+                            <div class="fd-icon club-icon">🎾</div>
+                            <div class="fd-body">
+                                <h3>Kort Yönetimi & Sabit Program</h3>
+                                <ul>
+                                    <li>Kort ekle, düzenle, sil — numara, tür (toprak/sert/çim), kapalı/açık, saatlik ücret</li>
+                                    <li>Korta özel takvimde dolu/boş saatleri görüntüle</li>
+                                    <li>Sabit program ekle: Grup Antrenmanı, Bakım & Onarım, Diğer</li>
+                                    <li>Haftalık tekrarlayan veya tek seferlik bloklar, hoca ataması ile</li>
+                                    <li>Bloklanan saatler oyunculara otomatik olarak kapalı görünür</li>
+                                </ul>
+                            </div>
+                        </div>
+
+                        <div class="fd-item" data-img="3" data-group="club">
+                            <div class="fd-icon club-icon">📚</div>
+                            <div class="fd-body">
+                                <h3>Ders Takibi</h3>
+                                <ul>
+                                    <li>Sisteme bağlı ve manuel eklenen dersler birleşik görüntülenir</li>
+                                    <li>Manuel ders ekle: hoca, kort, tarih/saat, öğrenci adı ve notlar</li>
+                                    <li>Ödeme durumu takibi — Ödendi / Ödenmedi olarak işaretle</li>
+                                    <li>Manuel dersler amber renkte "Manuel" etiketiyle ayrıştırılır</li>
+                                    <li>Bugün ve yaklaşan dersler ayrı gruplarda listelenir</li>
+                                </ul>
+                            </div>
+                        </div>
+
+                        <div class="fd-item" data-img="4" data-group="club">
+                            <div class="fd-icon club-icon">👨‍🏫</div>
+                            <div class="fd-body">
+                                <h3>Hoca Yönetimi</h3>
+                                <ul>
+                                    <li>Aktif/pasif durum, ders sayısı ve kazanç istatistikleri tek ekranda</li>
+                                    <li>Hoca ekle/düzenle: isim, uzmanlık, saatlik ücret, biyografi, fotoğraf</li>
+                                    <li>E-posta ile hoca davet etme</li>
+                                    <li>Toplam hoca sayısı, aktif ders ve aylık kazanç özet kartları</li>
+                                    <li>Hoca pasifleştirme veya silme</li>
+                                </ul>
+                            </div>
+                        </div>
+
+                        <div class="fd-item" data-img="5" data-group="club">
+                            <div class="fd-icon club-icon">💰</div>
+                            <div class="fd-body">
+                                <h3>Finansal Yönetim</h3>
+                                <ul>
+                                    <li>Net kar/zarar, alınacak para, aylık gelir ve gider özeti</li>
+                                    <li>Gelir/gider kaydı ekle: kategori, tutar, açıklama</li>
+                                    <li>Fiş & fatura yükleme — fotoğraf çek veya galeriden seç</li>
+                                    <li>Türe ve kategoriye göre filtreli kayıt listesi</li>
+                                    <li>Rezervasyon gelirleri otomatik olarak sisteme işlenir</li>
+                                </ul>
+                            </div>
+                        </div>
+
+                        <div class="fd-item" data-img="6" data-group="club">
+                            <div class="fd-icon club-icon">🗓️</div>
+                            <div class="fd-body">
+                                <h3>Programım Takvimi</h3>
+                                <ul>
+                                    <li>Haftalık ve günlük takvim görünümü</li>
+                                    <li>Renkli etkinlik kategorileri: onaylı rezervasyon, bekleyen, ders, blok program</li>
+                                    <li>Kort filtresiyle yalnızca belirli kortu göster</li>
+                                    <li>Sabit program blokları (grup antrenmanı vb.) turuncu renkte görünür</li>
+                                    <li>Kort uygunluk göstergesi — o gün kaç saat müsait kaldığı</li>
+                                </ul>
+                            </div>
+                        </div>
+
+                        <div class="fd-item" data-img="7" data-group="club">
+                            <div class="fd-icon club-icon">🏆</div>
+                            <div class="fd-body">
+                                <h3>Turnuva Organizasyonu — Oluşturma</h3>
+                                <ul>
+                                    <li>6 format: Americano Takımlar, Americano Bireysel, Tekler/Çiftler Eleme, Tekler/Çiftler Lig</li>
+                                    <li>Tenis, Padel ve Pickleball sporları için ayrı turnuva desteği</li>
+                                    <li>Başlangıç tarihi, katılımcı sayısı, ücret ve ödül belirleme</li>
+                                    <li>Cinsiyet kategorisi: Karma, Erkekler, Kadınlar</li>
+                                    <li>Seviye aralığı ve toplam tur sayısı ayarı</li>
+                                </ul>
+                            </div>
+                        </div>
+
+                        <div class="fd-item" data-img="8" data-group="club">
+                            <div class="fd-icon club-icon">📋</div>
+                            <div class="fd-body">
+                                <h3>Turnuva Yönetimi — Skor & Sıralama</h3>
+                                <ul>
+                                    <li>Oyuncu kaydı, eşleşme oluşturma ve tur yönetimi</li>
+                                    <li>Set bazlı skor girişi — tenis kurallarına uygun validasyon</li>
+                                    <li>Puan tablosu: galibiyet/mağlubiyet otomatik güncellenir</li>
+                                    <li>Eleme turnuvalarında "Bir Sonraki Turu Oluştur" butonu</li>
+                                    <li>Tamamlanan turnuvaları arşivleme</li>
+                                </ul>
+                            </div>
+                        </div>
+
+                        <div class="fd-item" data-img="9" data-group="club">
+                            <div class="fd-icon club-icon">🏢</div>
+                            <div class="fd-body">
+                                <h3>Kulüp Profili & Bildirimler</h3>
+                                <ul>
+                                    <li>Kulüp adı, açıklama, konum, iletişim bilgileri ve çalışma saatleri</li>
+                                    <li>Kapak ve profil fotoğrafı yükleme</li>
+                                    <li>Özellikler: pro shop, kafe, locker room, park yeri, duş ve daha fazlası</li>
+                                    <li>Kulüp puanı ve oyuncu yorumları</li>
+                                    <li>Bildirim merkezi: yeni rezervasyon, iptal ve ders talepleri anlık bildirilir</li>
+                                </ul>
+                            </div>
+                        </div>
+
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <!-- ── OYUNCULAR İÇİN ── -->
+        <section id="players" class="audience-section player-section">
+            <div class="container">
+                <div class="audience-header fade-in">
+                    <div class="audience-badge player-badge">🎾 Oyuncular İçin</div>
+                    <h2 class="audience-title">Tenis Oynamanın En Kolay Yolu</h2>
+                    <p class="audience-subtitle">Kort bul, rezervasyon yap, antrenör seç, partner bul — tüm tenis deneyimi tek uygulamada.</p>
+                </div>
+
+                <div class="showcase showcase-reverse fade-in">
+                    <!-- Feature List -->
+                    <div class="feature-details player-features">
+
+                        <div class="fd-item active" data-img="0" data-group="player">
+                            <div class="fd-icon player-icon">🏠</div>
+                            <div class="fd-body">
+                                <h3>Ana Sayfa & Hızlı İşlemler</h3>
+                                <ul>
+                                    <li>Kişiselleştirilmiş karşılama ve anlık duyurular (turnuva, etkinlik)</li>
+                                    <li>Hızlı erişim: Kort Rezervasyonu, Antrenör Bul, Kulüp Bul, Partner Bul</li>
+                                    <li>Son aktiviteler: onaylanan rezervasyonlar ve gerçekleşen işlemler</li>
+                                    <li>Akıllı bildirimler — okunmamış mesaj ve bildirimleri tek bakışta görün</li>
+                                </ul>
+                            </div>
+                        </div>
+
+                        <div class="fd-item" data-img="1" data-group="player">
+                            <div class="fd-icon player-icon">🔍</div>
+                            <div class="fd-body">
+                                <h3>Kort Rezervasyonu</h3>
+                                <ul>
+                                    <li>Tarih ve saat seçimi ile müsait tüm kortları listele</li>
+                                    <li>Fiyat sıralaması, favoriler ve "Tüm Kulüpler" filtresi</li>
+                                    <li>Kulüp puanı, müsait kort sayısı ve başlangıç fiyatı tek bakışta</li>
+                                    <li>Haftalık takvim görünümü ile en uygun günü seç</li>
+                                    <li>Rezervasyonu anında onayla, kredi ile öde</li>
+                                </ul>
+                            </div>
+                        </div>
+
+                        <div class="fd-item" data-img="2" data-group="player">
+                            <div class="fd-icon player-icon">📍</div>
+                            <div class="fd-body">
+                                <h3>Kulüp Keşfi</h3>
+                                <ul>
+                                    <li>Harita üzerinde yakındaki tüm kulüpleri görüntüle</li>
+                                    <li>Tenis, Padel, Pickleball spor filtresi</li>
+                                    <li>Kulüp adı, mesafe, puanlama ve saatlik fiyat bilgisi</li>
+                                    <li>"Rezervasyon Yap" ve "Detaylar" kısayolları ile hızlı erişim</li>
+                                    <li>Tek tıkla yol tarifi entegrasyonu</li>
+                                </ul>
+                            </div>
+                        </div>
+
+                        <div class="fd-item" data-img="3" data-group="player">
+                            <div class="fd-icon player-icon">👨‍🏫</div>
+                            <div class="fd-body">
+                                <h3>Antrenör Bulma</h3>
+                                <ul>
+                                    <li>Branş ve uzmanlık filtresiyle antrenör ara (Fitness, Yoga, Pilates vb.)</li>
+                                    <li>Antrenör profili: fotoğraf, biyografi, saatlik ücret ve uzmanlık</li>
+                                    <li>Aktif/çevrimiçi durum göstergesi</li>
+                                    <li>Direkt mesaj gönder veya anında rezervasyon yap</li>
+                                    <li>Kulüp antrenörleri ve bireysel antrenörler ayrı listelenir</li>
+                                </ul>
+                            </div>
+                        </div>
+
+                        <div class="fd-item" data-img="4" data-group="player">
+                            <div class="fd-icon player-icon">🤝</div>
+                            <div class="fd-body">
+                                <h3>Partner Bulma</h3>
+                                <ul>
+                                    <li>Yakın konumdaki oyuncuları mesafeye göre listele</li>
+                                    <li>NTRP seviyesi, rating, toplam maç sayısı bilgileriyle oyuncu tanı</li>
+                                    <li>Partner isteği gönder — onay bekleme sistemi</li>
+                                    <li>Önerilen ve tüm oyuncular sekmesiyle geniş havuz</li>
+                                    <li>Direkt mesaj ile iletişime geç</li>
+                                </ul>
+                            </div>
+                        </div>
+
+                        <div class="fd-item" data-img="5" data-group="player">
+                            <div class="fd-icon player-icon">📋</div>
+                            <div class="fd-body">
+                                <h3>Rezervasyonlarım</h3>
+                                <ul>
+                                    <li>Aktif ve geçmiş rezervasyonlar sekme bazlı listelenir</li>
+                                    <li>Kulüp fotoğrafı, tarih, saat ve toplam tutar görüntülenir</li>
+                                    <li>Tek tıkla yol tarifi al</li>
+                                    <li>Rezervasyonu iptal et (esnek iptal politikasına göre)</li>
+                                    <li>Onay, beklemede ve tamamlandı durum rozetleri</li>
+                                </ul>
+                            </div>
+                        </div>
+
+                        <div class="fd-item" data-img="6" data-group="player">
+                            <div class="fd-icon player-icon">📈</div>
+                            <div class="fd-body">
+                                <h3>Performans Analitiği</h3>
+                                <ul>
+                                    <li>Son 30 günlük performans özeti</li>
+                                    <li>Bu ay rezervasyon sayısı, toplam oynanan saat, ders sayısı</li>
+                                    <li>Tamamlanma oranı yüzdesi</li>
+                                    <li>Aylık ilerleme grafiği — geçmiş aylarla karşılaştırma</li>
+                                    <li>Aktivite trendlerini takip et, hedef belirle</li>
+                                </ul>
+                            </div>
+                        </div>
+
+                        <div class="fd-item" data-img="7" data-group="player">
+                            <div class="fd-icon player-icon">👤</div>
+                            <div class="fd-body">
+                                <h3>Oyuncu Profili</h3>
+                                <ul>
+                                    <li>Seviye rozeti (başlangıç → expert) ve oyuncu puanı</li>
+                                    <li>Tercihler: favori kort tipi, oyun amacı (fitness, rekabet vb.)</li>
+                                    <li>Tercih edilen bölge ayarı</li>
+                                    <li>Profil fotoğrafı düzenleme</li>
+                                    <li>Diğer oyunculara görünür kamuya açık profil</li>
+                                </ul>
+                            </div>
+                        </div>
+
+                        <div class="fd-item" data-img="8" data-group="player">
+                            <div class="fd-icon player-icon">💬</div>
+                            <div class="fd-body">
+                                <h3>Mesajlaşma</h3>
+                                <ul>
+                                    <li>Oyuncu, antrenör ve kulüplerle birebir direkt mesajlaşma</li>
+                                    <li>Grup mesajlaşması desteği</li>
+                                    <li>Oyuncu veya antrenör adıyla arama</li>
+                                    <li>İstek yönetimi — gelen partner ve ders isteklerini buradan yanıtla</li>
+                                    <li>Anlık bildirimler ile yeni mesajları kaçırma</li>
+                                </ul>
+                            </div>
+                        </div>
+
+                    </div>
+
+                    <!-- Phone Carousel -->
+                    <div class="phone-showcase player-showcase">
+                        <div class="showcase-phone">
+                            <div class="sp-notch"></div>
+                            <div class="sp-screen">
+                                <img src="screenshots/player/player-01-home.jpeg" alt="Ana Sayfa" class="sp-img active" id="player-img-0">
+                                <img src="screenshots/player/player-02-booking.jpeg" alt="Rezervasyon Bul" class="sp-img" id="player-img-1">
+                                <img src="screenshots/player/player-03-club-map.jpeg" alt="Kulüp Bul" class="sp-img" id="player-img-2">
+                                <img src="screenshots/player/player-04-coaches.jpeg" alt="Antrenör Ara" class="sp-img" id="player-img-3">
+                                <img src="screenshots/player/player-05-partner.jpeg" alt="Partner Bul" class="sp-img" id="player-img-4">
+                                <img src="screenshots/player/player-06-my-reservations.jpeg" alt="Rezervasyonlarım" class="sp-img" id="player-img-5">
+                                <img src="screenshots/player/player-07-analytics.jpeg" alt="Analitikler" class="sp-img" id="player-img-6">
+                                <img src="screenshots/player/player-08-profile.jpeg" alt="Profil" class="sp-img" id="player-img-7">
+                                <img src="screenshots/player/player-09-messages.jpeg" alt="Mesajlar" class="sp-img" id="player-img-8">
+                            </div>
+                            <div class="sp-dots" id="player-dots">
+                                <span class="sp-dot active" data-target="0"></span>
+                                <span class="sp-dot" data-target="1"></span>
+                                <span class="sp-dot" data-target="2"></span>
+                                <span class="sp-dot" data-target="3"></span>
+                                <span class="sp-dot" data-target="4"></span>
+                                <span class="sp-dot" data-target="5"></span>
+                                <span class="sp-dot" data-target="6"></span>
+                                <span class="sp-dot" data-target="7"></span>
+                                <span class="sp-dot" data-target="8"></span>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <!-- Neden Courty -->
+        <section class="why-section fade-in">
+            <div class="container">
+                <div class="why-header">
+                    <h2 class="section-title">Neden Courty?</h2>
+                </div>
+                <div class="benefits-grid">
+                    <div class="benefit-card">
+                        <div class="benefit-icon">⚡</div>
+                        <h4>Tek Platform</h4>
+                        <p>Tüm ihtiyaçlar bir arada</p>
+                    </div>
+                    <div class="benefit-card">
+                        <div class="benefit-icon">⏱️</div>
+                        <h4>Zaman Tasarrufu</h4>
+                        <p>Anında rezervasyon, telefon yok</p>
+                    </div>
+                    <div class="benefit-card">
+                        <div class="benefit-icon">🔍</div>
+                        <h4>Şeffaflık</h4>
+                        <p>Net fiyatlar, yorumlar, müsaitlik</p>
+                    </div>
+                    <div class="benefit-card">
+                        <div class="benefit-icon">🤝</div>
+                        <h4>Topluluk</h4>
+                        <p>Tenis tutkunlarıyla bağlantı</p>
+                    </div>
+                    <div class="benefit-card">
+                        <div class="benefit-icon">🛠️</div>
+                        <h4>Profesyonel Araçlar</h4>
+                        <p>Kulüp ve koçlar için güçlü yönetim</p>
+                    </div>
+                    <div class="benefit-card">
+                        <div class="benefit-icon">🔐</div>
+                        <h4>Güvenlik</h4>
+                        <p>Modern teknoloji, güvenli ödeme</p>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <!-- Stats -->
+        <div class="courty-stats fade-in">
+            <div class="container">
+                <div class="stats-grid">
+                    <div class="stat-item">
+                        <span class="stat-icon">✅</span>
+                        <h4>3 Kullanıcı Tipi</h4>
+                        <p>Oyuncu, Kulüp, Koç</p>
+                    </div>
+                    <div class="stat-item">
+                        <span class="stat-icon">✅</span>
+                        <h4>20+ Özellik</h4>
+                        <p>Zengin fonksiyon seti</p>
+                    </div>
+                    <div class="stat-item">
+                        <span class="stat-icon">✅</span>
+                        <h4>Gerçek Zamanlı</h4>
+                        <p>Anlık güncelleme ve bildirim</p>
+                    </div>
+                    <div class="stat-item">
+                        <span class="stat-icon">✅</span>
+                        <h4>Güvenli & Hızlı</h4>
+                        <p>Modern altyapı</p>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- CTA -->
+        <div class="features-cta fade-in">
+            <div class="container">
+                <h3>Courty ile tenis deneyiminizi yükseltin!</h3>
+                <div class="cta-buttons">
+                    <a href="#" class="btn btn-primary">📲 App Store</a>
+                    <a href="#" class="btn btn-primary">🤖 Google Play</a>
+                </div>
+            </div>
+        </div>
+
     </main>
 
     <footer class="footer">
@@ -289,5 +531,6 @@
 
     <script src="config.js"></script>
     <script src="script.js"></script>
+    <script src="features.js"></script>
 </body>
 </html>
