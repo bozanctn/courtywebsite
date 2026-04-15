@@ -1,0 +1,209 @@
+<!DOCTYPE html>
+<html lang="tr">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Maç Daveti — Courty</title>
+    <link rel="icon" type="image/svg+xml" href="../logo.svg">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <style>
+        *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+        body {
+            font-family: 'Inter', sans-serif;
+            background: #F1F5FB;
+            min-height: 100vh;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            padding: 24px;
+        }
+
+        .card {
+            background: #ffffff;
+            border-radius: 24px;
+            padding: 40px 32px;
+            max-width: 400px;
+            width: 100%;
+            text-align: center;
+            box-shadow: 0 4px 24px rgba(0,51,153,0.08);
+            border: 1px solid #E2E8F0;
+        }
+
+        .logo-wrap {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 10px;
+            margin-bottom: 28px;
+        }
+        .logo-wrap img { width: 36px; height: 36px; }
+        .logo-wrap span { font-size: 22px; font-weight: 700; color: #003399; }
+
+        .icon-circle {
+            width: 72px;
+            height: 72px;
+            border-radius: 50%;
+            background: #EEF2FF;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            margin: 0 auto 20px;
+            font-size: 32px;
+        }
+
+        h1 {
+            font-size: 22px;
+            font-weight: 700;
+            color: #0f172a;
+            margin-bottom: 10px;
+        }
+
+        .subtitle {
+            font-size: 14px;
+            color: #64748b;
+            line-height: 1.6;
+            margin-bottom: 28px;
+        }
+
+        .open-btn {
+            display: block;
+            width: 100%;
+            background: #003399;
+            color: #ffffff;
+            font-size: 16px;
+            font-weight: 700;
+            padding: 16px;
+            border-radius: 12px;
+            text-decoration: none;
+            margin-bottom: 12px;
+            transition: background 0.2s;
+        }
+        .open-btn:hover { background: #002277; }
+
+        .divider {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            margin: 16px 0;
+            color: #94a3b8;
+            font-size: 13px;
+        }
+        .divider::before, .divider::after {
+            content: '';
+            flex: 1;
+            height: 1px;
+            background: #E2E8F0;
+        }
+
+        .store-row {
+            display: flex;
+            gap: 10px;
+        }
+        .store-btn {
+            flex: 1;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 6px;
+            padding: 11px 12px;
+            border-radius: 10px;
+            border: 1.5px solid #E2E8F0;
+            text-decoration: none;
+            color: #0f172a;
+            font-size: 13px;
+            font-weight: 600;
+            transition: border-color 0.2s;
+        }
+        .store-btn:hover { border-color: #003399; }
+
+        .token-box {
+            background: #F1F5FB;
+            border-radius: 10px;
+            padding: 12px 16px;
+            margin-bottom: 20px;
+            font-size: 13px;
+            color: #64748b;
+        }
+        .token-box strong {
+            display: block;
+            font-size: 22px;
+            font-weight: 700;
+            color: #003399;
+            letter-spacing: 3px;
+            margin-top: 4px;
+        }
+
+        #error-state { display: none; }
+    </style>
+</head>
+<body>
+
+<div class="card" id="main-card">
+    <div class="logo-wrap">
+        <img src="../logo.svg" alt="Courty">
+        <span>Courty</span>
+    </div>
+
+    <div class="icon-circle">🎾</div>
+    <h1>Maç Daveti</h1>
+    <p class="subtitle">Seni bir maça davet ettiler!<br>Katılmak için Courty uygulamasını aç.</p>
+
+    <div class="token-box">
+        Maç Kodu
+        <strong id="token-display">—</strong>
+    </div>
+
+    <a href="#" class="open-btn" id="open-app-btn">Uygulamayı Aç</a>
+
+    <div class="divider">uygulaman yoksa</div>
+
+    <div class="store-row">
+        <a href="https://apps.apple.com/app/courty" class="store-btn" target="_blank">
+            🍎 App Store
+        </a>
+        <a href="https://play.google.com/store/apps/courty" class="store-btn" target="_blank">
+            ▶ Google Play
+        </a>
+    </div>
+</div>
+
+<div class="card" id="error-state">
+    <div class="icon-circle">❌</div>
+    <h1>Link Geçersiz</h1>
+    <p class="subtitle">Bu maç linki geçerli değil veya süresi dolmuş.</p>
+    <a href="../index.html" class="open-btn">Ana Sayfaya Dön</a>
+</div>
+
+<script>
+    // URL'den token oku: /match/TOKEN veya /match/?token=TOKEN
+    function getToken() {
+        const path = window.location.pathname; // örn: /match/XK9M2PQR
+        const parts = path.replace(/\/$/, '').split('/');
+        const fromPath = parts[parts.length - 1];
+        if (fromPath && fromPath !== 'match' && fromPath !== 'index.html') return fromPath;
+
+        const params = new URLSearchParams(window.location.search);
+        return params.get('token');
+    }
+
+    const token = getToken();
+
+    if (!token) {
+        document.getElementById('main-card').style.display = 'none';
+        document.getElementById('error-state').style.display = 'block';
+    } else {
+        const deepLink = 'courtly://match/' + token;
+        document.getElementById('token-display').textContent = token;
+        document.getElementById('open-app-btn').href = deepLink;
+
+        // Mobilde otomatik yönlendir
+        if (/iPhone|iPad|iPod|Android/i.test(navigator.userAgent)) {
+            setTimeout(() => { window.location.href = deepLink; }, 500);
+        }
+    }
+</script>
+
+</body>
+</html>

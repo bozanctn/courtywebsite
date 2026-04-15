@@ -1,0 +1,5 @@
+{
+  "rewrites": [
+    { "source": "/match/:token", "destination": "/match/index.html" }
+  ]
+}
