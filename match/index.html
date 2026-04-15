@@ -197,11 +197,6 @@
         const deepLink = 'courtly://match/' + token;
         document.getElementById('token-display').textContent = token;
         document.getElementById('open-app-btn').href = deepLink;
-
-        // Mobilde otomatik yönlendir
-        if (/iPhone|iPad|iPod|Android/i.test(navigator.userAgent)) {
-            setTimeout(() => { window.location.href = deepLink; }, 500);
-        }
     }
 </script>
 
