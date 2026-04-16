@@ -1311,6 +1311,11 @@ main { margin-top: var(--header-h); }
     .hamburger.active .bar:nth-child(3) { transform: translateY(-7px) rotate(-45deg); }
 
     /* Hero */
+    .hero-new {
+        min-height: unset;
+        padding: 3rem 0;
+    }
+
     .hero-container-new {
         grid-template-columns: 1fr;
         padding: 3rem 1.5rem;
@@ -1340,6 +1345,8 @@ main { margin-top: var(--header-h); }
 }
 
 @media (max-width: 480px) {
+    .hero-new { padding: 2.5rem 0; }
+
     .brand-title { font-size: 3.25rem; }
     .hero-tagline { font-size: 1.125rem; }
     .features-title { font-size: 1.75rem; }
