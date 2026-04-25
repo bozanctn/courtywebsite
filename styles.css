@@ -163,57 +163,32 @@ main { margin-top: var(--header-h); }
    HERO
    ============================================================ */
 .hero-new {
-    background: var(--dark);
-    color: var(--white);
-    min-height: calc(100vh - var(--header-h));
-    display: flex;
-    align-items: center;
+    padding: 1rem 0; /* Üst alt boşluğu daha da azalttık */
+    min-height: auto; /* Masaüstünden gelen yüksekliği sıfırladık */
+    height: auto;     /* Ekstra güvenlik */
+}
+.hero-container-new {
+    display: flex; /* Grid yerine Flex'e geçmek, mobilde dikey akışı daha kolay kontrol etmeni sağlar */
+    flex-direction: column;
     justify-content: center;
+    align-items: center;
+    padding: 1.5rem 1rem;
+    gap: 1rem;
+    text-align: center;
+}
+/* Gizlenen telefonlar gerçekten hiç yer kaplamamalı */
+.phone-left, .phone-right {
+    display: none !important; /* Önem derecesini artırdık */
+    height: 0;
+    width: 0;
+    margin: 0;
     padding: 0;
-    position: relative;
     overflow: hidden;
 }
-
-/* Subtle grid texture */
-.hero-new::before {
-    content: '';
-    position: absolute;
-    inset: 0;
-    background-image:
-        linear-gradient(rgba(255,255,255,0.025) 1px, transparent 1px),
-        linear-gradient(90deg, rgba(255,255,255,0.025) 1px, transparent 1px);
-    background-size: 48px 48px;
-    pointer-events: none;
-}
-
-/* Accent glow — app's PRIMARY blue */
-.hero-new::after {
-    content: '';
-    position: absolute;
-    top: 20%;
-    left: 50%;
-    transform: translateX(-50%);
-    width: 700px;
-    height: 700px;
-    background: radial-gradient(circle, rgba(0,51,153,0.22) 0%, transparent 68%);
-    pointer-events: none;
-}
-
-.hero-container-new {
-    display: grid;
-    grid-template-columns: 1fr 2fr 1fr;
-    gap: 4rem;
-    align-items: center;
-    width: 100%;
-    max-width: 1280px;
-    margin: 0 auto;
-    padding: 5rem 2rem;
-    position: relative;
-    z-index: 1;
-}
-
+/* Orta İçerik (Eğer fazladan margin varsa sıfırlayalım) */
 .hero-center {
-    text-align: center;
+    width: 100%;
+    margin-top: 0; /* Eğer üstte boşluk kalıyorsa bu çözecektir */
 }
 
 .brand-title {
@@ -427,6 +402,15 @@ main { margin-top: var(--header-h); }
 @keyframes fadeUp {
     from { opacity: 0; transform: translateY(20px); }
     to   { opacity: 1; transform: translateY(0); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .brand-title, .hero-tagline, .hero-description,
+    .hero-logo-container, .app-links {
+        animation: none;
+        opacity: 1;
+        transform: none;
+    }
 }
 
 /* ============================================================
@@ -1277,7 +1261,7 @@ main { margin-top: var(--header-h); }
     .stats-grid { grid-template-columns: repeat(2, 1fr); }
 }
 
-@media (max-width: 768px) {
+@media (max-width: 200px) {
     :root { --header-h: 64px; }
 
     /* Header */
@@ -1297,7 +1281,7 @@ main { margin-top: var(--header-h); }
         align-items: stretch;
     }
 
-    .nav-menu.active { left: 0; }
+    .nav-menu.active { left: 10px; }
 
     .nav-link {
         padding: 0.625rem 0.875rem;
@@ -1311,22 +1295,18 @@ main { margin-top: var(--header-h); }
     .hamburger.active .bar:nth-child(3) { transform: translateY(-7px) rotate(-45deg); }
 
     /* Hero */
-    .hero-new {
-        min-height: unset;
-        padding: 3rem 0;
-    }
-
+    .hero-new { padding: 50px 0; }
     .hero-container-new {
         grid-template-columns: 1fr;
-        padding: 3rem 1.5rem;
+        padding: 2rem 1.5rem;
         gap: 2rem;
     }
 
     .phone-left, .phone-right { display: none; }
+    .hero-logo-container { display: none; }
 
     .brand-title { font-size: 4.5rem; }
     .hero-tagline { font-size: 1.375rem; }
-    .hero-logo-image { width: 200px; }
 
     /* Features */
     .benefits-grid { grid-template-columns: repeat(2, 1fr); }
@@ -1345,8 +1325,6 @@ main { margin-top: var(--header-h); }
 }
 
 @media (max-width: 480px) {
-    .hero-new { padding: 2.5rem 0; }
-
     .brand-title { font-size: 3.25rem; }
     .hero-tagline { font-size: 1.125rem; }
     .features-title { font-size: 1.75rem; }
@@ -1354,5 +1332,7 @@ main { margin-top: var(--header-h); }
     .stats-grid { grid-template-columns: repeat(2, 1fr); }
     .cta-buttons { flex-direction: column; align-items: center; }
     .section { padding: 3.5rem 0; }
+    .hero-new { padding: 2rem 0; }
+    .hero-container-new { padding: 1.5rem 1rem; }
     .policy-section { padding: 1rem 1.125rem; }
 }

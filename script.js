@@ -343,14 +343,6 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 });
 
-// Smooth page transition effect
-window.addEventListener('load', () => {
-    document.body.style.opacity = '0';
-    setTimeout(() => {
-        document.body.style.transition = 'opacity 0.5s ease';
-        document.body.style.opacity = '1';
-    }, 100);
-});
 
 // Add ripple effect to buttons
 document.addEventListener('DOMContentLoaded', () => {
