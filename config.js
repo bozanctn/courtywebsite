@@ -11,7 +11,7 @@ const CONFIG = {
     EMAIL_CONFIRMATION_URL: 'https://bozanctn.github.io/courtywebsite/email-confirmation.html',
     
     // Contact Information
-    CONTACT_EMAIL: 'info.courty@gmail.com',
+    CONTACT_EMAIL: 'info@courty.club',
     
     // App Configuration
     APP_NAME: 'Courty',

@@ -145,7 +145,7 @@ Website şu sayfaları içerir:
 
 ## 📞 İletişim
 
-- **E-posta**: info.courty@gmail.com
+- **E-posta**: info@courty.club
 
 ## 📄 Lisans
 

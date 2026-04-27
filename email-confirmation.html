@@ -3,19 +3,22 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Courty</title>
-    <link rel="icon" type="image/svg+xml" href="logo.svg">
+    <title>E-posta Doğrulama — Courty</title>
+    <link rel="icon" type="image/png" href="Courty_Logo.png">
     <link rel="stylesheet" href="styles.css">
     <link rel="stylesheet" href="email-confirmation.css">
-    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
     <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 </head>
 <body class="email-confirmation-body">
+
     <div class="email-confirmation-container">
         <div class="email-confirmation-card">
+
+            <!-- Logo -->
             <div class="logo-section">
                 <div class="app-icon-large">
-                <img src="logo.svg" alt="Courty Logo" class="logo-image-large">
+                    <img src="Courty_Logo.png" alt="Courty Logo">
                 </div>
                 <h1>Courty</h1>
                 <p class="subtitle">E-posta Doğrulama</p>
@@ -23,105 +26,55 @@
 
             <!-- Loading State -->
             <div id="loading-section" class="confirmation-section active">
-                <div class="loading-spinner">
+                <div class="loading-icon">
                     <div class="spinner"></div>
                 </div>
-                <h2>E-posta Doğrulanıyor...</h2>
-                <p>Lütfen bekleyin, e-posta adresiniz doğrulanıyor.</p>
+                <h2>Doğrulanıyor...</h2>
+                <p>E-posta adresiniz doğrulanıyor, lütfen bekleyin.</p>
             </div>
 
             <!-- Success State -->
             <div id="success-section" class="confirmation-section">
-                <div class="success-icon">
-                    <svg width="80" height="80" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
-                        <circle cx="12" cy="12" r="10" fill="#39ae5c"/>
-                        <path d="M9 12l2 2 4-4" stroke="white" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
-                    </svg>
-                </div>
-                <h2>E-postanız Başarıyla Doğrulandı!</h2>
-                <p>Courty hesabınız artık aktif. Uygulamaya giriş yapabilirsiniz.</p>
-                <div class="success-details">
-                    <div class="detail-item">
-                        <span class="detail-icon">✓</span>
+                <div class="status-icon success-icon">✓</div>
+                <h2>E-posta Doğrulandı!</h2>
+                <p>Hesabınız aktif edildi. Uygulamaya giriş yapabilirsiniz.</p>
+                <div class="checklist">
+                    <div class="check-item">
+                        <span class="check-icon">✓</span>
                         <span>E-posta adresiniz doğrulandı</span>
                     </div>
-                    <div class="detail-item">
-                        <span class="detail-icon">✓</span>
+                    <div class="check-item">
+                        <span class="check-icon">✓</span>
                         <span>Hesabınız aktif edildi</span>
                     </div>
-                    <div class="detail-item">
-                        <span class="detail-icon">✓</span>
+                    <div class="check-item">
+                        <span class="check-icon">✓</span>
                         <span>Giriş yapabilirsiniz</span>
                     </div>
                 </div>
-                <div class="action-buttons">
-                    <button type="button" class="btn btn-primary" onclick="redirectToApp()">
-                        Uygulamaya Git
-                    </button>
-                    <button type="button" class="btn btn-secondary" onclick="window.close()">
-                        Sayfayı Kapat
-                    </button>
-                </div>
+                <button type="button" class="btn btn-primary btn-full" onclick="window.close()">
+                    Uygulamaya Dön
+                </button>
             </div>
 
             <!-- Error State -->
             <div id="error-section" class="confirmation-section">
-                <div class="error-icon">
-                    <svg width="80" height="80" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
-                        <circle cx="12" cy="12" r="10" fill="#dc3545"/>
-                        <path d="M15 9l-6 6M9 9l6 6" stroke="white" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
-                    </svg>
-                </div>
-                <h2>E-posta Doğrulama Başarısız</h2>
-                <p>E-posta doğrulama işlemi başarısız oldu. Bu durumun birkaç nedeni olabilir:</p>
-                <div class="error-details">
-                    <div class="detail-item error">
-                        <span class="detail-icon">✗</span>
-                        <span>Bağlantı süresi dolmuş olabilir</span>
-                    </div>
-                    <div class="detail-item error">
-                        <span class="detail-icon">✗</span>
-                        <span>Bağlantı daha önce kullanılmış olabilir</span>
-                    </div>
-                    <div class="detail-item error">
-                        <span class="detail-icon">✗</span>
-                        <span>Geçersiz doğrulama bağlantısı</span>
-                    </div>
-                </div>
-                <div class="error-help">
-                    <h3>Ne yapabilirsiniz?</h3>
-                    <ul>
-                        <li>Uygulamanızda yeni bir doğrulama e-postası isteyin</li>
-                        <li>E-posta adresinizi kontrol edin</li>
-                        <li>Spam klasörünüzü kontrol edin</li>
-                        <li>Yardım için bizimle iletişime geçin</li>
-                    </ul>
-                </div>
-                <div class="action-buttons">
-                    <button type="button" class="btn btn-primary" onclick="requestNewConfirmation()">
-                        Yeni Doğrulama E-postası İste
-                    </button>
-                    <button type="button" class="btn btn-secondary" onclick="window.close()">
-                        Sayfayı Kapat
-                    </button>
-                </div>
+                <div class="status-icon error-icon">⚠</div>
+                <h2>Doğrulama Başarısız</h2>
+                <p>Bağlantı geçersiz veya süresi dolmuş. Uygulamadan yeni bir doğrulama e-postası isteyin.</p>
+                <button type="button" class="btn btn-primary btn-full" onclick="window.close()">
+                    Uygulamaya Dön
+                </button>
             </div>
 
-            <!-- Help Section -->
+            <!-- Help -->
             <div class="help-section">
                 <p>Yardıma mı ihtiyacınız var?</p>
-                <a href="mailto:info.courty@gmail.com" class="help-link">
-                    info.courty@gmail.com
-                </a>
+                <a href="mailto:info@courty.club" class="help-link">info@courty.club</a>
             </div>
+
         </div>
     </div>
-
-    <!-- Hidden form for requesting new confirmation -->
-    <form id="resend-form" style="display: none;">
-        <input type="email" id="resend-email" placeholder="E-posta adresinizi girin">
-        <button type="submit">Yeni Doğrulama E-postası Gönder</button>
-    </form>
 
     <script src="config.js"></script>
     <script src="email-confirmation.js"></script>
