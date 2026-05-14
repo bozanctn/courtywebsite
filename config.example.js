@@ -1,4 +1,4 @@
-// Configuration example file for Courty website
+// Configuration example file for CourtyCLUB website
 // Copy this file to config.js and update with your actual values
 
 const CONFIG = {

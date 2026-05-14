@@ -1,4 +1,4 @@
-// Configuration file for Courty website
+// Configuration file for CourtyCLUB website
 // This file contains environment variables and configuration settings
 
 const CONFIG = {
@@ -14,7 +14,7 @@ const CONFIG = {
     CONTACT_EMAIL: 'info@courty.club',
     
     // App Configuration
-    APP_NAME: 'Courty',
+    APP_NAME: 'CourtyCLUB',
     APP_DESCRIPTION: 'Tenis kortu rezervasyonu ve antrenör bulma platformu',
     
     // Security Settings

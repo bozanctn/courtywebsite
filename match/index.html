@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Maç Daveti — Courty</title>
+    <title>Maç Daveti — CourtyCLUB</title>
     <link rel="icon" type="image/svg+xml" href="../logo.svg">
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
     <style>
@@ -142,13 +142,13 @@
 
 <div class="card" id="main-card">
     <div class="logo-wrap">
-        <img src="../logo.svg" alt="Courty">
-        <span>Courty</span>
+        <img src="../logo.svg" alt="CourtyCLUB">
+        <span>CourtyCLUB</span>
     </div>
 
     <div class="icon-circle">🎾</div>
     <h1>Maç Daveti</h1>
-    <p class="subtitle">Seni bir maça davet ettiler!<br>Katılmak için Courty uygulamasını aç.</p>
+    <p class="subtitle">Seni bir maça davet ettiler!<br>Katılmak için CourtyCLUB uygulamasını aç.</p>
 
     <div class="token-box">
         Maç Kodu
@@ -163,7 +163,7 @@
         <a href="https://apps.apple.com/app/courty" class="store-btn" target="_blank">
             🍎 App Store
         </a>
-        <a href="https://play.google.com/store/apps/courty" class="store-btn" target="_blank">
+        <a href="https://play.google.com/store/apps/details?id=com.courtly.app&hl=tr" class="store-btn" target="_blank">
             ▶ Google Play
         </a>
     </div>
@@ -177,15 +177,12 @@
 </div>
 
 <script>
-    // URL'den token oku: /match/TOKEN veya /match/?token=TOKEN
     function getToken() {
-        const path = window.location.pathname; // örn: /match/XK9M2PQR
+        const path = window.location.pathname;
         const parts = path.replace(/\/$/, '').split('/');
         const fromPath = parts[parts.length - 1];
         if (fromPath && fromPath !== 'match' && fromPath !== 'index.html') return fromPath;
-
-        const params = new URLSearchParams(window.location.search);
-        return params.get('token');
+        return new URLSearchParams(window.location.search).get('token');
     }
 
     const token = getToken();
@@ -197,6 +194,14 @@
         const deepLink = 'courtly://match/' + token;
         document.getElementById('token-display').textContent = token;
         document.getElementById('open-app-btn').href = deepLink;
+
+        // Otomatik uygulama açma denemesi
+        window.location.href = deepLink;
+
+        // 2.5 saniye sonra açılmadıysa buton görünür olsun (kullanıcı sayfada hâlâ duruyorsa)
+        setTimeout(() => {
+            document.getElementById('open-app-btn').textContent = '⟳ Tekrar Dene';
+        }, 2500);
     }
 </script>
 

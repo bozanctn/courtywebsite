@@ -1,6 +1,6 @@
-# Courty Website 🎾
+# CourtyCLUB Website 🎾
 
-Courty uygulaması için gizlilik politikası ve kullanım şartlarını içeren modern, animasyonlu ve profesyonel website.
+CourtyCLUB uygulaması için gizlilik politikası ve kullanım şartlarını içeren modern, animasyonlu ve profesyonel website.
 
 ## ✨ Özellikler
 
@@ -59,7 +59,7 @@ courtywebsite/
 ├── password-reset.js          # Şifre sıfırlama JavaScript
 ├── config.js                  # Yapılandırma dosyası
 ├── config.example.js          # Yapılandırma örnek dosyası
-├── logo.png                   # Courty logosu
+├── logo.png                   # CourtyCLUB logosu
 ├── 9-Photoroom (2).png        # Görsel asset
 ├── .gitignore                 # Git ignore dosyası
 └── README.md                  # Proje dokümantasyonu
@@ -178,4 +178,4 @@ Bu proje özel mülkiyettir. Tüm hakları saklıdır.
 
 ---
 
-© 2024-2025 Courty. Tüm hakları saklıdır.
+© 2024-2025 CourtyCLUB. Tüm hakları saklıdır.
