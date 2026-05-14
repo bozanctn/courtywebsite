@@ -1,0 +1,172 @@
+/* ─────────────────────────────────────────────────────────────
+   CourtyCLUB – Colors & Type
+   Tokens lifted directly from the React Native codebase (club/*.tsx).
+   The canonical palette is the "modern" set used in DashboardScreen,
+   CourtsScreen, ChatScreen, MembersScreen, ProfileScreen:
+   navy #003399 primary, slate neutrals, bright semantic accents.
+   ───────────────────────────────────────────────────────────── */
+
+:root {
+  /* ── Brand ───────────────────────────────────────────────── */
+  --brand-navy:        #003399;   /* PRIMARY in code – Courty navy */
+  --brand-navy-hover:  #002a80;
+  --brand-navy-soft:   #EEF2FF;   /* navy tint used on top-bar icon, time bubble */
+  --brand-lime:        #C8E64B;   /* tennis-ball lime from logo (accent only) */
+
+  /* ── Surfaces / neutrals ─────────────────────────────────── */
+  --surface:           #FFFFFF;   /* SURFACE */
+  --bg:                #F1F5FB;   /* BG – app background, slight blue cast */
+  --bg-alt:            #F8FAFC;   /* MembersScreen variant */
+  --border:            #E2E8F0;   /* BORDER (slate-200) */
+  --border-soft:       #F1F5F9;   /* hairlines */
+  --muted:             #CBD5E1;   /* slate-300 – empty-state icons, muted avatars */
+
+  /* ── Text ────────────────────────────────────────────────── */
+  --text-1:            #0F172A;   /* TEXT_1 (slate-900) – titles, body */
+  --text-2:            #64748B;   /* TEXT_2 (slate-500) – secondary */
+  --text-inverse:      #FFFFFF;   /* on colored fills */
+
+  /* ── Semantic ────────────────────────────────────────────── */
+  --success:           #22C55E;   /* GREEN – confirmed, active, online dot */
+  --success-deep:      #16A34A;   /* stat numbers */
+  --success-ink:       #166534;   /* stat labels on green tint */
+  --success-soft:      #DCFCE7;   /* stat card bg */
+  --warning:           #EAB308;   /* AMBER – pending */
+  --warning-alt:       #F59E0B;   /* secondary amber */
+  --error:             #EF4444;   /* RED – cancel, unread badge, logout */
+  --info:              #3B82F6;   /* BLUE */
+
+  /* ── Accent palette (action tiles, court types) ─────────── */
+  --accent-orange:     #F97316;
+  --accent-purple:     #8B5CF6;
+  --accent-teal:       #0D9488;
+  --accent-sky:        #0EA5E9;
+  --accent-slate:      #475569;
+  --accent-clay:       #D97706;   /* clay court */
+  --accent-violet-bg:  #F5F3FF;   /* purple action chip bg */
+  --accent-red-bg:     #FEF2F2;
+  --accent-blue-bg:    #EEF2FF;   /* time bubble, top-bar icon */
+
+  /* ── Radii ─────────────────────────────────────────────── */
+  --r-xs:   8px;
+  --r-sm:   10px;   /* time bubble */
+  --r-md:   12px;   /* search box, chips */
+  --r-lg:   14px;   /* booking card */
+  --r-xl:   16px;   /* stat card, action tile */
+  --r-2xl:  20px;   /* status pill */
+  --r-pill: 999px;
+
+  /* ── Spacing scale (4-pt) ──────────────────────────────── */
+  --s-1:  4px;
+  --s-2:  8px;
+  --s-3:  12px;
+  --s-4:  16px;
+  --s-5:  20px;
+  --s-6:  24px;
+  --s-7:  28px;
+  --s-8:  32px;
+
+  /* ── Shadows (lifted from RN shadow props) ─────────────── */
+  --shadow-1: 0 1px 6px rgba(0, 0, 0, 0.05);                      /* booking card */
+  --shadow-2: 0 2px 8px rgba(0, 0, 0, 0.06);                      /* stat card */
+  --shadow-3: 0 3px 8px rgba(0, 0, 0, 0.12);                      /* action tile */
+  --shadow-pop: 0 10px 30px rgba(15, 23, 42, 0.10);               /* modals, popovers */
+  --hairline: inset 0 -1px 0 var(--border);
+
+  /* ── Type ────────────────────────────────────────────────── */
+  --font-sans: -apple-system, BlinkMacSystemFont, "SF Pro Text",
+               "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  --font-mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+
+  /* Type scale – matches React Native font-size + weight pairs */
+  --t-xs:    11px;   /* tile-badge, time bubble, status badge */
+  --t-sm:    13px;   /* secondary text, info chip */
+  --t-base:  14px;   /* search input, last message */
+  --t-md:    15px;   /* booking name */
+  --t-lg:    16px;   /* action tile, card text */
+  --t-xl:    18px;   /* topbar title, empty title */
+  --t-2xl:   19px;   /* section title */
+  --t-3xl:   20px;   /* topBarTitle dashboard */
+  --t-4xl:   22px;   /* pageTitle */
+  --t-5xl:   32px;   /* stat number */
+
+  --w-medium:    500;
+  --w-semibold:  600;
+  --w-bold:      700;
+  --w-extrabold: 800;
+
+  --lh-tight:  1.15;
+  --lh-snug:   1.35;
+  --lh-normal: 1.5;
+
+  /* eyebrow letter-spacing – sectionLabel uses 1.2px */
+  --tracking-eyebrow: 0.1em;
+}
+
+/* ── Semantic element styles ─────────────────────────────── */
+
+html, body {
+  font-family: var(--font-sans);
+  color: var(--text-1);
+  background: var(--bg);
+  font-size: var(--t-base);
+  line-height: var(--lh-normal);
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+h1, .h1 {
+  font-size: var(--t-4xl);
+  font-weight: var(--w-extrabold);
+  color: var(--text-1);
+  line-height: var(--lh-tight);
+  letter-spacing: -0.01em;
+}
+
+h2, .h2 {
+  font-size: var(--t-2xl);
+  font-weight: var(--w-bold);
+  color: var(--text-1);
+  line-height: var(--lh-snug);
+}
+
+h3, .h3 {
+  font-size: var(--t-xl);
+  font-weight: var(--w-bold);
+  color: var(--text-1);
+}
+
+h4, .h4 {
+  font-size: var(--t-lg);
+  font-weight: var(--w-bold);
+  color: var(--text-1);
+}
+
+p, .body {
+  font-size: var(--t-base);
+  line-height: var(--lh-normal);
+  color: var(--text-1);
+}
+
+.muted, small {
+  color: var(--text-2);
+  font-size: var(--t-sm);
+}
+
+.eyebrow {
+  font-size: var(--t-xs);
+  font-weight: var(--w-bold);
+  letter-spacing: var(--tracking-eyebrow);
+  color: var(--text-2);
+  text-transform: uppercase;
+}
+
+.mono, code {
+  font-family: var(--font-mono);
+  font-size: 0.92em;
+}
+
+/* Status text helpers */
+.status--success { color: var(--success); }
+.status--warning { color: var(--warning); }
+.status--error   { color: var(--error); }

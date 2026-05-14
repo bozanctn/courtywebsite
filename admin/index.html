@@ -1,0 +1,61 @@
+<!doctype html>
+<html lang="tr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>CourtyCLUB — Yönetim Paneli</title>
+<link rel="stylesheet" href="css/app.css">
+<link rel="stylesheet" href="https://fonts.googleapis.com/icon?family=Material+Icons">
+<link rel="icon" href="../Courty_Logo.png">
+
+<script>
+  window.__tweakDefaults = {
+    "sideTheme": "navy",
+    "density": "compact",
+    "sideWidth": 248
+  };
+</script>
+</head>
+<body data-edit="0">
+
+<div id="app"></div>
+
+<!-- Supabase -->
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.js"></script>
+
+<!-- React 18 -->
+<script src="https://unpkg.com/react@18.3.1/umd/react.development.js" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.development.js" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/@babel/standalone@7.29.0/babel.min.js" crossorigin="anonymous"></script>
+
+<!-- Data & utilities (plain JS, no JSX) -->
+<script src="js/data.js"></script>
+<script src="js/services.js"></script>
+
+<!-- Shared UI components -->
+<script type="text/babel" src="js/ui.jsx"></script>
+
+<!-- Screens (split by domain) -->
+<script type="text/babel" src="js/screens/core.jsx"></script>
+<script type="text/babel" src="js/screens/members.jsx"></script>
+<script type="text/babel" src="js/screens/team.jsx"></script>
+<script type="text/babel" src="js/screens/event.jsx"></script>
+<script type="text/babel" src="js/screens/tournament_detail.jsx"></script>
+<script type="text/babel" src="js/screens/analyze.jsx"></script>
+<script type="text/babel" src="js/screens/comm.jsx"></script>
+<script type="text/babel" src="js/screens/club.jsx"></script>
+<script type="text/babel" src="js/screens/employees.jsx"></script>
+
+<!-- Root app (auth + shell + routing) -->
+<script type="text/babel" src="js/app.jsx"></script>
+
+<!-- Tweaks panel (design mode) -->
+<script type="text/babel" src="js/tweaks.jsx"></script>
+
+<!-- Boot -->
+<script type="text/babel">
+  const root = ReactDOM.createRoot(document.getElementById('app'));
+  root.render(<App />);
+</script>
+</body>
+</html>

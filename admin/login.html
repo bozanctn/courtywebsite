@@ -1,0 +1,324 @@
+<!doctype html>
+<html lang="tr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Giriş Yap — CourtyCLUB Yönetim</title>
+<link rel="stylesheet" href="css/tokens.css">
+<link rel="icon" href="../Courty_Logo.png">
+<style>
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+body {
+  font-family: var(--font-sans);
+  background: var(--bg);
+  min-height: 100vh;
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+}
+@media (max-width: 720px) {
+  body { grid-template-columns: 1fr; }
+  .brand-side { display: none; }
+}
+
+/* ── Sol taraf (marka) ─────────────────────────────────────── */
+.brand-side {
+  background: var(--brand-navy);
+  display: flex; flex-direction: column;
+  justify-content: center; align-items: center;
+  padding: 48px;
+  gap: 24px;
+  position: relative;
+  overflow: hidden;
+}
+.brand-side::before {
+  content: '';
+  position: absolute; inset: 0;
+  background: radial-gradient(ellipse at 70% 30%, rgba(200,230,75,0.08) 0%, transparent 60%);
+}
+.brand-logo {
+  width: 72px; height: 72px; border-radius: 18px;
+  background: rgba(255,255,255,0.12);
+  display: grid; place-items: center;
+  position: relative;
+}
+.brand-logo img { width: 48px; height: 48px; object-fit: contain; }
+.brand-title {
+  font-size: 32px; font-weight: 800; color: #fff;
+  letter-spacing: -0.02em; text-align: center;
+  position: relative;
+}
+.brand-title em { color: var(--brand-lime); font-style: normal; }
+.brand-sub {
+  font-size: 15px; color: rgba(255,255,255,0.65);
+  text-align: center; line-height: 1.6; max-width: 280px;
+  position: relative;
+}
+.brand-stats {
+  display: flex; gap: 32px; margin-top: 8px; position: relative;
+}
+.brand-stat { text-align: center; }
+.brand-stat .n { font-size: 22px; font-weight: 800; color: #fff; }
+.brand-stat .l { font-size: 11px; color: rgba(255,255,255,0.55); margin-top: 2px; }
+.brand-dots {
+  display: flex; gap: 6px; position: relative;
+}
+.brand-dots span {
+  width: 6px; height: 6px; border-radius: 999px;
+  background: rgba(255,255,255,0.25);
+}
+.brand-dots span:first-child { background: var(--brand-lime); width: 18px; border-radius: 3px; }
+
+/* ── Sağ taraf (form) ──────────────────────────────────────── */
+.form-side {
+  display: flex; flex-direction: column;
+  justify-content: center; align-items: center;
+  padding: 48px 40px;
+  background: var(--surface);
+}
+.form-box {
+  width: 100%; max-width: 380px;
+  display: flex; flex-direction: column; gap: 24px;
+}
+.form-head { display: flex; flex-direction: column; gap: 6px; }
+.form-head h2 { font-size: 24px; font-weight: 800; color: var(--text-1); letter-spacing: -0.02em; }
+.form-head p { font-size: 14px; color: var(--text-2); }
+
+.field { display: grid; gap: 6px; }
+.field label {
+  font-size: 11px; font-weight: 700; letter-spacing: 0.08em;
+  color: var(--text-2); text-transform: uppercase;
+}
+.field input {
+  border: 1.5px solid var(--border); border-radius: 10px;
+  padding: 11px 14px; font-size: 14px;
+  background: var(--surface); color: var(--text-1);
+  outline: 0; font-family: var(--font-sans);
+  transition: border-color 120ms, box-shadow 120ms;
+}
+.field input:focus {
+  border-color: var(--brand-navy);
+  box-shadow: 0 0 0 3px rgba(0,51,153,0.10);
+}
+.field input::placeholder { color: var(--muted); }
+
+.field-pw { position: relative; }
+.field-pw input { padding-right: 42px; width: 100%; }
+.toggle-pw {
+  position: absolute; right: 12px; top: 50%; transform: translateY(-50%);
+  background: none; border: none; cursor: pointer; color: var(--text-2);
+  font-size: 20px; line-height: 1; padding: 0;
+  font-family: 'Material Icons'; font-style: normal;
+  -webkit-font-feature-settings: 'liga'; -webkit-font-smoothing: antialiased;
+}
+.toggle-pw:hover { color: var(--text-1); }
+
+.forgot { text-align: right; }
+.forgot a { font-size: 12px; color: var(--brand-navy); font-weight: 600; text-decoration: none; }
+.forgot a:hover { text-decoration: underline; }
+
+.btn-login {
+  width: 100%; padding: 13px;
+  background: var(--brand-navy); color: #fff;
+  border: none; border-radius: 10px;
+  font-size: 15px; font-weight: 700;
+  cursor: pointer; letter-spacing: 0.01em;
+  transition: background 120ms, transform 80ms;
+  display: flex; align-items: center; justify-content: center; gap: 8px;
+  font-family: var(--font-sans);
+}
+.btn-login:hover:not(:disabled) { background: var(--brand-navy-hover); }
+.btn-login:active:not(:disabled) { transform: scale(0.99); }
+.btn-login:disabled { opacity: 0.6; cursor: not-allowed; }
+
+.error-box {
+  background: var(--accent-red-bg);
+  border: 1px solid rgba(239,68,68,0.2);
+  border-radius: 10px; padding: 12px 14px;
+  font-size: 13px; color: #B91C1C;
+  display: none; align-items: flex-start; gap: 8px;
+  flex-direction: column;
+}
+.error-box.show { display: flex; }
+.error-box-row { display: flex; align-items: center; gap: 8px; }
+.error-box .material-icons { font-size: 18px; flex-shrink: 0; }
+.error-box .app-link {
+  display: inline-flex; align-items: center; gap: 6px;
+  margin-top: 8px; padding: 7px 12px;
+  background: #fff; border: 1px solid rgba(239,68,68,0.25);
+  border-radius: 8px; color: #B91C1C; font-weight: 600;
+  font-size: 12px; text-decoration: none;
+}
+.error-box .app-link:hover { background: rgba(239,68,68,0.06); }
+
+.divider { display: flex; align-items: center; gap: 12px; }
+.divider hr { flex: 1; border: 0; border-top: 1px solid var(--border); }
+.divider span { font-size: 12px; color: var(--text-2); white-space: nowrap; }
+
+.back-link {
+  text-align: center; font-size: 13px; color: var(--text-2);
+}
+.back-link a { color: var(--brand-navy); font-weight: 600; text-decoration: none; }
+.back-link a:hover { text-decoration: underline; }
+
+/* Material Icons inline */
+@import url("https://fonts.googleapis.com/icon?family=Material+Icons");
+
+/* Spinner */
+.spin { animation: spin 600ms linear infinite; display: inline-block; }
+@keyframes spin { to { transform: rotate(360deg); } }
+</style>
+</head>
+<body>
+
+<!-- Sol: Marka alanı -->
+<div class="brand-side">
+  <div class="brand-logo">
+    <img src="../Courty_Logo.png" alt="CourtyCLUB">
+  </div>
+  <div class="brand-title">Courty<em>CLUB</em></div>
+  <p class="brand-sub">Kulüp yönetim panelinize hoş geldiniz. Rezervasyonlar, üyeler, kortlar ve daha fazlasını tek panelden yönetin.</p>
+  <div class="brand-dots">
+    <span></span><span></span><span></span>
+  </div>
+</div>
+
+<!-- Sağ: Form alanı -->
+<div class="form-side">
+  <div class="form-box">
+    <div class="form-head">
+      <h2>Yönetim Paneli</h2>
+      <p>Kulüp hesabınızla giriş yapın</p>
+    </div>
+
+    <div class="error-box" id="errorBox">
+      <div class="error-box-row">
+        <span class="material-icons">error_outline</span>
+        <span id="errorMsg">Giriş başarısız. Lütfen tekrar deneyin.</span>
+      </div>
+      <a id="appStoreLink" href="https://apps.apple.com/tr/app/courtyclub/id6762048168?l=tr" target="_blank" rel="noopener" class="app-link" style="display:none">
+        <span class="material-icons" style="font-size:15px">open_in_new</span>
+        CourtyCLUB uygulamasına git
+      </a>
+    </div>
+
+    <form id="loginForm" novalidate>
+      <div style="display:flex;flex-direction:column;gap:16px;">
+        <div class="field">
+          <label for="email">E-posta</label>
+          <input type="email" id="email" placeholder="kulup@ornek.com" autocomplete="email" required>
+        </div>
+        <div class="field">
+          <label for="password">Şifre</label>
+          <div class="field-pw">
+            <input type="password" id="password" placeholder="••••••••" autocomplete="current-password" required>
+            <button type="button" class="toggle-pw" id="togglePw" title="Şifreyi göster/gizle">visibility_off</button>
+          </div>
+        </div>
+        <div class="forgot">
+          <a href="../password-reset.html">Şifremi unuttum</a>
+        </div>
+        <button type="submit" class="btn-login" id="loginBtn">
+          <span id="loginBtnText">Giriş Yap</span>
+        </button>
+      </div>
+    </form>
+
+    <div class="divider">
+      <hr>
+      <span>CourtyCLUB</span>
+      <hr>
+    </div>
+
+    <div class="back-link">
+      <a href="../index.html">← Ana sayfaya dön</a>
+    </div>
+  </div>
+</div>
+
+<!-- Supabase CDN -->
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.js"></script>
+<script src="js/data.js"></script>
+<script>
+(function () {
+  // Oturum zaten açıksa panel'e yönlendir
+  authGetSession().then(session => {
+    if (session) window.location.href = 'index.html';
+  });
+
+  const form   = document.getElementById('loginForm');
+  const btn    = document.getElementById('loginBtn');
+  const btnTxt = document.getElementById('loginBtnText');
+  const errBox = document.getElementById('errorBox');
+  const errMsg = document.getElementById('errorMsg');
+  const togglePw = document.getElementById('togglePw');
+  const pwInput  = document.getElementById('password');
+
+  togglePw.addEventListener('click', () => {
+    const show = pwInput.type === 'password';
+    pwInput.type = show ? 'text' : 'password';
+    togglePw.textContent = show ? 'visibility' : 'visibility_off';
+  });
+
+  const appStoreLink = document.getElementById('appStoreLink');
+
+  function showError(msg, showAppLink = false) {
+    errMsg.textContent = msg;
+    errBox.classList.add('show');
+    appStoreLink.style.display = showAppLink ? 'inline-flex' : 'none';
+  }
+  function hideError() {
+    errBox.classList.remove('show');
+    appStoreLink.style.display = 'none';
+  }
+
+  function setLoading(on) {
+    btn.disabled = on;
+    btnTxt.innerHTML = on
+      ? '<span class="material-icons spin" style="font-size:18px">refresh</span> Giriş yapılıyor…'
+      : 'Giriş Yap';
+  }
+
+  form.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    hideError();
+    const email    = document.getElementById('email').value.trim();
+    const password = document.getElementById('password').value;
+    if (!email || !password) { showError('Lütfen e-posta ve şifrenizi girin.'); return; }
+
+    setLoading(true);
+    try {
+      const { session, user } = await authSignIn(email, password);
+
+      // Kulüp hesabı mı kontrol et
+      const profile = await getClubProfile(user.id);
+      if (!profile) {
+        // Kullanıcı tipini sorgula — daha açıklayıcı mesaj ver
+        let userType = null;
+        try { userType = await getUserType(user.id); } catch (_) {}
+        await sb.auth.signOut();
+
+        if (userType === 'player') {
+          showError('Bu panel yalnızca kulüp hesapları içindir. Oyuncu hesabınızla CourtyCLUB uygulamasından giriş yapabilirsiniz.', true);
+        } else if (userType === 'coach') {
+          showError('Bu panel yalnızca kulüp hesapları içindir. Antrenör hesabınızla CourtyCLUB uygulamasından giriş yapabilirsiniz.', true);
+        } else {
+          showError('Bu panel yalnızca kulüp hesapları içindir. Lütfen kulüp e-postanızla giriş yapın.');
+        }
+        setLoading(false);
+        return;
+      }
+      window.location.href = 'index.html';
+    } catch (err) {
+      const msg = err.message || 'Giriş başarısız.';
+      if (msg.includes('Invalid login') || msg.includes('invalid_credentials')) {
+        showError('E-posta veya şifre hatalı.');
+      } else {
+        showError(msg);
+      }
+      setLoading(false);
+    }
+  });
+})();
+</script>
+</body>
+</html>
