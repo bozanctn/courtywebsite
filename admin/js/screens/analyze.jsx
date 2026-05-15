@@ -577,117 +577,286 @@ function FinanceScreen({ clubId }) {
 // ═══════════════════════════════════════════════════════════════
 // ANALİTİK
 // ═══════════════════════════════════════════════════════════════
+
+// Bar chart — piksel tabanlı, container yüksekliğini doğru kullanır
+function BarChart({ data, labelKey, valueKey, color = 'var(--brand-navy)', height = 160 }) {
+  const max = Math.max(...data.map(d => d[valueKey]), 1);
+  const BAR_AREA = height - 36; // alt etiket için yer bırak
+  return (
+    <div style={{ display: 'flex', alignItems: 'flex-end', gap: 6, height, paddingTop: 20 }}>
+      {data.map((d, i) => {
+        const barH = Math.max(d[valueKey] > 0 ? Math.round((d[valueKey] / max) * BAR_AREA) : 0, d[valueKey] > 0 ? 4 : 0);
+        return (
+          <div key={i} style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'flex-end', height: BAR_AREA + 20 }}>
+            {d[valueKey] > 0 && (
+              <div style={{ fontSize: 9, fontWeight: 700, color: 'var(--text-2)', marginBottom: 3 }}>{d[valueKey]}</div>
+            )}
+            <div
+              title={`${d[labelKey]}: ${d[valueKey]}`}
+              style={{ width: '80%', minWidth: 8, height: barH, background: color, borderRadius: '4px 4px 0 0', transition: 'height 400ms ease' }}
+            />
+            <div style={{ fontSize: 9, color: 'var(--text-2)', marginTop: 5, textAlign: 'center', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', maxWidth: '100%' }}>
+              {d[labelKey]}
+            </div>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+// Yatay bar — saat dağılımı için
+function HBar({ label, value, max, color = 'var(--brand-navy)' }) {
+  const pct = max > 0 ? (value / max) * 100 : 0;
+  const alpha = 0.12 + (pct / 100) * 0.78;
+  return (
+    <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+      <div style={{ width: 38, fontSize: 10, color: 'var(--text-2)', fontWeight: 600, textAlign: 'right', flexShrink: 0 }}>{label}</div>
+      <div style={{ flex: 1, height: 20, background: `rgba(0,51,153,${alpha})`, borderRadius: 4, position: 'relative', minWidth: 0 }}>
+        {value > 0 && (
+          <span style={{ position: 'absolute', right: 6, top: '50%', transform: 'translateY(-50%)', fontSize: 9, color: pct > 45 ? '#fff' : 'var(--brand-navy)', fontWeight: 700 }}>{value}</span>
+        )}
+      </div>
+    </div>
+  );
+}
+
 function AnalyticsScreen({ clubId }) {
-  const { useState, useEffect } = React;
-  const [loading,  setLoading]  = useState(true);
-  const [stats,    setStats]    = useState({});
-  const [monthly,  setMonthly]  = useState([]);
-  const [hourly,   setHourly]   = useState([]);
+  const { useState, useEffect, useMemo } = React;
+  const [loading,   setLoading]   = useState(true);
+  const [stats,     setStats]     = useState({});
+  const [monthly,   setMonthly]   = useState([]);   // {m, reservations, income, expense}
+  const [hourly,    setHourly]    = useState([]);
+  const [catIncome, setCatIncome] = useState([]);   // {cat, amount}
 
   useEffect(() => { if (clubId) load(); }, [clubId]);
 
   const load = async () => {
     setLoading(true);
     try {
-      const sixMonthsAgo = new Date();
-      sixMonthsAgo.setMonth(sixMonthsAgo.getMonth() - 6);
-
+      const sixAgo = new Date(); sixAgo.setMonth(sixAgo.getMonth() - 6);
+      const sixAgoStr = sixAgo.toISOString().split('T')[0];
       const courtIds = await getClubCourtIds(clubId);
 
-      const [bkAll, memAll] = await Promise.all([
+      const [bkRes, memRes, finRes] = await Promise.all([
         courtIds.length > 0
-          ? sb.from('bookings').select('id,start_time,status').in('court_id', courtIds).gte('start_time', sixMonthsAgo.toISOString())
+          ? sb.from('bookings').select('id,start_time,end_time,status,payment_status,total_amount').in('court_id', courtIds).gte('start_time', sixAgo.toISOString())
           : Promise.resolve({ data: [] }),
         sb.from('club_memberships').select('id,status,created_at').eq('club_id', clubId),
+        sb.from('club_finances').select('type,amount,category,date').eq('club_id', clubId).gte('date', sixAgoStr),
       ]);
 
-      const bookings = bkAll.data || [];
-      const members  = memAll.data || [];
+      const bookings = bkRes.data  || [];
+      const members  = memRes.data || [];
+      const finances = finRes.data || [];
 
-      const monthMap = {};
+      // ── Aylık veri ─────────────────────────────────────────────
+      const monthKeys = [];
+      const monthMap  = {}; // key → {reservations, income, expense}
       for (let i = 5; i >= 0; i--) {
-        const d = new Date(); d.setMonth(d.getMonth() - i);
+        const d = new Date(); d.setDate(1); d.setMonth(d.getMonth() - i);
         const key = d.toLocaleDateString('tr-TR', { month: 'short', year: '2-digit' });
-        monthMap[key] = 0;
+        const iso = `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}`;
+        monthKeys.push({ key, iso });
+        monthMap[iso] = { m: key, reservations: 0, income: 0, expense: 0 };
       }
-      bookings.forEach(b => {
-        const d   = new Date(b.start_time);
-        const key = d.toLocaleDateString('tr-TR', { month: 'short', year: '2-digit' });
-        if (monthMap[key] !== undefined) monthMap[key]++;
-      });
-      setMonthly(Object.entries(monthMap).map(([m, n]) => ({ m, n })));
 
+      bookings.forEach(b => {
+        const iso = b.start_time.slice(0,7);
+        if (monthMap[iso]) monthMap[iso].reservations++;
+      });
+      finances.forEach(f => {
+        const iso = f.date.slice(0,7);
+        if (monthMap[iso]) {
+          if (f.type === 'income')  monthMap[iso].income  += f.amount || 0;
+          if (f.type === 'expense') monthMap[iso].expense += f.amount || 0;
+        }
+      });
+      setMonthly(Object.values(monthMap));
+
+      // ── Saatlik dağılım ────────────────────────────────────────
       const hMap = {};
-      for (let h = 6; h <= 21; h++) hMap[h] = 0;
-      bookings.forEach(b => { const h = new Date(b.start_time).getHours(); if (hMap[h] !== undefined) hMap[h]++; });
+      for (let h = 7; h <= 22; h++) hMap[h] = 0;
+      bookings.forEach(b => {
+        const h = new Date(b.start_time).getHours();
+        if (hMap[h] !== undefined) hMap[h]++;
+      });
       setHourly(Object.entries(hMap).map(([h, n]) => ({ h: Number(h), n })));
 
+      // ── Kategori bazlı gelir (son 6 ay) ───────────────────────
+      const catMap = {};
+      finances.filter(f => f.type === 'income').forEach(f => {
+        catMap[f.category] = (catMap[f.category] || 0) + (f.amount || 0);
+      });
+      const sorted = Object.entries(catMap)
+        .map(([cat, amount]) => ({ cat, amount }))
+        .sort((a, b) => b.amount - a.amount)
+        .slice(0, 6);
+      setCatIncome(sorted);
+
+      // ── Özet istatistikler ─────────────────────────────────────
+      const totalIncome  = finances.filter(f => f.type === 'income').reduce((s, f) => s + (f.amount||0), 0);
+      const totalExpense = finances.filter(f => f.type === 'expense').reduce((s, f) => s + (f.amount||0), 0);
+      const unpaidBk = bookings.filter(b => b.status === 'confirmed' && b.payment_status !== 'paid');
+
       setStats({
-        totalBookings:  bookings.length,
-        confirmedRate:  bookings.length > 0 ? Math.round(bookings.filter(b => ['confirmed','completed'].includes(b.status)).length / bookings.length * 100) : 0,
-        activeMembers:  members.filter(m => m.status === 'active').length,
-        totalMembers:   members.length,
+        totalBookings: bookings.length,
+        completedRate: bookings.length > 0
+          ? Math.round(bookings.filter(b => b.status === 'completed').length / bookings.length * 100) : 0,
+        activeMembers: members.filter(m => m.status === 'active').length,
+        totalMembers:  members.length,
+        totalIncome,
+        totalExpense,
+        netProfit: totalIncome - totalExpense,
+        unpaidCount:   unpaidBk.length,
+        unpaidRevenue: unpaidBk.reduce((s, b) => s + (b.total_amount||0), 0),
       });
     } catch (e) { console.error(e); }
     finally { setLoading(false); }
   };
 
-  const maxMonthly = Math.max(...monthly.map(m => m.n), 1);
-  const maxHourly  = Math.max(...hourly.map(h => h.n), 1);
+  const maxHourly = useMemo(() => Math.max(...hourly.map(h => h.n), 1), [hourly]);
+  const maxCat    = useMemo(() => Math.max(...catIncome.map(c => c.amount), 1), [catIncome]);
+  const netPos    = (stats.netProfit || 0) >= 0;
 
   if (loading) return <Spinner />;
 
   return (
     <div className="page fade-in">
       <div className="page-head">
-        <h1>Analitik</h1>
-        <button className="btn btn-ghost" onClick={load}><span className="material-icons">refresh</span></button>
+        <div>
+          <h1>Analitik</h1>
+          <div className="sub">Son 6 ay · {new Date().toLocaleDateString('tr-TR', { month:'long', year:'numeric' })}</div>
+        </div>
+        <button className="btn btn-ghost" onClick={load}>
+          <span className="material-icons">refresh</span>
+        </button>
       </div>
 
+      {/* ── Üst stat kartları ── */}
       <div className="stats">
-        <StatCard icon="event_available" n={stats.totalBookings}        label="6 Aylık Rezervasyon" />
-        <StatCard icon="percent"         n={`%${stats.confirmedRate}`}  label="Onay Oranı"          tint="green" />
-        <StatCard icon="group"           n={stats.activeMembers}        label="Aktif Üye"            tint="navy" />
-        <StatCard icon="people"          n={stats.totalMembers}         label="Toplam Üye" />
+        <StatCard icon="event_available"        n={stats.totalBookings}           label="6 Aylık Rezervasyon" />
+        <StatCard icon="check_circle"           n={`%${stats.completedRate}`}     label="Tamamlanma Oranı"    tint="green" />
+        <StatCard icon="group"                  n={stats.activeMembers}           label="Aktif Üye"           tint="navy" />
+        <StatCard icon="account_balance_wallet" n={stats.unpaidCount > 0 ? stats.unpaidCount : '—'}
+                                                label="Ödenmemiş Rezervasyon"     tint={stats.unpaidCount > 0 ? 'purple' : ''} />
       </div>
 
-      <div className="row2">
-        <div className="chart-card">
-          <div className="h"><h4>Aylık Rezervasyon (Son 6 Ay)</h4></div>
-          <div style={{ display: 'flex', alignItems: 'flex-end', gap: 10, height: 160, paddingBottom: 28 }}>
-            {monthly.map((m, i) => {
-              const pct = maxMonthly > 0 ? (m.n / maxMonthly) * 100 : 0;
-              return (
-                <div key={i} style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 4 }}>
-                  <div style={{ fontSize: 10, color: 'var(--text-2)', fontWeight: 600 }}>{m.n}</div>
-                  <div style={{ width: '100%', background: 'var(--brand-navy)', height: `${Math.max(pct, 3)}%`, borderRadius: '4px 4px 0 0', minHeight: 4, transition: 'height 300ms' }} title={`${m.m}: ${m.n} rezervasyon`} />
-                  <div style={{ fontSize: 9, color: 'var(--text-2)' }}>{m.m}</div>
-                </div>
-              );
-            })}
+      {/* ── Net kâr banner ── */}
+      {(stats.totalIncome > 0 || stats.totalExpense > 0) && (
+        <div style={{ background:'#0f172a', borderRadius:14, padding:'16px 20px', marginBottom:14, display:'flex', alignItems:'center', gap:16 }}>
+          <div style={{ flex:1 }}>
+            <div style={{ fontSize:11, fontWeight:700, color:'rgba(255,255,255,0.45)', letterSpacing:1 }}>6 AYLIK NET KAR/ZARAR</div>
+            <div style={{ fontSize:26, fontWeight:800, color:'#fff', marginTop:4 }}>{fmtMoney(Math.abs(stats.netProfit))}</div>
           </div>
+          <div style={{ display:'flex', flexDirection:'column', gap:6 }}>
+            <div style={{ fontSize:12, color:'#86EFAC' }}>↑ {fmtMoney(stats.totalIncome)} gelir</div>
+            <div style={{ fontSize:12, color:'#FCA5A5' }}>↓ {fmtMoney(stats.totalExpense)} gider</div>
+          </div>
+          <span style={{ background: netPos ? '#22C55E' : '#EF4444', color:'#fff', borderRadius:999, padding:'6px 14px', fontSize:11, fontWeight:800, letterSpacing:0.5, flexShrink:0 }}>
+            {netPos ? 'KAR' : 'ZARAR'}
+          </span>
+        </div>
+      )}
+
+      {/* ── Aylık Rezervasyon & Gelir/Gider ── */}
+      <div className="row2" style={{ marginBottom:14 }}>
+
+        {/* SOL: Aylık Rezervasyon Barları */}
+        <div className="chart-card">
+          <div className="h" style={{ marginBottom:4 }}>
+            <h4>Aylık Rezervasyon (Son 6 Ay)</h4>
+          </div>
+          <BarChart
+            data={monthly}
+            labelKey="m"
+            valueKey="reservations"
+            color="var(--brand-navy)"
+            height={180}
+          />
         </div>
 
+        {/* SAĞ: Aylık Gelir/Gider Barları */}
         <div className="chart-card">
-          <div className="h"><h4>Saat Dağılımı</h4></div>
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
-            {hourly.map(({ h, n }) => {
-              const pct = maxHourly > 0 ? n / maxHourly : 0;
-              const bg  = `rgba(0,51,153,${0.08 + pct * 0.7})`;
-              return (
-                <div key={h} style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-                  <div style={{ width: 36, fontSize: 11, color: 'var(--text-2)', fontWeight: 600, textAlign: 'right', flexShrink: 0 }}>
-                    {String(h).padStart(2, '0')}:00
-                  </div>
-                  <div style={{ flex: 1, height: 18, background: bg, borderRadius: 4, position: 'relative' }}>
-                    {n > 0 && (
-                      <span style={{ position: 'absolute', right: 6, top: '50%', transform: 'translateY(-50%)', fontSize: 9, color: pct > 0.5 ? '#fff' : 'var(--brand-navy)', fontWeight: 700 }}>{n}</span>
-                    )}
-                  </div>
-                </div>
-              );
-            })}
+          <div className="h" style={{ marginBottom:4 }}>
+            <h4>Aylık Gelir &amp; Gider (Son 6 Ay)</h4>
           </div>
+          {monthly.every(m => m.income === 0 && m.expense === 0) ? (
+            <EmptyState icon="bar_chart" title="Finans kaydı yok" sub="Finans ekranından kayıt ekleyin" />
+          ) : (
+            <div style={{ display:'flex', alignItems:'flex-end', gap:6, height:180, paddingTop:20 }}>
+              {(() => {
+                const maxVal = Math.max(...monthly.flatMap(m => [m.income, m.expense]), 1);
+                const BAR_AREA = 180 - 36;
+                return monthly.map((m, i) => {
+                  const incH = Math.max(m.income  > 0 ? Math.round((m.income  / maxVal) * BAR_AREA) : 0, m.income  > 0 ? 4 : 0);
+                  const expH = Math.max(m.expense > 0 ? Math.round((m.expense / maxVal) * BAR_AREA) : 0, m.expense > 0 ? 4 : 0);
+                  return (
+                    <div key={i} style={{ flex:1, display:'flex', flexDirection:'column', alignItems:'center', justifyContent:'flex-end', height: BAR_AREA + 20 }}>
+                      <div style={{ display:'flex', alignItems:'flex-end', gap:2, width:'90%' }}>
+                        <div title={`Gelir: ${fmtMoney(m.income)}`}
+                          style={{ flex:1, height:incH, background:'#22C55E', borderRadius:'3px 3px 0 0', transition:'height 400ms ease' }} />
+                        <div title={`Gider: ${fmtMoney(m.expense)}`}
+                          style={{ flex:1, height:expH, background:'#EF4444', borderRadius:'3px 3px 0 0', transition:'height 400ms ease' }} />
+                      </div>
+                      <div style={{ fontSize:9, color:'var(--text-2)', marginTop:5, textAlign:'center' }}>{m.m}</div>
+                    </div>
+                  );
+                });
+              })()}
+            </div>
+          )}
+          <div style={{ display:'flex', gap:14, marginTop:8, fontSize:11, color:'var(--text-2)' }}>
+            <span><span style={{ display:'inline-block', width:10, height:10, borderRadius:2, background:'#22C55E', marginRight:5 }}/>Gelir</span>
+            <span><span style={{ display:'inline-block', width:10, height:10, borderRadius:2, background:'#EF4444', marginRight:5 }}/>Gider</span>
+          </div>
+        </div>
+      </div>
+
+      {/* ── Saat Dağılımı & Kategori Geliri ── */}
+      <div className="row2">
+
+        {/* SOL: Saat Dağılımı */}
+        <div className="chart-card">
+          <div className="h" style={{ marginBottom:8 }}><h4>Saat Dağılımı</h4></div>
+          {hourly.every(h => h.n === 0) ? (
+            <EmptyState icon="schedule" title="Rezervasyon verisi yok" sub="Rezervasyon eklendiğinde saat dağılımı burada görünür" />
+          ) : (
+            <div style={{ display:'flex', flexDirection:'column', gap:5 }}>
+              {hourly.map(({ h, n }) => (
+                <HBar key={h} label={`${String(h).padStart(2,'0')}:00`} value={n} max={maxHourly} />
+              ))}
+            </div>
+          )}
+        </div>
+
+        {/* SAĞ: Kategori Bazlı Gelir */}
+        <div className="chart-card">
+          <div className="h" style={{ marginBottom:8 }}><h4>Gelir Kaynakları (Son 6 Ay)</h4></div>
+          {catIncome.length === 0 ? (
+            <EmptyState icon="pie_chart" title="Finans kaydı yok" sub="Finans ekranından kayıt ekleyin" />
+          ) : (
+            <div style={{ display:'flex', flexDirection:'column', gap:8 }}>
+              {catIncome.map((c, i) => {
+                const pct = Math.round((c.amount / catIncome.reduce((s, x) => s + x.amount, 0)) * 100);
+                const barW = Math.max((c.amount / maxCat) * 100, 2);
+                const COLORS = ['#003399','#0EA5E9','#22C55E','#F97316','#8B5CF6','#EC4899'];
+                return (
+                  <div key={i}>
+                    <div style={{ display:'flex', justifyContent:'space-between', fontSize:12, marginBottom:4 }}>
+                      <span style={{ fontWeight:600, color:'var(--text-1)' }}>{c.cat}</span>
+                      <span style={{ fontWeight:700, color:'var(--text-2)' }}>
+                        {fmtMoney(c.amount)} <span style={{ color:'var(--text-2)', fontWeight:400 }}>(%{pct})</span>
+                      </span>
+                    </div>
+                    <div style={{ height:10, background:'var(--border)', borderRadius:5, overflow:'hidden' }}>
+                      <div style={{ height:'100%', width:`${barW}%`, background: COLORS[i % COLORS.length], borderRadius:5, transition:'width 500ms ease' }} />
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          )}
         </div>
       </div>
     </div>

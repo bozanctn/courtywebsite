@@ -99,11 +99,6 @@ function Topbar({ screen, clubProfile, setScreen, unread }) {
           <span className="material-icons">notifications</span>
           {unread > 0 && <span className="dot" />}
         </button>
-        <div className="me">
-          <div className="av">{initials(name)}</div>
-          <span className="n">{name || 'Kulüp'}</span>
-          <span className="material-icons">keyboard_arrow_down</span>
-        </div>
       </div>
     </div>
   );

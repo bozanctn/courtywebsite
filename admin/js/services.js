@@ -608,6 +608,112 @@ const GroupSvc = {
 };
 
 // ═══════════════════════════════════════════════════════════════
+// GROUP DUES SERVICE
+// ═══════════════════════════════════════════════════════════════
+const GroupDuesSvc = {
+
+  async getOrCreateDues(groupId, year, month, monthlyFee) {
+    const { data: existing, error: fetchErr } = await sb
+      .from('club_group_dues')
+      .select('*')
+      .eq('group_id', groupId)
+      .eq('year', year)
+      .eq('month', month)
+      .order('created_at', { ascending: true });
+    if (fetchErr) throw fetchErr;
+    if (existing && existing.length > 0) return existing;
+
+    const { data: { user } } = await sb.auth.getUser();
+    if (!user) throw new Error('Oturum açılmamış');
+
+    const { data: members, error: membersErr } = await sb
+      .from('club_group_members')
+      .select('id, member_name')
+      .eq('group_id', groupId);
+    if (membersErr) throw membersErr;
+    if (!members || members.length === 0) return [];
+
+    const rows = members.map(m => ({
+      group_id: groupId,
+      club_id: user.id,
+      year,
+      month,
+      member_id: m.id,
+      member_name: m.member_name,
+      amount: monthlyFee || 0,
+      is_paid: false,
+    }));
+
+    const { data: created, error: insertErr } = await sb
+      .from('club_group_dues')
+      .insert(rows)
+      .select();
+    if (insertErr) throw insertErr;
+    return created ?? [];
+  },
+
+  async toggleDuePaid(dueId, isPaid) {
+    const { data, error } = await sb
+      .from('club_group_dues')
+      .update({ is_paid: isPaid, paid_at: isPaid ? new Date().toISOString() : null })
+      .eq('id', dueId)
+      .select()
+      .single();
+    if (error) throw error;
+    return data;
+  },
+
+  async getDuesPost(groupId, year, month) {
+    const { data, error } = await sb
+      .from('club_group_dues_posts')
+      .select('*')
+      .eq('group_id', groupId)
+      .eq('year', year)
+      .eq('month', month)
+      .maybeSingle();
+    if (error) throw error;
+    return data;
+  },
+
+  async postDuesToFinance(groupId, groupName, year, month, dues, clubPercentage, clubCoachId) {
+    const { data: { user } } = await sb.auth.getUser();
+    if (!user) throw new Error('Oturum açılmamış');
+
+    const totalAmount = dues.reduce((sum, d) => sum + (d.amount || 0), 0);
+    const clubAmount  = Math.round(totalAmount * (clubPercentage / 100) * 100) / 100;
+    const coachAmount = Math.round((totalAmount - clubAmount) * 100) / 100;
+
+    const MONTHS_TR = ['Ocak','Şubat','Mart','Nisan','Mayıs','Haziran','Temmuz','Ağustos','Eylül','Ekim','Kasım','Aralık'];
+    const description = `${groupName} - ${MONTHS_TR[month - 1]} ${year} aidatı`;
+    const today = new Date().toISOString().split('T')[0];
+
+    const { data: financeRecord, error: finErr } = await sb
+      .from('club_finances')
+      .insert({ club_id: user.id, type: 'income', category: 'Grup Aidatı', amount: clubAmount, description, date: today })
+      .select('id').single();
+    if (finErr) throw finErr;
+
+    if (clubCoachId && coachAmount > 0) {
+      const { data: coachRow } = await sb.from('club_coaches').select('full_name').eq('id', clubCoachId).single();
+      if (coachRow) {
+        await sb.from('coach_earnings').insert({
+          club_id: user.id, coach_id: clubCoachId, coach_name: coachRow.full_name,
+          student_name: null, lesson_id: null, booking_id: null,
+          amount: coachAmount, court_fee: 0, date: today, description, payment_status: 'unpaid',
+        });
+      }
+    }
+
+    const { error: postErr } = await sb.from('club_group_dues_posts').insert({
+      group_id: groupId, club_id: user.id, year, month,
+      total_amount: totalAmount, club_amount: clubAmount, coach_amount: coachAmount,
+      finance_record_id: financeRecord?.id,
+    });
+    if (postErr) throw postErr;
+  },
+};
+
+// ═══════════════════════════════════════════════════════════════
 // RESERVATION SERVICE (Kulüp tarafı)
 // ═══════════════════════════════════════════════════════════════
 const ReservationSvc = {

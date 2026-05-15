@@ -16,7 +16,13 @@ function ClubProfileScreen({ clubId, clubProfile: initialProfile }) {
   const load = async () => {
     setLoading(true);
     const { data } = await sb.from('club_profiles').select('*').eq('id', clubId).maybeSingle();
-    if (data) setProfile(data);
+    if (data) {
+      if (!data.contact_email) {
+        const { data: { user } } = await sb.auth.getUser();
+        if (user?.email) data.contact_email = user.email;
+      }
+      setProfile(data);
+    }
     setLoading(false);
   };
 

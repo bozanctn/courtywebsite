@@ -47,7 +47,7 @@ async function getUserType(userId) {
 // ── Durum yardımcıları ─────────────────────────────────────────
 function statusLabel(s) {
   const m = {
-    confirmed: 'Onaylı', pending: 'Bekliyor', completed: 'Tamamlandı',
+    confirmed: 'Rezerveli', completed: 'Tamamlandı',
     cancelled: 'İptal', active: 'Aktif', expired: 'Süresi Doldu',
     approved: 'Onaylı', rejected: 'Reddedildi',
   };
@@ -55,10 +55,18 @@ function statusLabel(s) {
 }
 
 function statusClass(s) {
-  if (['confirmed','active','completed','approved'].includes(s)) return 'b-success';
-  if (['pending'].includes(s)) return 'b-warning';
+  if (['confirmed','active','approved'].includes(s)) return 'b-info';
+  if (['completed'].includes(s)) return 'b-success';
   if (['cancelled','rejected','expired'].includes(s)) return 'b-error';
   return 'b-muted';
+}
+
+function paymentLabel(s) {
+  return s === 'paid' ? 'Ödendi' : 'Ödenmedi';
+}
+
+function paymentClass(s) {
+  return s === 'paid' ? 'b-success' : 'b-warning';
 }
 
 // ── Tarih / zaman yardımcıları ─────────────────────────────────

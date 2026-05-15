@@ -123,7 +123,7 @@ window.BookingRow = function BookingRow({ booking, onClick }) {
           Kort {courtNum}
         </div>
       </div>
-      <Badge cls={statusClass(booking.status)}>{statusLabel(booking.status)}</Badge>
+      <Badge cls={paymentClass(booking.payment_status)}>{paymentLabel(booking.payment_status)}</Badge>
     </div>
   );
 };

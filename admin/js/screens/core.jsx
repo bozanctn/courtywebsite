@@ -47,7 +47,7 @@ function DashboardScreen({ clubId, clubProfile, setScreen }) {
       setBookings(rows);
       setTodayCount(rows.length);
       // payment_status filtresi JS tarafında (DB'de alan var ama opsiyonel)
-      setPendingPay(rows.filter(b => b.payment_status === 'pending').length);
+      setPendingPay(rows.filter(b => b.payment_status !== 'paid').length);
       setPendingMem(pendMemRes.count ?? 0);
       setCourtCount(courtRes.count ?? 0);
     } catch (e) { console.error(e); }
@@ -477,21 +477,16 @@ function ReservationsScreen({ clubId }) {
                         </div>
                         {b.notes && <div style={{ fontSize: 11, color: 'var(--text-2)', marginTop: 2 }}>{b.notes}</div>}
                       </div>
-                      <Badge cls={statusClass(b.status)}>{statusLabel(b.status)}</Badge>
+                      <Badge cls={paymentClass(b.payment_status)}>{paymentLabel(b.payment_status)}</Badge>
                       <div style={{ display:'flex', gap:4 }}>
-                        {b.status === 'pending' && (
-                          <button className="btn btn-success btn-sm btn-icon" title="Onayla" onClick={() => updateStatus(b.id, 'confirmed')}>
-                            <span className="material-icons" style={{fontSize:15}}>check</span>
-                          </button>
-                        )}
-                        {['pending','confirmed'].includes(b.status) && (
-                          <button className="btn btn-danger btn-sm btn-icon" title="İptal Et" onClick={() => updateStatus(b.id, 'cancelled')}>
-                            <span className="material-icons" style={{fontSize:15}}>close</span>
-                          </button>
-                        )}
                         {b.status === 'confirmed' && (
                           <button className="btn btn-ghost btn-sm btn-icon" title="Tamamlandı" onClick={() => updateStatus(b.id, 'completed')}>
                             <span className="material-icons" style={{fontSize:15}}>done_all</span>
+                          </button>
+                        )}
+                        {['confirmed','completed'].includes(b.status) && (
+                          <button className="btn btn-danger btn-sm btn-icon" title="İptal Et" onClick={() => updateStatus(b.id, 'cancelled')}>
+                            <span className="material-icons" style={{fontSize:15}}>close</span>
                           </button>
                         )}
                       </div>
@@ -608,8 +603,7 @@ function ReservationsScreen({ clubId }) {
             </Field>
             <Field label="Durum">
               <select value={form.status || 'confirmed'} onChange={e => setForm({...form, status: e.target.value})}>
-                <option value="confirmed">Onaylı</option>
-                <option value="pending">Bekliyor</option>
+                <option value="confirmed">Rezerveli</option>
                 <option value="completed">Tamamlandı</option>
               </select>
             </Field>
@@ -873,7 +867,7 @@ function CourtsScreen({ clubId }) {
     const hEnd   = new Date(slotDate + `T${String(h+1).padStart(2,'0')}:00:00`);
     for (const b of d.bookings) {
       const bs = new Date(b.start_time), be = new Date(b.end_time);
-      if (bs < hEnd && be > hStart) return b.status === 'confirmed' ? 'booked' : 'pending';
+      if (bs < hEnd && be > hStart) return b.status === 'cancelled' ? 'empty' : 'booked';
     }
     for (const c of d.closures) {
       if (c.start_hour != null && c.end_hour != null) {
@@ -981,7 +975,6 @@ function CourtsScreen({ clubId }) {
                 </div>
                 <div style={{ display:'flex', gap:12, marginTop:10, fontSize:11, color:'var(--text-2)' }}>
                   <span><span style={{ display:'inline-block',width:10,height:10,borderRadius:2,background:'var(--brand-navy-soft)',marginRight:4 }}/>Rezerveli</span>
-                  <span><span style={{ display:'inline-block',width:10,height:10,borderRadius:2,background:'rgba(234,179,8,0.2)',marginRight:4 }}/>Bekliyor</span>
                   <span><span style={{ display:'inline-block',width:10,height:10,borderRadius:2,background:'#FEF2F2',marginRight:4 }}/>Kapalı</span>
                   <span><span style={{ display:'inline-block',width:10,height:10,borderRadius:2,background:'var(--surface)',border:'1px solid var(--border)',marginRight:4 }}/>Boş</span>
                 </div>
