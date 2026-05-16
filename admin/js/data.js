@@ -125,6 +125,16 @@ function courtTypeClass(t) {
   return m[t] || 'b-muted';
 }
 
+// ── Çalışan verisi ────────────────────────────────────────────
+async function getEmployeeData(userId) {
+  const { data } = await sb
+    .from('club_employees')
+    .select('club_id, profiles!club_employees_employee_id_fkey(full_name, email)')
+    .eq('employee_id', userId)
+    .maybeSingle();
+  return data ?? null; // { club_id, profiles: { full_name, email } }
+}
+
 // ── Kulüp kortlarını çek (bookings için ara adım) ──────────────
 // bookings tablosunda club_id kolonu YOK — courts.club_id üzerinden geçilmeli
 async function getClubCourtIds(clubId) {

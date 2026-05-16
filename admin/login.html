@@ -289,25 +289,33 @@ body {
     try {
       const { session, user } = await authSignIn(email, password);
 
-      // Kulüp hesabı mı kontrol et
+      // Kulüp hesabı mı?
       const profile = await getClubProfile(user.id);
-      if (!profile) {
-        // Kullanıcı tipini sorgula — daha açıklayıcı mesaj ver
-        let userType = null;
-        try { userType = await getUserType(user.id); } catch (_) {}
-        await sb.auth.signOut();
+      if (profile) { window.location.href = 'index.html'; return; }
 
-        if (userType === 'player') {
-          showError('Bu panel yalnızca kulüp hesapları içindir. Oyuncu hesabınızla CourtyCLUB uygulamasından giriş yapabilirsiniz.', true);
-        } else if (userType === 'coach') {
-          showError('Bu panel yalnızca kulüp hesapları içindir. Antrenör hesabınızla CourtyCLUB uygulamasından giriş yapabilirsiniz.', true);
-        } else {
-          showError('Bu panel yalnızca kulüp hesapları içindir. Lütfen kulüp e-postanızla giriş yapın.');
-        }
+      // Çalışan mı?
+      let userType = null;
+      try { userType = await getUserType(user.id); } catch (_) {}
+
+      if (userType === 'employee') {
+        const empData = await getEmployeeData(user.id);
+        if (empData?.club_id) { window.location.href = 'index.html'; return; }
+        await sb.auth.signOut();
+        showError('Henüz bir kulübe bağlı değilsiniz. Davet bekleniyor.');
         setLoading(false);
         return;
       }
-      window.location.href = 'index.html';
+
+      await sb.auth.signOut();
+      if (userType === 'player') {
+        showError('Bu panel kulüp ve çalışan hesapları içindir. Oyuncu hesabınızla CourtyCLUB uygulamasından giriş yapabilirsiniz.', true);
+      } else if (userType === 'coach') {
+        showError('Bu panel kulüp ve çalışan hesapları içindir. Antrenör hesabınızla CourtyCLUB uygulamasından giriş yapabilirsiniz.', true);
+      } else {
+        showError('Bu panel yalnızca kulüp ve çalışan hesapları içindir.');
+      }
+      setLoading(false);
+      return;
     } catch (err) {
       const msg = err.message || 'Giriş başarısız.';
       if (msg.includes('Invalid login') || msg.includes('invalid_credentials')) {

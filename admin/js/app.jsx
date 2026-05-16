@@ -3,27 +3,34 @@
 const { useState, useEffect, useCallback } = React;
 
 // ── Navigasyon tanımları ───────────────────────────────────────
-const NAV_ITEMS = [
-  { key: 'dashboard',    icon: 'dashboard',              label: 'Dashboard',     section: 'GENEL' },
-  { key: 'reservations', icon: 'event_available',        label: 'Rezervasyonlar',section: 'YÖNETİM' },
-  { key: 'courts',       icon: 'sports_tennis',          label: 'Kortlar',       section: null },
-  { key: 'members',      icon: 'group',                  label: 'Üyeler',        section: null },
-  { key: 'coaches',      icon: 'person',                 label: 'Koçlar',        section: null },
-  { key: 'employees',    icon: 'badge',                  label: 'Çalışanlar',    section: null },
-  { key: 'lessons',      icon: 'school',                 label: 'Dersler',       section: null },
-  { key: 'tournaments',  icon: 'emoji_events',           label: 'Turnuvalar',    section: 'ETKİNLİKLER' },
-  { key: 'groups',       icon: 'groups',                 label: 'Gruplar',       section: null },
-  { key: 'finance',      icon: 'account_balance_wallet', label: 'Finans',        section: 'ANALİZ' },
-  { key: 'analytics',    icon: 'bar_chart',              label: 'Analitik',      section: null },
-  { key: 'chat',         icon: 'chat',                   label: 'Sohbet',        section: 'İLETİŞİM' },
-  { key: 'notifications',icon: 'notifications',          label: 'Bildirimler',   section: null },
-  { key: 'profile',      icon: 'business',               label: 'Kulüp Profili', section: 'AYARLAR' },
+const ALL_NAV_ITEMS = [
+  { key: 'dashboard',    icon: 'dashboard',              label: 'Dashboard',     section: 'GENEL',      employeeOk: true  },
+  { key: 'reservations', icon: 'event_available',        label: 'Rezervasyonlar',section: 'YÖNETİM',    employeeOk: true  },
+  { key: 'courts',       icon: 'sports_tennis',          label: 'Kortlar',       section: null,         employeeOk: true  },
+  { key: 'members',      icon: 'group',                  label: 'Üyeler',        section: null,         employeeOk: true  },
+  { key: 'coaches',      icon: 'person',                 label: 'Koçlar',        section: null,         employeeOk: true  },
+  { key: 'employees',    icon: 'badge',                  label: 'Çalışanlar',    section: null,         employeeOk: false },
+  { key: 'lessons',      icon: 'school',                 label: 'Dersler',       section: null,         employeeOk: true  },
+  { key: 'tournaments',  icon: 'emoji_events',           label: 'Turnuvalar',    section: 'ETKİNLİKLER',employeeOk: true  },
+  { key: 'groups',       icon: 'groups',                 label: 'Gruplar',       section: null,         employeeOk: true  },
+  { key: 'packages',     icon: 'inventory_2',            label: 'Ders Paketleri',section: null,         employeeOk: true  },
+  { key: 'finance',      icon: 'account_balance_wallet', label: 'Finans',        section: 'ANALİZ',     employeeOk: false },
+  { key: 'analytics',    icon: 'bar_chart',              label: 'Analitik',      section: null,         employeeOk: false },
+  { key: 'chat',         icon: 'chat',                   label: 'Sohbet',        section: 'İLETİŞİM',   employeeOk: true  },
+  { key: 'notifications',icon: 'notifications',          label: 'Bildirimler',   section: null,         employeeOk: true  },
+  { key: 'profile',      icon: 'business',               label: 'Kulüp Profili', section: 'AYARLAR',    employeeOk: false },
 ];
 
 // ── Sidebar ────────────────────────────────────────────────────
-function Sidebar({ screen, setScreen, clubProfile, unread, pendingMembers }) {
-  const name = clubProfile?.club_name || 'Kulübüm';
+function Sidebar({ screen, setScreen, clubProfile, employeeProfile, userType, unread, pendingMembers }) {
+  const isEmployee = userType === 'employee';
+  const name = isEmployee
+    ? (employeeProfile?.full_name || 'Çalışan')
+    : (clubProfile?.club_name || 'Kulübüm');
   const abbr = initials(name);
+  const NAV_ITEMS = isEmployee
+    ? ALL_NAV_ITEMS.filter(i => i.employeeOk)
+    : ALL_NAV_ITEMS;
 
   return (
     <aside className="side">
@@ -33,12 +40,12 @@ function Sidebar({ screen, setScreen, clubProfile, unread, pendingMembers }) {
       </div>
 
       <div className="side-clubcard">
-        <div className="av av-sq" style={{ background: 'var(--brand-navy)', color: '#fff', width: 36, height: 36, borderRadius: 10, display: 'grid', placeItems: 'center', fontWeight: 800, fontSize: 13, flexShrink: 0 }}>
+        <div className="av av-sq" style={{ background: isEmployee ? '#0D9488' : 'var(--brand-navy)', color: '#fff', width: 36, height: 36, borderRadius: 10, display: 'grid', placeItems: 'center', fontWeight: 800, fontSize: 13, flexShrink: 0 }}>
           {abbr}
         </div>
         <div className="who">
           <div className="n">{name}</div>
-          <div className="r">Kulüp Yöneticisi</div>
+          <div className="r">{isEmployee ? 'Çalışan' : 'Kulüp Yöneticisi'}</div>
         </div>
         <div className="dot" />
       </div>
@@ -83,7 +90,7 @@ function SideItem({ item, active, setScreen, badge }) {
 
 // ── Topbar ─────────────────────────────────────────────────────
 function Topbar({ screen, clubProfile, setScreen, unread }) {
-  const screenLabel = NAV_ITEMS.find(n => n.key === screen)?.label || screen;
+  const screenLabel = ALL_NAV_ITEMS.find(n => n.key === screen)?.label || screen;
   const name = clubProfile?.club_name || '';
 
   return (
@@ -104,9 +111,26 @@ function Topbar({ screen, clubProfile, setScreen, unread }) {
   );
 }
 
+// ── Erişim reddedildi ──────────────────────────────────────────
+function AccessDenied() {
+  return (
+    <div className="page fade-in" style={{ display:'flex', flexDirection:'column', alignItems:'center', justifyContent:'center', minHeight:400, gap:12 }}>
+      <span className="material-icons" style={{ fontSize:48, color:'var(--text-2)' }}>lock</span>
+      <div style={{ fontWeight:700, fontSize:18, color:'var(--text-1)' }}>Bu sayfaya erişim yetkiniz yok</div>
+      <div style={{ fontSize:14, color:'var(--text-2)' }}>Kulüp yöneticisi hesabıyla giriş yapmanız gerekiyor.</div>
+    </div>
+  );
+}
+
 // ── Ekran yönlendirici ─────────────────────────────────────────
-function ScreenRouter({ screen, setScreen, clubId, clubProfile }) {
-  const ctx = { clubId, clubProfile, setScreen };
+const EMPLOYEE_BLOCKED = new Set(['employees', 'finance', 'analytics', 'profile']);
+
+function ScreenRouter({ screen, setScreen, clubId, clubProfile, userType }) {
+  const ctx = { clubId, clubProfile, setScreen, userType };
+
+  if (userType === 'employee' && EMPLOYEE_BLOCKED.has(screen)) {
+    return <AccessDenied />;
+  }
 
   switch (screen) {
     case 'dashboard':     return <DashboardScreen    {...ctx} />;
@@ -118,6 +142,7 @@ function ScreenRouter({ screen, setScreen, clubId, clubProfile }) {
     case 'lessons':       return <LessonsScreen        {...ctx} />;
     case 'tournaments':   return <TournamentsScreen    {...ctx} />;
     case 'groups':        return <GroupsScreen          {...ctx} />;
+    case 'packages':      return <LessonPackagesScreen  {...ctx} />;
     case 'finance':       return <FinanceScreen         {...ctx} />;
     case 'analytics':     return <AnalyticsScreen       {...ctx} />;
     case 'chat':          return <ChatScreen             {...ctx} />;
@@ -129,12 +154,14 @@ function ScreenRouter({ screen, setScreen, clubId, clubProfile }) {
 
 // ── Kök App ────────────────────────────────────────────────────
 function App() {
-  const [session,       setSession]       = useState(null);
-  const [clubProfile,   setClubProfile]   = useState(null);
-  const [screen,        setScreen]        = useState('dashboard');
-  const [loading,       setLoading]       = useState(true);
-  const [unread,        setUnread]        = useState(0);
-  const [pendingMembers,setPendingMembers]= useState(0);
+  const [session,         setSession]         = useState(null);
+  const [clubProfile,     setClubProfile]     = useState(null);
+  const [employeeProfile, setEmployeeProfile] = useState(null);
+  const [userType,        setUserType]        = useState(null); // 'club' | 'employee'
+  const [screen,          setScreen]          = useState('dashboard');
+  const [loading,         setLoading]         = useState(true);
+  const [unread,          setUnread]          = useState(0);
+  const [pendingMembers,  setPendingMembers]  = useState(0);
 
   // Oturum kontrolü
   useEffect(() => {
@@ -144,11 +171,30 @@ function App() {
       setSession(sess);
 
       try {
+        // Kulüp hesabı mı?
         const profile = await getClubProfile(sess.user.id);
-        if (!profile) { await sb.auth.signOut(); window.location.href = 'login.html'; return; }
-        setClubProfile(profile);
-        // profile.id === sess.user.id (club_profiles.id = auth.users.id)
-        fetchBadgeCounts(profile.id, sess.user.id);
+        if (profile) {
+          setClubProfile(profile);
+          setUserType('club');
+          fetchBadgeCounts(profile.id, sess.user.id);
+          setLoading(false);
+          return;
+        }
+
+        // Çalışan mı?
+        const uType = await getUserType(sess.user.id);
+        if (uType === 'employee') {
+          const empData = await getEmployeeData(sess.user.id);
+          if (!empData?.club_id) { await sb.auth.signOut(); window.location.href = 'login.html'; return; }
+          const clubProf = await getClubProfile(empData.club_id);
+          setClubProfile(clubProf);
+          setEmployeeProfile({ full_name: empData.profiles?.full_name, email: empData.profiles?.email });
+          setUserType('employee');
+          fetchBadgeCounts(empData.club_id, sess.user.id);
+        } else {
+          await sb.auth.signOut();
+          window.location.href = 'login.html';
+        }
       } catch (e) {
         console.error(e);
       } finally {
@@ -206,6 +252,8 @@ function App() {
         screen={screen}
         setScreen={setScreen}
         clubProfile={clubProfile}
+        employeeProfile={employeeProfile}
+        userType={userType}
         unread={unread}
         pendingMembers={pendingMembers}
       />
@@ -221,6 +269,7 @@ function App() {
           setScreen={setScreen}
           clubId={clubProfile?.id}
           clubProfile={clubProfile}
+          userType={userType}
         />
       </div>
       <div className="tweaks-host" />

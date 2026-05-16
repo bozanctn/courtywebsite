@@ -59,3 +59,10 @@ function showSection(section) {
 
 function showSuccess() { showSection(successSection); }
 function showError()   { showSection(errorSection); }
+
+function returnToApp() {
+    // Deep link ile uygulamayı aç
+    window.location.href = 'courtly://';
+    // Kısa gecikme sonrası pencereyi kapatmayı dene (in-app browser için)
+    setTimeout(() => { window.close(); }, 1000);
+}

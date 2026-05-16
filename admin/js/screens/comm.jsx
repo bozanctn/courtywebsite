@@ -201,12 +201,11 @@ function ChatScreen({ clubId, clubProfile }) {
 // ═══════════════════════════════════════════════════════════════
 function NotificationsScreen({ clubId }) {
   const { useState, useEffect, useRef } = React;
-  const [notifs,   setNotifs]   = useState([]);
-  const [loading,  setLoading]  = useState(true);
+  const [notifs,  setNotifs]  = useState([]);
+  const [loading, setLoading] = useState(true);
   const userId = useRef(null);
 
   useEffect(() => {
-    // notifications.user_id = auth.users.id = club_profiles.id
     sb.auth.getSession().then(({ data }) => {
       userId.current = data.session?.user?.id;
       if (userId.current) load(userId.current);
@@ -222,7 +221,7 @@ function NotificationsScreen({ clubId }) {
       .select('*')
       .eq('user_id', id)
       .order('created_at', { ascending: false })
-      .limit(50);
+      .limit(80);
     setNotifs(data || []);
     setLoading(false);
   };
@@ -243,9 +242,32 @@ function NotificationsScreen({ clubId }) {
     setNotifs(prev => prev.filter(n => n.id !== id));
   };
 
-  const iconFor = (type) => {
-    const m = { booking: 'event_available', member: 'person_add', payment: 'payments', message: 'chat', system: 'info' };
-    return m[type] || 'notifications';
+  const delAll = async () => {
+    if (!confirm('Tüm bildirimleri silmek istediğinizden emin misiniz?')) return;
+    if (!userId.current) return;
+    await sb.from('notifications').delete().eq('user_id', userId.current);
+    setNotifs([]);
+  };
+
+  // Tür → ikon + renk + arka plan (Courtly NotificationsScreen ile birebir)
+  const typeStyle = (type) => {
+    switch (type) {
+      case 'booking_created':          return { icon: 'calendar_today',   color: '#3B82F6', bg: '#EFF6FF' };
+      case 'booking_confirmed':        return { icon: 'check_circle',      color: '#22C55E', bg: '#DCFCE7' };
+      case 'booking_cancelled':        return { icon: 'cancel',            color: '#EF4444', bg: '#FEF2F2' };
+      case 'payment_success':          return { icon: 'payments',          color: '#F59E0B', bg: '#FFFBEB' };
+      case 'booking_reminder':         return { icon: 'schedule',          color: '#8B5CF6', bg: '#F5F3FF' };
+      case 'lesson_reminder':          return { icon: 'school',            color: '#8B5CF6', bg: '#F5F3FF' };
+      case 'lesson_created':           return { icon: 'school',            color: '#0D9488', bg: '#F0FDFA' };
+      case 'member':
+      case 'membership_approved':      return { icon: 'person_add',        color: '#22C55E', bg: '#DCFCE7' };
+      case 'membership_rejected':      return { icon: 'person_remove',     color: '#EF4444', bg: '#FEF2F2' };
+      case 'friend_request':           return { icon: 'group_add',         color: '#3B82F6', bg: '#EFF6FF' };
+      case 'friend_request_accepted':  return { icon: 'group',             color: '#22C55E', bg: '#DCFCE7' };
+      case 'message':                  return { icon: 'chat',              color: '#003399', bg: '#EEF2FF' };
+      case 'payment':                  return { icon: 'account_balance_wallet', color: '#F59E0B', bg: '#FFFBEB' };
+      default:                         return { icon: 'notifications',     color: '#003399', bg: '#EEF2FF' };
+    }
   };
 
   const unreadCount = notifs.filter(n => !n.is_read).length;
@@ -255,37 +277,110 @@ function NotificationsScreen({ clubId }) {
       <div className="page-head">
         <div>
           <h1>Bildirimler</h1>
-          <div className="sub">{unreadCount > 0 ? `${unreadCount} okunmamış bildirim` : 'Tümü okundu'}</div>
+          <div className="sub">
+            {unreadCount > 0 ? `${unreadCount} okunmamış bildirim` : 'Tüm bildirimler okundu'}
+          </div>
         </div>
-        {unreadCount > 0 && (
-          <button className="btn btn-ghost" onClick={markAllRead}>
-            <span className="material-icons">done_all</span>
-            Tümünü Okundu İşaretle
-          </button>
-        )}
+        <div style={{ display:'flex', gap:8 }}>
+          {unreadCount > 0 && (
+            <button className="btn btn-ghost" onClick={markAllRead}>
+              <span className="material-icons">done_all</span>
+              Tümünü Okundu
+            </button>
+          )}
+          {notifs.length > 0 && (
+            <button className="btn btn-ghost" style={{ color:'#EF4444' }} onClick={delAll}>
+              <span className="material-icons">delete_sweep</span>
+              Temizle
+            </button>
+          )}
+        </div>
       </div>
 
-      <div className="card tight">
+      <div style={{ display:'flex', flexDirection:'column', gap:10 }}>
         {loading ? <Spinner /> : notifs.length === 0 ? (
-          <EmptyState icon="notifications_none" title="Bildirim yok" sub="Yeni bildirimler burada görünecek." />
-        ) : notifs.map(n => (
-          <div key={n.id} className={`notif-item${!n.is_read ? ' unread' : ''}`} onClick={() => !n.is_read && markRead(n.id)}>
-            <div className="ic-wrap">
-              <span className="material-icons">{iconFor(n.type)}</span>
-            </div>
-            <div className="body">
-              <div className="t">{n.title || 'Bildirim'}</div>
-              {n.body && <div className="s">{n.body}</div>}
-              <div className="time">{fmtDateTime(n.created_at)}</div>
-            </div>
-            <div style={{ display:'flex', gap:4, alignItems:'center' }}>
-              {!n.is_read && <span className="badge b-info" style={{ fontSize:9 }}>YENİ</span>}
-              <button className="icon-btn" style={{ width:30, height:30 }} title="Sil" onClick={(e) => { e.stopPropagation(); del(n.id); }}>
-                <span className="material-icons" style={{ fontSize:16 }}>close</span>
-              </button>
-            </div>
+          <div className="card">
+            <EmptyState icon="notifications_none" title="Bildirim yok" sub="Yeni bildirimler burada görünecek." />
           </div>
-        ))}
+        ) : notifs.map(n => {
+          const ts = typeStyle(n.type);
+          return (
+            <div
+              key={n.id}
+              className="card"
+              style={{
+                padding: 0,
+                borderLeft: `3px solid ${n.is_read ? 'transparent' : ts.color}`,
+                cursor: !n.is_read ? 'pointer' : 'default',
+                position: 'relative',
+                overflow: 'hidden',
+              }}
+              onClick={() => !n.is_read && markRead(n.id)}
+            >
+              {/* Okunmamış nokta */}
+              {!n.is_read && (
+                <div style={{
+                  position:'absolute', top:14, right:14,
+                  width:8, height:8, borderRadius:'50%',
+                  background: ts.color,
+                }} />
+              )}
+
+              <div style={{ padding:'14px 16px', display:'flex', flexDirection:'column', gap:10 }}>
+                {/* Üst satır: ikon + başlık + zaman + aksiyonlar */}
+                <div style={{ display:'flex', alignItems:'flex-start', gap:12 }}>
+                  {/* İkon kutusu */}
+                  <div style={{
+                    width:40, height:40, borderRadius:12, flexShrink:0,
+                    background: ts.bg,
+                    display:'grid', placeItems:'center',
+                  }}>
+                    <span className="material-icons" style={{ fontSize:20, color: ts.color }}>{ts.icon}</span>
+                  </div>
+
+                  {/* Başlık + zaman */}
+                  <div style={{ flex:1 }}>
+                    <div style={{ fontWeight:700, fontSize:14, color:'var(--text-1)', marginBottom:3 }}>
+                      {n.title || 'Bildirim'}
+                    </div>
+                    <div style={{ fontSize:12, color:'var(--text-2)' }}>
+                      {fmtDateTime(n.created_at)}
+                    </div>
+                  </div>
+
+                  {/* Aksiyon butonları */}
+                  <div style={{ display:'flex', gap:6, flexShrink:0 }}>
+                    {!n.is_read && (
+                      <button
+                        className="icon-btn"
+                        title="Okundu işaretle"
+                        style={{ width:28, height:28, borderRadius:8, background:'#DCFCE7' }}
+                        onClick={(e) => { e.stopPropagation(); markRead(n.id); }}
+                      >
+                        <span className="material-icons" style={{ fontSize:15, color:'#22C55E' }}>check</span>
+                      </button>
+                    )}
+                    <button
+                      className="icon-btn"
+                      title="Sil"
+                      style={{ width:28, height:28, borderRadius:8, background:'#FEF2F2' }}
+                      onClick={(e) => { e.stopPropagation(); del(n.id); }}
+                    >
+                      <span className="material-icons" style={{ fontSize:15, color:'#EF4444' }}>delete_outline</span>
+                    </button>
+                  </div>
+                </div>
+
+                {/* Mesaj gövdesi */}
+                {(n.message || n.body) && (
+                  <div style={{ fontSize:13, color:'var(--text-2)', lineHeight:1.6, paddingLeft:52 }}>
+                    {n.message || n.body}
+                  </div>
+                )}
+              </div>
+            </div>
+          );
+        })}
       </div>
     </div>
   );

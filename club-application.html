@@ -1,0 +1,509 @@
+<!DOCTYPE html>
+<html lang="tr">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Kulüp Başvurusu — CourtyCLUB</title>
+    <link rel="icon" type="image/svg+xml" href="Courty_Logo.png">
+    <link rel="stylesheet" href="styles.css">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
+    <style>
+        /* ── Sayfa düzeni ── */
+        .club-app-wrap {
+            min-height: 100vh;
+            background: #F1F5FB;
+            padding: 60px 0 80px;
+        }
+
+        .club-app-inner {
+            max-width: 760px;
+            margin: 0 auto;
+            padding: 0 24px;
+        }
+
+        /* ── Hero başlık ── */
+        .club-app-hero {
+            text-align: center;
+            margin-bottom: 48px;
+        }
+
+        .club-app-badge {
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            background: #EEF2FF;
+            color: #003399;
+            font-size: 12px;
+            font-weight: 700;
+            letter-spacing: .06em;
+            text-transform: uppercase;
+            padding: 6px 14px;
+            border-radius: 999px;
+            margin-bottom: 20px;
+        }
+
+        .club-app-title {
+            font-size: clamp(26px, 5vw, 38px);
+            font-weight: 800;
+            color: #0f172a;
+            letter-spacing: -0.02em;
+            line-height: 1.15;
+            margin-bottom: 14px;
+        }
+
+        .club-app-title span { color: #003399; }
+
+        .club-app-sub {
+            font-size: 16px;
+            color: #64748b;
+            line-height: 1.65;
+            max-width: 540px;
+            margin: 0 auto;
+        }
+
+        /* ── Kart ── */
+        .club-app-card {
+            background: #fff;
+            border-radius: 20px;
+            box-shadow: 0 4px 24px rgba(0,0,0,0.07);
+            overflow: hidden;
+        }
+
+        .club-app-card-head {
+            background: linear-gradient(135deg, #001a66 0%, #003399 100%);
+            padding: 28px 36px;
+            display: flex;
+            align-items: center;
+            gap: 16px;
+        }
+
+        .club-app-card-head-icon {
+            width: 48px;
+            height: 48px;
+            background: rgba(255,255,255,0.15);
+            border-radius: 14px;
+            display: grid;
+            place-items: center;
+            font-size: 24px;
+            flex-shrink: 0;
+        }
+
+        .club-app-card-head h2 {
+            color: #fff;
+            font-size: 18px;
+            font-weight: 700;
+            margin: 0;
+        }
+
+        .club-app-card-head p {
+            color: rgba(255,255,255,0.7);
+            font-size: 13px;
+            margin: 4px 0 0;
+        }
+
+        /* ── Form ── */
+        .club-app-form {
+            padding: 36px;
+        }
+
+        .form-section-label {
+            font-size: 11px;
+            font-weight: 700;
+            letter-spacing: .08em;
+            text-transform: uppercase;
+            color: #94a3b8;
+            margin: 28px 0 16px;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .form-section-label::after {
+            content: '';
+            flex: 1;
+            height: 1px;
+            background: #E2E8F0;
+        }
+
+        .form-section-label:first-child { margin-top: 0; }
+
+        .field-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 16px;
+        }
+
+        @media (max-width: 600px) {
+            .field-grid { grid-template-columns: 1fr; }
+            .club-app-form { padding: 24px; }
+            .club-app-card-head { padding: 20px 24px; }
+        }
+
+        .field-group {
+            display: flex;
+            flex-direction: column;
+            gap: 6px;
+        }
+
+        .field-group.full { grid-column: 1 / -1; }
+
+        .field-group label {
+            font-size: 11px;
+            font-weight: 700;
+            letter-spacing: .07em;
+            text-transform: uppercase;
+            color: #64748b;
+        }
+
+        .field-group input,
+        .field-group select,
+        .field-group textarea {
+            border: 1.5px solid #E2E8F0;
+            border-radius: 10px;
+            padding: 11px 14px;
+            font-size: 14px;
+            color: #0f172a;
+            background: #fff;
+            font-family: 'Inter', sans-serif;
+            outline: none;
+            transition: border-color 120ms, box-shadow 120ms;
+            width: 100%;
+            box-sizing: border-box;
+        }
+
+        .field-group input:focus,
+        .field-group select:focus,
+        .field-group textarea:focus {
+            border-color: #003399;
+            box-shadow: 0 0 0 3px rgba(0,51,153,.10);
+        }
+
+        .field-group input::placeholder,
+        .field-group textarea::placeholder {
+            color: #94a3b8;
+        }
+
+        .field-group textarea {
+            resize: vertical;
+            min-height: 120px;
+            line-height: 1.6;
+        }
+
+        /* ── Submit butonu ── */
+        .club-app-submit {
+            margin-top: 32px;
+            display: flex;
+            flex-direction: column;
+            gap: 12px;
+        }
+
+        .btn-submit {
+            width: 100%;
+            padding: 15px;
+            background: #003399;
+            color: #fff;
+            border: none;
+            border-radius: 12px;
+            font-size: 15px;
+            font-weight: 700;
+            cursor: pointer;
+            font-family: 'Inter', sans-serif;
+            letter-spacing: .01em;
+            transition: background 120ms, transform 80ms;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 8px;
+        }
+
+        .btn-submit:hover { background: #0028a0; }
+        .btn-submit:active { transform: scale(0.99); }
+        .btn-submit:disabled { opacity: 0.55; cursor: not-allowed; }
+
+        .submit-note {
+            text-align: center;
+            font-size: 12px;
+            color: #94a3b8;
+            line-height: 1.5;
+        }
+
+        /* ── Başarı mesajı ── */
+        .success-box {
+            display: none;
+            text-align: center;
+            padding: 48px 36px;
+        }
+
+        .success-box.show { display: block; }
+
+        .success-icon {
+            width: 72px;
+            height: 72px;
+            background: #DCFCE7;
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 32px;
+            margin: 0 auto 20px;
+        }
+
+        .success-box h3 {
+            font-size: 20px;
+            font-weight: 800;
+            color: #0f172a;
+            margin-bottom: 10px;
+        }
+
+        .success-box p {
+            font-size: 14px;
+            color: #64748b;
+            line-height: 1.6;
+            max-width: 400px;
+            margin: 0 auto 24px;
+        }
+
+        /* ── Bilgi kutusu ── */
+        .info-strip {
+            margin-top: 24px;
+            background: #EEF2FF;
+            border: 1px solid #C7D2FE;
+            border-radius: 12px;
+            padding: 16px 20px;
+            display: flex;
+            gap: 12px;
+            align-items: flex-start;
+        }
+
+        .info-strip-icon { font-size: 20px; flex-shrink: 0; margin-top: 1px; }
+
+        .info-strip p {
+            font-size: 13px;
+            color: #374151;
+            line-height: 1.55;
+            margin: 0;
+        }
+
+        .info-strip a { color: #003399; font-weight: 600; }
+    </style>
+</head>
+<body>
+    <header class="header">
+        <nav class="nav">
+            <div class="nav-container">
+                <div class="logo">
+                    <img src="Courty_Logo.png" alt="CourtyCLUB Logo" class="logo-image">
+                    <span class="logo-text">CourtyCLUB</span>
+                </div>
+                <ul class="nav-menu">
+                    <li><a href="index.html" class="nav-link">Ana Sayfa</a></li>
+                    <li><a href="features.html" class="nav-link">CourtyCLUB Nedir?</a></li>
+                    <li><a href="partners.html" class="nav-link">Partnerlerimiz</a></li>
+                    <li><a href="privacy.html" class="nav-link">Gizlilik Politikası</a></li>
+                    <li><a href="terms.html" class="nav-link">Kullanım Şartları</a></li>
+                    <li><a href="acik-riza.html" class="nav-link">Açık Rıza</a></li>
+                    <li><a href="contact.html" class="nav-link">İletişim</a></li>
+                </ul>
+                <div class="nav-cta">
+                    <a href="admin/login.html" class="btn btn-outline btn-sm">Giriş Yap</a>
+                    <a href="https://apps.apple.com/tr/app/courtyclub/id6762048168?l=tr" target="_blank" rel="noopener" class="btn btn-primary btn-sm">Uygulamayı İndir</a>
+                </div>
+                <div class="hamburger">
+                    <span class="bar"></span>
+                    <span class="bar"></span>
+                    <span class="bar"></span>
+                </div>
+            </div>
+        </nav>
+    </header>
+
+    <main>
+        <div class="club-app-wrap">
+            <div class="club-app-inner">
+
+                <!-- Hero -->
+                <div class="club-app-hero fade-in">
+                    <div class="club-app-badge">🏢 Kulüp Başvurusu</div>
+                    <h1 class="club-app-title">Kulübünüzü <span>CourtyCLUB</span>'a<br>Dahil Edin</h1>
+                    <p class="club-app-sub">Aşağıdaki formu doldurun, ekibimiz en kısa sürede sizinle iletişime geçsin. Başvurunuz <strong>info@courty.club</strong> adresine iletilecektir.</p>
+                </div>
+
+                <!-- Kart -->
+                <div class="club-app-card fade-in">
+                    <div class="club-app-card-head">
+                        <div class="club-app-card-head-icon">🎾</div>
+                        <div>
+                            <h2>Kulüp Bilgileri Formu</h2>
+                            <p>Tüm alanları eksiksiz doldurun</p>
+                        </div>
+                    </div>
+
+                    <div class="club-app-form">
+                        <!-- Başarı mesajı (gizli) -->
+                        <div class="success-box" id="successBox">
+                            <div class="success-icon">✅</div>
+                            <h3>Başvurunuz İletildi!</h3>
+                            <p>Formunuz <strong>info@courty.club</strong> adresine gönderildi. Ekibimiz en kısa sürede sizinle iletişime geçecektir.</p>
+                            <a href="index.html" class="btn btn-primary">Ana Sayfaya Dön</a>
+                        </div>
+
+                        <form id="clubAppForm">
+                            <!-- Kulüp Bilgileri -->
+                            <div class="form-section-label">Kulüp Bilgileri</div>
+                            <div class="field-grid">
+                                <div class="field-group full">
+                                    <label for="clubName">Kulüp Adı *</label>
+                                    <input type="text" id="clubName" name="clubName" placeholder="Kulübünüzün tam adı" required>
+                                </div>
+                                <div class="field-group">
+                                    <label for="city">Şehir *</label>
+                                    <input type="text" id="city" name="city" placeholder="İstanbul" required>
+                                </div>
+                                <div class="field-group">
+                                    <label for="district">İlçe *</label>
+                                    <input type="text" id="district" name="district" placeholder="Beşiktaş" required>
+                                </div>
+                            </div>
+
+                            <!-- İletişim Bilgileri -->
+                            <div class="form-section-label">Yetkili Kişi Bilgileri</div>
+                            <div class="field-grid">
+                                <div class="field-group full">
+                                    <label for="fullName">Ad Soyad *</label>
+                                    <input type="text" id="fullName" name="fullName" placeholder="Ad ve soyadınız" required>
+                                </div>
+                                <div class="field-group">
+                                    <label for="phone">Telefon Numarası *</label>
+                                    <input type="tel" id="phone" name="phone" placeholder="0 5XX XXX XX XX" required>
+                                </div>
+                                <div class="field-group">
+                                    <label for="email">E-posta Adresi *</label>
+                                    <input type="email" id="email" name="email" placeholder="kulup@ornek.com" required>
+                                </div>
+                            </div>
+
+                            <!-- Açıklama -->
+                            <div class="form-section-label">Açıklama</div>
+                            <div class="field-grid">
+                                <div class="field-group full">
+                                    <label for="description">Kulübünüz Hakkında</label>
+                                    <textarea id="description" name="description" placeholder="Kort sayısı, spor dalları, beklentileriniz veya sormak istedikleriniz…"></textarea>
+                                </div>
+                            </div>
+
+                            <!-- Submit -->
+                            <div class="club-app-submit">
+                                <button type="submit" class="btn-submit" id="submitBtn">
+                                    <span id="submitBtnText">✉️ Formu Gönder</span>
+                                </button>
+                                <p class="submit-note">
+                                    Formu göndererek <a href="privacy.html" style="color:#003399;font-weight:600;">Gizlilik Politikamızı</a> kabul etmiş olursunuz.<br>
+                                    Doğrudan ulaşmak için: <a href="mailto:info@courty.club" style="color:#003399;font-weight:600;">info@courty.club</a>
+                                </p>
+                            </div>
+                        </form>
+                    </div>
+                </div>
+
+                <!-- Bilgi şeridi -->
+                <div class="info-strip fade-in" style="margin-top:24px;">
+                    <div class="info-strip-icon">💡</div>
+                    <p>Formunuz doğrudan <strong>info@courty.club</strong> adresine iletilir. Sorun yaşarsanız <a href="mailto:info@courty.club">info@courty.club</a> adresine doğrudan yazabilirsiniz.</p>
+                </div>
+
+            </div>
+        </div>
+    </main>
+
+    <footer class="footer">
+        <div class="container">
+            <div class="footer-content">
+                <div class="footer-logo">
+                    <img src="Courty_Logo.png" alt="CourtyCLUB Logo" class="logo-image footer-logo-img">
+                    <p>Tenis kortu rezervasyonu ve antrenör bulma platformu</p>
+                </div>
+                <div class="footer-section">
+                    <h4>Hızlı Linkler</h4>
+                    <ul>
+                        <li><a href="index.html">Ana Sayfa</a></li>
+                        <li><a href="features.html">CourtyCLUB Nedir?</a></li>
+                        <li><a href="partners.html">Partnerlerimiz</a></li>
+                        <li><a href="contact.html">İletişim</a></li>
+                    </ul>
+                </div>
+                <div class="footer-section">
+                    <h4>Yasal</h4>
+                    <ul>
+                        <li><a href="privacy.html">Gizlilik Politikası</a></li>
+                        <li><a href="terms.html">Kullanım Şartları</a></li>
+                        <li><a href="acik-riza.html">Açık Rıza</a></li>
+                        <li><a href="account-deletion.html">Hesap Silme</a></li>
+                    </ul>
+                </div>
+                <div class="footer-section">
+                    <h4>Destek</h4>
+                    <ul>
+                        <li><a href="mailto:info@courty.club">info@courty.club</a></li>
+                    </ul>
+                </div>
+            </div>
+            <div class="footer-bottom">
+                <p>&copy; 2024 CourtyCLUB. Tüm hakları saklıdır.</p>
+            </div>
+        </div>
+    </footer>
+
+    <script src="config.js"></script>
+    <script src="script.js"></script>
+    <script>
+    var _form    = document.getElementById('clubAppForm');
+    var _btn     = document.getElementById('submitBtn');
+    var _btnTxt  = document.getElementById('submitBtnText');
+    var _success = document.getElementById('successBox');
+    var _errBox  = document.createElement('div');
+    _errBox.style.cssText = 'display:none;margin-top:14px;padding:12px 16px;background:#FEF2F2;border:1px solid #FECACA;border-radius:10px;font-size:13px;color:#B91C1C;line-height:1.5;';
+    if (_btn) _btn.parentNode.appendChild(_errBox);
+
+    function _showError(msg) {
+        _errBox.textContent = msg;
+        _errBox.style.display = 'block';
+        _btn.disabled = false;
+        _btnTxt.textContent = 'Tekrar Dene';
+        _btn.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+    }
+
+if (_form) {
+        _form.addEventListener('submit', function(e) {
+            e.preventDefault();
+
+            var clubName    = document.getElementById('clubName').value.trim();
+            var city        = document.getElementById('city').value.trim();
+            var district    = document.getElementById('district').value.trim();
+            var fullName    = document.getElementById('fullName').value.trim();
+            var phone       = document.getElementById('phone').value.trim();
+            var email       = document.getElementById('email').value.trim();
+            var description = document.getElementById('description').value.trim();
+
+            if (!clubName || !city || !district || !fullName || !phone || !email) {
+                _showError('Lutfen zorunlu alanlarin tamamini doldurun.');
+                return;
+            }
+
+            var body = 'Kulup Adi: ' + clubName + '\n'
+                     + 'Sehir: ' + city + '\n'
+                     + 'Ilce: ' + district + '\n'
+                     + 'Ad Soyad: ' + fullName + '\n'
+                     + 'Telefon: ' + phone + '\n'
+                     + 'E-posta: ' + email + '\n'
+                     + (description ? '\nAciklama:\n' + description : '');
+
+            var subject = 'Kulup Basvurusu - ' + clubName + ' (' + city + '/' + district + ')';
+
+            window.location.href = 'mailto:info@courty.club'
+                + '?subject=' + encodeURIComponent(subject)
+                + '&body='    + encodeURIComponent(body);
+        });
+    }
+    </script>
+</body>
+</html>

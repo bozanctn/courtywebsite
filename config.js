@@ -12,6 +12,9 @@ const CONFIG = {
     
     // Contact Information
     CONTACT_EMAIL: 'info@courty.club',
+
+    // Resend API
+    RESEND_API_KEY: 're_KzcCR2pD_6w3yAgdz3Vu5T6LWCX9iNppy',
     
     // App Configuration
     APP_NAME: 'CourtyCLUB',

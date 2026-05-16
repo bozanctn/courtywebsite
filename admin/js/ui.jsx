@@ -201,7 +201,7 @@ window.MiniCalendar = function MiniCalendar({ selected, onSelect, dotDates = [] 
     return cells;
   }, [cur]);
 
-  const fmt = d => d.toISOString().split('T')[0];
+  const fmt = d => `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
   const todayStr = fmt(today);
   const dotSet = new Set(dotDates);
 

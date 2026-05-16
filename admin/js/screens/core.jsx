@@ -17,8 +17,11 @@ function DashboardScreen({ clubId, clubProfile, setScreen }) {
   const load = async () => {
     setLoading(true);
     try {
+      // DB'de saatler yerel saat olarak UTC'de saklandığından +3 saat ekleyerek aralık oluşturuyoruz
       const todayStart = new Date(); todayStart.setHours(0,0,0,0);
       const todayEnd   = new Date(); todayEnd.setHours(23,59,59,999);
+      const dbStart = localTimeToDb(todayStart.toISOString());
+      const dbEnd   = localTimeToDb(todayEnd.toISOString());
 
       // bookings tablosunda club_id yok — önce court ID'lerini al
       const courtIds = await getClubCourtIds(clubId);
@@ -26,10 +29,10 @@ function DashboardScreen({ clubId, clubProfile, setScreen }) {
       const [bRes, pendMemRes, courtRes] = await Promise.all([
         courtIds.length > 0
           ? sb.from('bookings')
-              .select('*, courts!bookings_court_id_fkey(court_number,court_type), booking_players!booking_players_booking_id_fkey(*, profiles!booking_players_player_id_fkey(id,full_name,email))')
+              .select('*, courts!bookings_court_id_fkey(court_number,court_type), booking_players!booking_players_booking_id_fkey(player_id,is_primary_player, profiles!booking_players_player_id_fkey(id,full_name,email))')
               .in('court_id', courtIds)
-              .gte('start_time', todayStart.toISOString())
-              .lte('start_time', todayEnd.toISOString())
+              .gte('start_time', dbStart)
+              .lte('start_time', dbEnd)
               .order('start_time', { ascending: true })
               .limit(8)
           : Promise.resolve({ data: [] }),
@@ -43,7 +46,11 @@ function DashboardScreen({ clubId, clubProfile, setScreen }) {
           .eq('is_active', true),
       ]);
 
-      const rows = bRes.data || [];
+      const rows = (bRes.data || []).map(b => ({
+        ...b,
+        start_time: dbTimeToLocal(b.start_time),
+        end_time:   dbTimeToLocal(b.end_time),
+      }));
       setBookings(rows);
       setTodayCount(rows.length);
       // payment_status filtresi JS tarafında (DB'de alan var ama opsiyonel)
@@ -157,13 +164,12 @@ function ReservationsScreen({ clubId }) {
   const [coaches,      setCoaches]      = useState([]);
   const [lessonCourts, setLessonCourts] = useState([]);
   const [loadingL,     setLoadingL]     = useState(false);
-  const [lessonTab,    setLessonTab]    = useState('upcoming');
   const [lessonModal,  setLessonModal]  = useState(null);
   const [lessonForm,   setLessonForm]   = useState({});
 
   useEffect(() => { if (clubId) { loadCourts(); loadDotDates(); } }, [clubId]);
   useEffect(() => { if (clubId) loadDay(); }, [clubId, selDate]);
-  useEffect(() => { if (clubId && mainTab === 'lessons') loadLessons(); }, [clubId, mainTab]);
+  useEffect(() => { if (clubId && mainTab === 'lessons') loadLessons(); }, [clubId, mainTab, selDate]);
 
   const loadCourts = async () => {
     const { data } = await sb.from('courts').select('id,court_number,court_type').eq('club_id', clubId).eq('is_active', true);
@@ -201,7 +207,11 @@ function ReservationsScreen({ clubId }) {
         .lte('start_time', endDt.toISOString())
         .order('start_time', { ascending: true });
       if (error) { console.error('loadDay error:', error); setBookings([]); return; }
-      setBookings(data || []);
+      setBookings((data || []).map(b => ({
+        ...b,
+        start_time: dbTimeToLocal(b.start_time),
+        end_time:   dbTimeToLocal(b.end_time),
+      })));
     } catch (e) {
       console.error('loadDay exception:', e);
       setBookings([]);
@@ -226,8 +236,8 @@ function ReservationsScreen({ clubId }) {
     try {
       await sb.from('bookings').insert({
         court_id:   form.court_id,
-        start_time: new Date(form.start_time).toISOString(),
-        end_time:   new Date(form.end_time).toISOString(),
+        start_time: localTimeToDb(form.start_time),
+        end_time:   localTimeToDb(form.end_time),
         status:     form.status || 'confirmed',
         notes:      form.notes || null,
       });
@@ -241,10 +251,9 @@ function ReservationsScreen({ clubId }) {
   const loadLessons = async () => {
     setLoadingL(true);
     try {
-      // Tarih aralığı: 30 gün önce → 60 gün sonra
-      const today = new Date();
-      const fromStr = new Date(today.getTime() - 30 * 86400000).toISOString().split('T')[0];
-      const toStr   = new Date(today.getTime() + 60 * 86400000).toISOString().split('T')[0];
+      const d = selDate;
+      const dbStart = `${d}T00:00:00`;
+      const dbEnd   = `${d}T23:59:59`;
 
       // Kulübün koçlarını al
       const [coachRes, courtRes] = await Promise.all([
@@ -265,8 +274,8 @@ function ReservationsScreen({ clubId }) {
           .select('id, start_time, end_time, club_coach_id, payment_status, total_amount, courts!bookings_court_id_fkey(court_number)')
           .not('club_coach_id', 'is', null)
           .in('club_coach_id', myCoachIds)
-          .gte('start_time', `${fromStr}T00:00:00`)
-          .lte('start_time', `${toStr}T23:59:59`)
+          .gte('start_time', dbStart)
+          .lte('start_time', dbEnd)
           .order('start_time', { ascending: true });
 
         (bookings || []).forEach(b => {
@@ -292,9 +301,7 @@ function ReservationsScreen({ clubId }) {
       const { data: manual } = await sb.from('club_manual_lessons')
         .select('*, club_coaches(full_name), courts(court_number)')
         .eq('club_id', clubId)
-        .gte('date', fromStr)
-        .lte('date', toStr)
-        .order('date',       { ascending: true })
+        .eq('date', d)
         .order('start_time', { ascending: true });
 
       (manual || []).forEach(m => {
@@ -320,8 +327,8 @@ function ReservationsScreen({ clubId }) {
           .select('id, start_time, end_time, student_name, club_coach_id, amount, payment_status, notes, courts(court_number)')
           .in('club_coach_id', myCoachIds)
           .neq('status', 'cancelled')
-          .gte('start_time', `${fromStr}T00:00:00`)
-          .lte('start_time', `${toStr}T23:59:59`);
+          .gte('start_time', dbStart)
+          .lte('start_time', dbEnd);
 
         (directLessons || []).forEach(l => {
           const start = new Date(l.start_time);
@@ -418,11 +425,6 @@ function ReservationsScreen({ clubId }) {
     } catch (e) { alert(e.message); }
   };
 
-  const now = new Date();
-  const filteredLessons = lessons.filter(l => {
-    const d = new Date((l.date || '2000-01-01') + 'T' + (l.start_time || '00:00'));
-    return lessonTab === 'upcoming' ? d >= now : d < now;
-  });
 
   return (
     <div className="page fade-in">
@@ -430,14 +432,12 @@ function ReservationsScreen({ clubId }) {
         <div>
           <h1>Rezervasyonlar</h1>
           <div className="sub">
-            {mainTab === 'bookings'
-              ? selDate && new Date(selDate + 'T12:00').toLocaleDateString('tr-TR', { weekday:'long', day:'numeric', month:'long' })
-              : 'Kulüp koçlarının özel ders programı'}
+            {selDate && new Date(selDate + 'T12:00').toLocaleDateString('tr-TR', { weekday:'long', day:'numeric', month:'long' })}
           </div>
         </div>
         {mainTab === 'bookings'
           ? <button className="btn btn-pri" onClick={openAdd}><span className="material-icons">add</span> Yeni Rezervasyon</button>
-          : <button className="btn btn-pri" onClick={() => { setLessonForm({ date: todayISO(), start_time:'09:00', end_time:'10:00' }); setLessonModal({ type:'add' }); }}>
+          : <button className="btn btn-pri" onClick={() => { setLessonForm({ date: selDate, start_time:'09:00', end_time:'10:00' }); setLessonModal({ type:'add' }); }}>
               <span className="material-icons">add</span> Ders Ekle
             </button>
         }
@@ -501,48 +501,34 @@ function ReservationsScreen({ clubId }) {
 
       {/* ── Özel Dersler sekmesi ── */}
       {mainTab === 'lessons' && (
-        <div className="table-wrap">
-          <div className="table-toolbar">
-            <Tabs
-              items={[{ key:'upcoming', label:'Yaklaşan' }, { key:'past', label:'Geçmiş' }]}
-              active={lessonTab} onChange={setLessonTab}
-            />
-          </div>
-          {loadingL ? <Spinner /> : filteredLessons.length === 0 ? (
-            <EmptyState icon="school" title={lessonTab === 'upcoming' ? 'Yaklaşan ders yok' : 'Geçmiş ders yok'} sub="Ders eklemek için + butonunu kullanın." />
-          ) : (
-            <table className="tbl">
-              <thead>
-                <tr>
-                  <th>Tarih</th>
-                  <th>Saat</th>
-                  <th>Öğrenci</th>
-                  <th>Koç</th>
-                  <th>Konum</th>
-                  <th>Kaynak</th>
-                  <th>Ödeme</th>
-                  <th className="c-r">İşlem</th>
-                </tr>
-              </thead>
-              <tbody>
-                {filteredLessons.map(l => (
-                  <tr key={`${l.source}-${l.id}`}>
-                    <td className="c-strong">{fmtDate(l.date)}</td>
-                    <td className="c-muted">{l.start_time} — {l.end_time}</td>
-                    <td>
-                      <div style={{ display:'flex', alignItems:'center', gap:8 }}>
-                        <Av name={l.student_name || '?'} size="sm" />
-                        {l.student_name || <span className="c-muted">—</span>}
+        <div className="row2">
+          <div style={{ display:'flex', flexDirection:'column', gap:12 }}>
+            {loadingL ? <Spinner size={28} /> : lessons.length === 0 ? (
+              <EmptyState icon="school" title="Bu tarihte ders yok" sub="Ders eklemek için + butonunu kullanın." />
+            ) : (
+              lessons.map(l => (
+                <div key={`${l.source}-${l.id}`} className="card tight">
+                  <div style={{ display:'flex', alignItems:'center', gap:12, padding:'14px 16px' }}>
+                    <div className="time-bubble">
+                      <b>{l.start_time}</b>
+                      <b>{l.end_time}</b>
+                    </div>
+                    <div style={{ flex:1 }}>
+                      <div style={{ fontWeight:700, display:'flex', alignItems:'center', gap:6 }}>
+                        {l.student_name || <span style={{ color:'var(--text-2)', fontWeight:400 }}>Öğrenci belirtilmemiş</span>}
                       </div>
-                    </td>
-                    <td>{l.coach_name || <span className="c-muted">—</span>}</td>
-                    <td className="c-muted">{l.location || '—'}</td>
-                    <td>
+                      <div style={{ fontSize:12, color:'var(--text-2)', marginTop:2, display:'flex', alignItems:'center', gap:8 }}>
+                        <span><span className="material-icons" style={{fontSize:12,verticalAlign:'middle'}}>person</span> {l.coach_name || '—'}</span>
+                        {l.location && l.location !== '—' && (
+                          <span><span className="material-icons" style={{fontSize:12,verticalAlign:'middle'}}>sports_tennis</span> {l.location}</span>
+                        )}
+                      </div>
+                      {l.notes && <div style={{ fontSize:11, color:'var(--text-2)', marginTop:2 }}>{l.notes}</div>}
+                    </div>
+                    <div style={{ display:'flex', flexDirection:'column', alignItems:'flex-end', gap:6 }}>
                       {l.source === 'booking' && <Badge cls="b-info">Rezervasyon</Badge>}
                       {l.source === 'manual'  && <Badge cls="b-warning">Manuel</Badge>}
                       {l.source === 'lesson'  && <Badge cls="">Koç</Badge>}
-                    </td>
-                    <td>
                       {l.payment_status === 'paid' ? (
                         <div style={{ display:'flex', alignItems:'center', gap:4 }}>
                           <Badge cls="b-success">Ödendi</Badge>
@@ -555,25 +541,24 @@ function ReservationsScreen({ clubId }) {
                           Ödeme Al{l.amount > 0 ? ` · ₺${Number(l.amount).toLocaleString('tr-TR')}` : ''}
                         </button>
                       )}
-                    </td>
-                    <td className="c-r">
-                      <div style={{ display:'flex', gap:4, justifyContent:'flex-end' }}>
-                        {l.source !== 'booking' && (
-                          <button className="btn btn-ghost btn-sm btn-icon" title="Düzenle"
-                            onClick={() => { setLessonForm({ ...l, payment_status: l.payment_status || 'unpaid' }); setLessonModal({ type:'edit', id: l.id }); }}>
-                            <span className="material-icons" style={{fontSize:15}}>edit</span>
-                          </button>
-                        )}
-                        <button className="btn btn-danger btn-sm btn-icon" title="Sil" onClick={() => deleteLesson(l)}>
-                          <span className="material-icons" style={{fontSize:15}}>delete</span>
+                    </div>
+                    <div style={{ display:'flex', gap:4 }}>
+                      {l.source !== 'booking' && (
+                        <button className="btn btn-ghost btn-sm btn-icon" title="Düzenle"
+                          onClick={() => { setLessonForm({ ...l, payment_status: l.payment_status || 'unpaid' }); setLessonModal({ type:'edit', id: l.id }); }}>
+                          <span className="material-icons" style={{fontSize:15}}>edit</span>
                         </button>
-                      </div>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          )}
+                      )}
+                      <button className="btn btn-danger btn-sm btn-icon" title="Sil" onClick={() => deleteLesson(l)}>
+                        <span className="material-icons" style={{fontSize:15}}>delete</span>
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              ))
+            )}
+          </div>
+          <MiniCalendar selected={selDate} onSelect={setSelDate} dotDates={dotDates} />
         </div>
       )}
 

@@ -3,7 +3,7 @@
 // ═══════════════════════════════════════════════════════════════
 // TURNUVALAR
 // ═══════════════════════════════════════════════════════════════
-function TournamentsScreen({ clubId }) {
+function TournamentsScreen({ clubId, userType }) {
   const { useState, useEffect } = React;
   const [tournaments, setTournaments] = useState([]);
   const [loading,     setLoading]     = useState(true);
@@ -223,6 +223,19 @@ function GroupsScreen({ clubId }) {
   const [duesLoading, setDuesLoading] = useState(false);
   const [posting,     setPosting]     = useState(false);
 
+  // ── Program atama modalı ─────────────────────────────────────
+  const [schedModal,      setSchedModal]      = useState(null);
+  const [schedCourts,     setSchedCourts]     = useState([]);
+  const [schedSelCourts,  setSchedSelCourts]  = useState([]);
+  const [schedSelCoaches, setSchedSelCoaches] = useState([]);
+  const [schedSelDays,    setSchedSelDays]    = useState([]);
+  const [schedStartH,     setSchedStartH]     = useState(9);
+  const [schedEndH,       setSchedEndH]       = useState(11);
+  const [schedConflicts,  setSchedConflicts]  = useState([]);
+  const [schedChecking,   setSchedChecking]   = useState(false);
+  const [schedSaving,     setSchedSaving]     = useState(false);
+  const [schedDebounce,   setSchedDebounce]   = useState(null);
+
   useEffect(() => { if (clubId) { loadGroups(); loadCoaches(); } }, [clubId]);
 
   // ── Veri yükleme ─────────────────────────────────────────────
@@ -233,7 +246,29 @@ function GroupsScreen({ clubId }) {
       .select('*, coach:club_coaches(id, full_name), members:club_group_members(*)')
       .eq('club_id', clubId)
       .order('created_at', { ascending: false });
-    setGroups((data || []).map(g => ({ ...g, member_count: g.members?.length ?? 0 })));
+
+    const groupIds = (data || []).map(g => g.id);
+    let schedMap = {};
+    if (groupIds.length > 0) {
+      const { data: closures } = await sb
+        .from('court_closures')
+        .select('group_id, day_of_week, start_hour, end_hour, courts(court_number)')
+        .in('group_id', groupIds)
+        .eq('is_active', true);
+      for (const c of closures ?? []) {
+        if (!schedMap[c.group_id]) schedMap[c.group_id] = c;
+      }
+    }
+
+    setGroups((data || []).map(g => ({
+      ...g,
+      member_count: g.members?.length ?? 0,
+      _schedule: schedMap[g.id]
+        ? `Kort ${schedMap[g.id].courts?.court_number} · ${
+            ['Paz','Pzt','Sal','Çar','Per','Cum','Cmt'][schedMap[g.id].day_of_week]
+          } ${String(schedMap[g.id].start_hour).padStart(2,'0')}:00–${String(schedMap[g.id].end_hour).padStart(2,'0')}:00`
+        : null,
+    })));
     setLoading(false);
   };
 
@@ -242,23 +277,112 @@ function GroupsScreen({ clubId }) {
     setCoaches(data || []);
   };
 
+  // ── Program atama ─────────────────────────────────────────────
+  const openSchedule = async (group) => {
+    const { data: courtData } = await sb.from('courts')
+      .select('id, court_number, court_type')
+      .eq('club_id', clubId).eq('is_active', true).order('court_number');
+    setSchedCourts(courtData ?? []);
+
+    const existing = await GroupScheduleSvc.getGroupSchedule(group.id);
+    const courtIds = [...new Set(existing.map(c => c.court_id))];
+    const days     = [...new Set(existing.map(c => c.day_of_week))];
+    const coachIds = [...new Set(existing.filter(c => c.coach_id).map(c => c.coach_id))];
+    // Kayıtlı coach yoksa gruba atanmış antrenörü otomatik al
+    const activeCoachIds = coachIds.length > 0
+      ? coachIds
+      : (group.coach_id ? [group.coach_id] : []);
+    setSchedSelCourts(courtIds);
+    setSchedSelDays(days);
+    setSchedSelCoaches(activeCoachIds);
+    setSchedStartH(existing[0]?.start_hour ?? 9);
+    setSchedEndH(existing[0]?.end_hour ?? 11);
+    setSchedConflicts([]);
+    setSchedModal({ group });
+  };
+
+  useEffect(() => {
+    if (!schedModal && !groupModal) return;
+    if (schedSelCourts.length === 0 || schedSelDays.length === 0) {
+      setSchedConflicts([]); return;
+    }
+    if (schedDebounce) clearTimeout(schedDebounce);
+    const activeGroupId = schedModal?.group?.id ?? form?.id ?? null;
+    const t = setTimeout(async () => {
+      setSchedChecking(true);
+      const selCoachObjs = coaches.filter(c => schedSelCoaches.includes(c.id));
+      const conflicts = await GroupScheduleSvc.checkConflicts(
+        activeGroupId, schedSelCourts, schedSelDays,
+        schedStartH, schedEndH, selCoachObjs
+      );
+      setSchedConflicts(conflicts);
+      setSchedChecking(false);
+    }, 400);
+    setSchedDebounce(t);
+  }, [schedSelCourts, schedSelDays, schedStartH, schedEndH, schedSelCoaches, schedModal, groupModal]);
+
+  const saveSchedule = async () => {
+    if (!schedSelCourts.length) { alert('En az bir kort seçin'); return; }
+    if (!schedSelDays.length)   { alert('En az bir gün seçin'); return; }
+    if (schedStartH >= schedEndH) { alert('Bitiş saati başlangıçtan büyük olmalı'); return; }
+    if (schedConflicts.length)  { alert('Çakışmalar giderilmeden kaydedilemez'); return; }
+    setSchedSaving(true);
+    try {
+      await GroupScheduleSvc.saveGroupSchedule(
+        schedModal.group.id, schedModal.group.name,
+        schedSelCoaches, schedSelCourts, schedSelDays, schedStartH, schedEndH
+      );
+      setSchedModal(null);
+      loadGroups();
+    } catch (e) { alert(e.message); }
+    finally { setSchedSaving(false); }
+  };
+
+  const clearSchedule = async () => {
+    if (!confirm('Bu grubun programı silinsin mi?')) return;
+    await sb.from('court_closures').delete().eq('group_id', schedModal.group.id);
+    setSchedModal(null);
+    loadGroups();
+  };
+
   // ── Grup oluştur ─────────────────────────────────────────────
-  const openCreate = () => {
+  const openCreate = async () => {
     setForm({ name: '', description: '', monthly_fee: '', club_percentage: 100, coach_id: '', is_active: true });
     setNewMembers([
       { member_name: '', contact_number: '', contact_person: '' },
       { member_name: '', contact_number: '', contact_person: '' },
       { member_name: '', contact_number: '', contact_person: '' },
     ]);
+    const { data: courtData } = await sb.from('courts')
+      .select('id, court_number, court_type')
+      .eq('club_id', clubId).eq('is_active', true).order('court_number');
+    setSchedCourts(courtData ?? []);
+    setSchedSelCourts([]); setSchedSelDays([]); setSchedSelCoaches([]);
+    setSchedStartH(9); setSchedEndH(11); setSchedConflicts([]);
     setGroupModal({ type: 'add' });
   };
 
-  const openEdit = (g) => {
+  const openEdit = async (g) => {
     setForm({
       id: g.id, name: g.name, description: g.description || '',
       monthly_fee: g.monthly_fee ?? '', club_percentage: g.club_percentage ?? 100,
       coach_id: g.coach_id || '', is_active: g.is_active,
     });
+    const { data: courtData } = await sb.from('courts')
+      .select('id, court_number, court_type')
+      .eq('club_id', clubId).eq('is_active', true).order('court_number');
+    setSchedCourts(courtData ?? []);
+    const existing = await GroupScheduleSvc.getGroupSchedule(g.id);
+    const existingCoachIds = [...new Set(existing.filter(c => c.coach_id).map(c => c.coach_id))];
+    const activeCoachIds = existingCoachIds.length > 0
+      ? existingCoachIds
+      : (g.coach_id ? [g.coach_id] : []);
+    setSchedSelCourts([...new Set(existing.map(c => c.court_id))]);
+    setSchedSelDays([...new Set(existing.map(c => c.day_of_week))]);
+    setSchedSelCoaches(activeCoachIds);
+    setSchedStartH(existing[0]?.start_hour ?? 9);
+    setSchedEndH(existing[0]?.end_hour ?? 11);
+    setSchedConflicts([]);
     setGroupModal({ type: 'edit', group: g });
   };
 
@@ -280,6 +404,10 @@ function GroupsScreen({ clubId }) {
       const valid = newMembers.filter(m => m.member_name.trim());
       if (valid.length < 3) { alert('Grup oluşturmak için en az 3 üye gereklidir.'); return; }
     }
+    if (schedConflicts.length) { alert('Program çakışmaları giderilmeden kaydedilemez.'); return; }
+    if (schedSelCourts.length > 0 && schedSelDays.length > 0 && schedStartH >= schedEndH) {
+      alert('Bitiş saati başlangıçtan büyük olmalı.'); return;
+    }
     setSaving(true);
     try {
       const payload = {
@@ -290,13 +418,21 @@ function GroupsScreen({ clubId }) {
         coach_id:        form.coach_id || null,
         is_active:       form.is_active !== false,
       };
+      let savedGroupId = form.id;
       if (groupModal.type === 'add') {
         const validMembers = newMembers
           .filter(m => m.member_name.trim())
           .map(m => ({ member_name: m.member_name.trim(), contact_number: m.contact_number?.trim() || null, contact_person: m.contact_person?.trim() || null }));
-        await GroupSvc.createGroup(clubId, payload, validMembers);
+        const created = await GroupSvc.createGroup(clubId, payload, validMembers);
+        savedGroupId = created?.id ?? savedGroupId;
       } else {
         await GroupSvc.updateGroup(form.id, payload);
+      }
+      if (savedGroupId && (schedSelCourts.length > 0 || groupModal.type === 'edit')) {
+        await GroupScheduleSvc.saveGroupSchedule(
+          savedGroupId, form.name.trim(),
+          schedSelCoaches, schedSelCourts, schedSelDays, schedStartH, schedEndH
+        );
       }
       setGroupModal(null);
       loadGroups();
@@ -489,10 +625,20 @@ function GroupsScreen({ clubId }) {
                   )}
                 </div>
 
+                {g._schedule && (
+                  <div style={{ fontSize:11, color:'#0D9488', display:'flex', alignItems:'center', gap:4 }}>
+                    <span className="material-icons" style={{fontSize:12}}>event_repeat</span>
+                    {g._schedule}
+                  </div>
+                )}
+
                 <div style={{ height:1, background:'var(--border)' }} />
 
                 {/* Aksiyon butonları */}
                 <div style={{ display:'flex', gap:6 }}>
+                  <button className="btn btn-ghost btn-sm" style={{ flex:1, color:'#0D9488' }} onClick={() => openSchedule(g)}>
+                    <span className="material-icons" style={{fontSize:14}}>event_repeat</span> Program
+                  </button>
                   <button className="btn btn-ghost btn-sm" style={{ flex:1, color:'#8B5CF6' }} onClick={() => openDues(g)}>
                     <span className="material-icons" style={{fontSize:14}}>payments</span> Aidat
                   </button>
@@ -598,6 +744,162 @@ function GroupsScreen({ clubId }) {
                 </div>
               </div>
             )}
+
+            {/* ── Program Atama ── */}
+            <div style={{ borderTop:'1px solid var(--border)', paddingTop:14 }}>
+              <div style={{ fontWeight:700, fontSize:13, color:'var(--text-2)', marginBottom:12, display:'flex', alignItems:'center', gap:6 }}>
+                <span className="material-icons" style={{fontSize:15}}>event_repeat</span>
+                Haftalık Program (isteğe bağlı)
+              </div>
+
+              {/* Antrenörler */}
+              <Field label="ANTRENÖRLER">
+                <div style={{ display:'flex', flexWrap:'wrap', gap:8 }}>
+                  {coaches.map(c => (
+                    <button key={c.id} type="button"
+                      className={'btn btn-sm ' + (schedSelCoaches.includes(c.id) ? 'btn-pri' : 'btn-ghost')}
+                      onClick={() => setSchedSelCoaches(prev =>
+                        prev.includes(c.id) ? prev.filter(x => x !== c.id) : [...prev, c.id]
+                      )}>
+                      {c.full_name}
+                    </button>
+                  ))}
+                  {coaches.length === 0 && <span style={{ fontSize:13, color:'var(--text-2)' }}>Aktif antrenör yok</span>}
+                </div>
+              </Field>
+
+              {/* Kortlar */}
+              <Field label="KORTLAR">
+                <div style={{ display:'flex', flexWrap:'wrap', gap:8 }}>
+                  {schedCourts.map(c => (
+                    <button key={c.id} type="button"
+                      className={'btn btn-sm ' + (schedSelCourts.includes(c.id) ? 'btn-pri' : 'btn-ghost')}
+                      onClick={() => setSchedSelCourts(prev =>
+                        prev.includes(c.id) ? prev.filter(x => x !== c.id) : [...prev, c.id]
+                      )}>
+                      Kort {c.court_number}
+                    </button>
+                  ))}
+                  {schedCourts.length === 0 && <span style={{ fontSize:13, color:'var(--text-2)' }}>Aktif kort yok</span>}
+                </div>
+              </Field>
+
+              {/* Günler */}
+              {schedSelCourts.length > 0 && (
+                <Field label="GÜNLER">
+                  <div style={{ display:'flex', gap:6 }}>
+                    {['Paz','Pzt','Sal','Çar','Per','Cum','Cmt'].map((d, i) => (
+                      <button key={d} type="button"
+                        className={'btn btn-sm ' + (schedSelDays.includes(i) ? 'btn-pri' : 'btn-ghost')}
+                        style={{ flex:1 }}
+                        onClick={() => setSchedSelDays(prev =>
+                          prev.includes(i) ? prev.filter(x => x !== i) : [...prev, i]
+                        )}>
+                        {d}
+                      </button>
+                    ))}
+                  </div>
+                </Field>
+              )}
+
+              {/* Saat */}
+              {schedSelCourts.length > 0 && schedSelDays.length > 0 && (
+                <Field label="SAAT ARALIĞI">
+                  <div style={{ display:'flex', alignItems:'center', gap:12 }}>
+                    <div style={{ display:'flex', alignItems:'center', border:'1px solid var(--border)', borderRadius:10, overflow:'hidden' }}>
+                      <button className="btn btn-ghost btn-sm btn-icon" onClick={() => setSchedStartH(h => Math.max(0, h - 1))}>
+                        <span className="material-icons" style={{fontSize:16}}>remove</span>
+                      </button>
+                      <span style={{ minWidth:52, textAlign:'center', fontWeight:700, fontSize:15 }}>
+                        {String(schedStartH).padStart(2,'0')}:00
+                      </span>
+                      <button className="btn btn-ghost btn-sm btn-icon" onClick={() => setSchedStartH(h => Math.min(22, h + 1))}>
+                        <span className="material-icons" style={{fontSize:16}}>add</span>
+                      </button>
+                    </div>
+                    <span className="material-icons" style={{color:'var(--text-2)'}}>arrow_forward</span>
+                    <div style={{ display:'flex', alignItems:'center', border:'1px solid var(--border)', borderRadius:10, overflow:'hidden' }}>
+                      <button className="btn btn-ghost btn-sm btn-icon" onClick={() => setSchedEndH(h => Math.max(1, h - 1))}>
+                        <span className="material-icons" style={{fontSize:16}}>remove</span>
+                      </button>
+                      <span style={{ minWidth:52, textAlign:'center', fontWeight:700, fontSize:15 }}>
+                        {String(schedEndH).padStart(2,'0')}:00
+                      </span>
+                      <button className="btn btn-ghost btn-sm btn-icon" onClick={() => setSchedEndH(h => Math.min(23, h + 1))}>
+                        <span className="material-icons" style={{fontSize:16}}>add</span>
+                      </button>
+                    </div>
+                  </div>
+                  {schedStartH >= schedEndH && (
+                    <div style={{ marginTop:8, color:'#EF4444', fontSize:12, display:'flex', alignItems:'center', gap:4 }}>
+                      <span className="material-icons" style={{fontSize:14}}>error_outline</span>
+                      Bitiş saati başlangıçtan büyük olmalı
+                    </div>
+                  )}
+                </Field>
+              )}
+
+              {/* Çakışma durumu */}
+              {schedSelCourts.length > 0 && schedSelDays.length > 0 && (
+                <div style={{ marginTop:8 }}>
+                  {schedChecking ? (
+                    <div style={{ display:'flex', alignItems:'center', gap:8, color:'var(--text-2)', fontSize:13 }}>
+                      <span className="material-icons" style={{fontSize:16}}>refresh</span>
+                      Çakışma kontrolü…
+                    </div>
+                  ) : schedConflicts.length === 0 ? (
+                    <div style={{ display:'flex', alignItems:'center', gap:6,
+                      background:'#F0FDF4', border:'1px solid #BBF7D0', borderRadius:10, padding:'8px 12px' }}>
+                      <span className="material-icons" style={{color:'#22C55E', fontSize:16}}>check_circle</span>
+                      <span style={{ fontSize:12, color:'#22C55E', fontWeight:600 }}>Çakışma yok</span>
+                    </div>
+                  ) : (
+                    <div>
+                      <div style={{ display:'flex', alignItems:'center', gap:6, marginBottom:6 }}>
+                        <span className="material-icons" style={{color:'#F59E0B', fontSize:15}}>warning</span>
+                        <span style={{ fontSize:12, fontWeight:700, color:'#F59E0B' }}>
+                          {schedConflicts.length} çakışma — program kaydedilemez
+                        </span>
+                      </div>
+                      {schedConflicts.map((c, i) => (
+                        <div key={i} style={{
+                          display:'flex', alignItems:'flex-start', gap:8, borderRadius:8,
+                          padding:'7px 10px', marginBottom:4,
+                          background: c.type === 'court' ? '#FEF2F2' : '#FFFBEB',
+                          border: `1px solid ${c.type === 'court' ? '#FECACA' : '#FDE68A'}`,
+                        }}>
+                          <span className="material-icons" style={{ fontSize:13, marginTop:1,
+                            color: c.type === 'court' ? '#EF4444' : '#F59E0B' }}>
+                            {c.type === 'court' ? 'sports_tennis' : 'person'}
+                          </span>
+                          <span style={{ fontSize:12 }}>{c.msg}</span>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {/* Özet */}
+              {schedSelCourts.length > 0 && schedSelDays.length > 0
+                && schedStartH < schedEndH && !schedConflicts.length && !schedChecking && (
+                <div style={{ marginTop:10, background:'#F0FDFA', border:'1px solid #99F6E4', borderRadius:10, padding:'10px 14px', display:'flex', flexDirection:'column', gap:4 }}>
+                  <div style={{ fontWeight:700, fontSize:12, color:'#0D9488', display:'flex', alignItems:'center', gap:4 }}>
+                    <span className="material-icons" style={{fontSize:14}}>event_repeat</span>
+                    Program Özeti
+                  </div>
+                  <div style={{ fontSize:12 }}>
+                    <strong>Kortlar:</strong> {schedSelCourts.map(id => `Kort ${schedCourts.find(c => c.id === id)?.court_number ?? '?'}`).join(', ')}
+                  </div>
+                  <div style={{ fontSize:12 }}>
+                    <strong>Günler:</strong> {schedSelDays.map(d => ['Pazar','Pazartesi','Salı','Çarşamba','Perşembe','Cuma','Cumartesi'][d]).join(', ')}
+                  </div>
+                  <div style={{ fontSize:12 }}>
+                    <strong>Saat:</strong> {String(schedStartH).padStart(2,'0')}:00 – {String(schedEndH).padStart(2,'0')}:00 ({schedEndH - schedStartH} saat)
+                  </div>
+                </div>
+              )}
+            </div>
           </div>
         </Modal>
       )}
@@ -785,6 +1087,607 @@ function GroupsScreen({ clubId }) {
               )}
             </>
           )}
+        </Modal>
+      )}
+
+      {/* ══ PROGRAM ATAMA MODALI ══ */}
+      {schedModal && (
+        <Modal
+          title={`${schedModal.group.name} — Program Atama`}
+          wide
+          onClose={() => setSchedModal(null)}
+          footer={
+            <>
+              <button className="btn btn-ghost btn-sm" onClick={clearSchedule}>Programı Temizle</button>
+              <button className="btn btn-ghost btn-sm" onClick={() => setSchedModal(null)}>Vazgeç</button>
+              <button
+                className="btn btn-sm"
+                style={{
+                  background: schedConflicts.length ? '#EF4444' : schedSaving ? '#9CA3AF' : '#0D9488',
+                  color: '#fff', border: 'none'
+                }}
+                onClick={saveSchedule}
+                disabled={schedSaving || !!schedConflicts.length || schedChecking || schedStartH >= schedEndH}
+              >
+                {schedSaving ? 'Kaydediliyor…'
+                 : schedConflicts.length ? 'Çakışma Var — Kaydedilemez'
+                 : 'Programı Kaydet'}
+              </button>
+            </>
+          }
+        >
+          <div className="fields" style={{ gap: 16 }}>
+
+            {/* Kortlar */}
+            <Field label="KORTLAR *">
+              <div style={{ display:'flex', flexWrap:'wrap', gap:8 }}>
+                {schedCourts.map(c => (
+                  <button key={c.id} type="button"
+                    className={'btn btn-sm ' + (schedSelCourts.includes(c.id) ? 'btn-pri' : 'btn-ghost')}
+                    onClick={() => setSchedSelCourts(prev =>
+                      prev.includes(c.id) ? prev.filter(x => x !== c.id) : [...prev, c.id]
+                    )}>
+                    Kort {c.court_number}
+                  </button>
+                ))}
+                {schedCourts.length === 0 && <span style={{ fontSize:13, color:'var(--text-2)' }}>Aktif kort yok</span>}
+              </div>
+            </Field>
+
+            {/* Günler */}
+            {schedSelCourts.length > 0 && (
+              <Field label="GÜNLER * (haftalık tekrar)">
+                <div style={{ display:'flex', gap:6 }}>
+                  {['Paz','Pzt','Sal','Çar','Per','Cum','Cmt'].map((d, i) => (
+                    <button key={d} type="button"
+                      className={'btn btn-sm ' + (schedSelDays.includes(i) ? 'btn-pri' : 'btn-ghost')}
+                      style={{ flex:1 }}
+                      onClick={() => setSchedSelDays(prev =>
+                        prev.includes(i) ? prev.filter(x => x !== i) : [...prev, i]
+                      )}>
+                      {d}
+                    </button>
+                  ))}
+                </div>
+              </Field>
+            )}
+
+            {/* Saat aralığı */}
+            {schedSelCourts.length > 0 && schedSelDays.length > 0 && (
+              <Field label="SAAT ARALIĞI *">
+                <div style={{ display:'flex', alignItems:'center', gap:12 }}>
+                  <div style={{ display:'flex', alignItems:'center', border:'1px solid var(--border)', borderRadius:10, overflow:'hidden' }}>
+                    <button className="btn btn-ghost btn-sm btn-icon"
+                      onClick={() => setSchedStartH(h => Math.max(0, h - 1))}>
+                      <span className="material-icons" style={{fontSize:16}}>remove</span>
+                    </button>
+                    <span style={{ minWidth:52, textAlign:'center', fontWeight:700, fontSize:15 }}>
+                      {String(schedStartH).padStart(2,'0')}:00
+                    </span>
+                    <button className="btn btn-ghost btn-sm btn-icon"
+                      onClick={() => setSchedStartH(h => Math.min(22, h + 1))}>
+                      <span className="material-icons" style={{fontSize:16}}>add</span>
+                    </button>
+                  </div>
+                  <span className="material-icons" style={{color:'var(--text-2)'}}>arrow_forward</span>
+                  <div style={{ display:'flex', alignItems:'center', border:'1px solid var(--border)', borderRadius:10, overflow:'hidden' }}>
+                    <button className="btn btn-ghost btn-sm btn-icon"
+                      onClick={() => setSchedEndH(h => Math.max(1, h - 1))}>
+                      <span className="material-icons" style={{fontSize:16}}>remove</span>
+                    </button>
+                    <span style={{ minWidth:52, textAlign:'center', fontWeight:700, fontSize:15 }}>
+                      {String(schedEndH).padStart(2,'0')}:00
+                    </span>
+                    <button className="btn btn-ghost btn-sm btn-icon"
+                      onClick={() => setSchedEndH(h => Math.min(23, h + 1))}>
+                      <span className="material-icons" style={{fontSize:16}}>add</span>
+                    </button>
+                  </div>
+                </div>
+                {schedStartH >= schedEndH && (
+                  <div style={{ marginTop:8, color:'#EF4444', fontSize:12, display:'flex', alignItems:'center', gap:4 }}>
+                    <span className="material-icons" style={{fontSize:14}}>error_outline</span>
+                    Bitiş saati başlangıçtan büyük olmalı
+                  </div>
+                )}
+              </Field>
+            )}
+
+            {/* Çakışma kontrolü */}
+            {schedSelCourts.length > 0 && schedSelDays.length > 0 && (
+              <div>
+                {schedChecking ? (
+                  <div style={{ display:'flex', alignItems:'center', gap:8, color:'var(--text-2)', fontSize:13 }}>
+                    <span className="material-icons" style={{fontSize:16}}>refresh</span>
+                    Çakışma kontrolü yapılıyor…
+                  </div>
+                ) : schedConflicts.length === 0 ? (
+                  <div style={{ display:'flex', alignItems:'center', gap:6,
+                    background:'#F0FDF4', border:'1px solid #BBF7D0', borderRadius:10, padding:'10px 14px' }}>
+                    <span className="material-icons" style={{color:'#22C55E', fontSize:16}}>check_circle</span>
+                    <span style={{ fontSize:13, color:'#22C55E', fontWeight:600 }}>
+                      Çakışma yok — program atanabilir
+                    </span>
+                  </div>
+                ) : (
+                  <div>
+                    <div style={{ display:'flex', alignItems:'center', gap:6, marginBottom:8 }}>
+                      <span className="material-icons" style={{color:'#F59E0B', fontSize:16}}>warning</span>
+                      <span style={{ fontSize:13, fontWeight:700, color:'#F59E0B' }}>
+                        {schedConflicts.length} çakışma — program kaydedilemez
+                      </span>
+                    </div>
+                    {schedConflicts.map((c, i) => (
+                      <div key={i} style={{
+                        display:'flex', alignItems:'flex-start', gap:8, borderRadius:8, padding:'8px 12px', marginBottom:6,
+                        background: c.type === 'court' ? '#FEF2F2' : '#FFFBEB',
+                        border: `1px solid ${c.type === 'court' ? '#FECACA' : '#FDE68A'}`,
+                      }}>
+                        <span className="material-icons" style={{ fontSize:14, marginTop:1,
+                          color: c.type === 'court' ? '#EF4444' : '#F59E0B' }}>
+                          {c.type === 'court' ? 'sports_tennis' : 'person'}
+                        </span>
+                        <span style={{ fontSize:13 }}>{c.msg}</span>
+                      </div>
+                    ))}
+                    <div style={{ fontSize:12, color:'#EF4444', marginTop:6 }}>
+                      Çakışan saatleri değiştirin ya da farklı kort/gün seçin.
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
+
+            {/* Program özeti */}
+            {schedSelCourts.length > 0 && schedSelDays.length > 0
+              && schedStartH < schedEndH && !schedConflicts.length && !schedChecking && (
+              <div style={{ background:'#F0FDFA', border:'1px solid #99F6E4', borderRadius:12, padding:'12px 16px', display:'flex', flexDirection:'column', gap:6 }}>
+                <div style={{ fontWeight:700, fontSize:13, color:'#0D9488', marginBottom:4, display:'flex', alignItems:'center', gap:6 }}>
+                  <span className="material-icons" style={{fontSize:16}}>event_repeat</span>
+                  Program Özeti
+                </div>
+                <div style={{ fontSize:13 }}>
+                  <strong>Kortlar:</strong> {schedSelCourts.map(id => `Kort ${schedCourts.find(c => c.id === id)?.court_number ?? '?'}`).join(', ')}
+                </div>
+                <div style={{ fontSize:13 }}>
+                  <strong>Günler:</strong> {schedSelDays.map(d => ['Pazar','Pazartesi','Salı','Çarşamba','Perşembe','Cuma','Cumartesi'][d]).join(', ')}
+                </div>
+                <div style={{ fontSize:13 }}>
+                  <strong>Saat:</strong> {String(schedStartH).padStart(2,'0')}:00 – {String(schedEndH).padStart(2,'0')}:00 ({schedEndH - schedStartH} saat)
+                </div>
+              </div>
+            )}
+          </div>
+        </Modal>
+      )}
+    </div>
+  );
+}
+
+// ═══════════════════════════════════════════════════════════════
+// DERS PAKETLERİ
+// ═══════════════════════════════════════════════════════════════
+function LessonPackagesScreen({ clubId }) {
+  const { useState, useEffect } = React;
+
+  const [tab,           setTab]          = useState('packages');
+  const [packages,      setPackages]     = useState([]);
+  const [coaches,       setCoaches]      = useState([]);
+  const [loading,       setLoading]      = useState(true);
+  const [playerPkgs,    setPlayerPkgs]   = useState([]);
+  const [playerLoading, setPlayerLoading]= useState(false);
+  const [stats,         setStats]        = useState(null);
+
+  // Paket oluştur/düzenle
+  const [pkgModal,  setPkgModal]  = useState(null);
+  const [form,      setForm]      = useState({});
+  const [saving,    setSaving]    = useState(false);
+
+  // Ödeme onay modalı
+  const [confirmModal, setConfirmModal] = useState(null);
+  const [confirming,   setConfirming]   = useState(false);
+
+  useEffect(() => { if (clubId) { loadPackages(); loadCoaches(); loadStats(); } }, [clubId]);
+  useEffect(() => { if (clubId && tab !== 'packages') loadPlayerPackages(); }, [tab, clubId]);
+
+  const loadPackages = async () => {
+    setLoading(true);
+    const data = await LessonPackageSvc.getClubPackages(clubId);
+    setPackages(data);
+    setLoading(false);
+  };
+
+  const loadCoaches = async () => {
+    const { data } = await sb.from('club_coaches').select('id,full_name,individual_coach_id').eq('club_id', clubId).eq('is_active', true);
+    setCoaches(data || []);
+  };
+
+  const loadPlayerPackages = async () => {
+    setPlayerLoading(true);
+    const data = await LessonPackageSvc.getPlayerPackages(clubId);
+    setPlayerPkgs(data);
+    setPlayerLoading(false);
+  };
+
+  const loadStats = async () => {
+    const s = await LessonPackageSvc.getPackageStats(clubId);
+    setStats(s);
+  };
+
+  const openCreate = () => {
+    setForm({ name: '', description: '', total_lessons: 10, price: '', validity_days: 90, coach_percentage: 70, coach_id: '', is_active: true });
+    setPkgModal({ type: 'add' });
+  };
+
+  const openEdit = (pkg) => {
+    // coach_id = profiles.id — dropdownda club_coaches.id gösteriyoruz, eşleştir
+    const clubCoach = coaches.find(c => c.individual_coach_id === pkg.coach_id || c.id === pkg.coach_id);
+    setForm({ ...pkg, coach_id: clubCoach?.id || '' });
+    setPkgModal({ type: 'edit', pkg });
+  };
+
+  const savePkg = async () => {
+    if (!form.name?.trim()) { alert('Paket adı zorunludur.'); return; }
+    if (!form.total_lessons || Number(form.total_lessons) < 1) { alert('Ders sayısı en az 1 olmalı.'); return; }
+    if (form.price === '' || form.price === null) { alert('Fiyat zorunludur.'); return; }
+    setSaving(true);
+    try {
+      const payload = {
+        name:             form.name.trim(),
+        description:      form.description?.trim() || null,
+        total_lessons:    Number(form.total_lessons),
+        price:            Number(form.price),
+        validity_days:    Number(form.validity_days) || 90,
+        coach_percentage: Number(form.coach_percentage) || 70,
+        coach_id:         coachProfileId(form.coach_id) || null,
+        is_active:        form.is_active !== false,
+      };
+      if (pkgModal.type === 'add') {
+        await LessonPackageSvc.createPackage(clubId, payload);
+      } else {
+        await LessonPackageSvc.updatePackage(form.id, payload);
+      }
+      setPkgModal(null);
+      loadPackages(); loadStats();
+    } catch (e) { alert(e.message); }
+    finally { setSaving(false); }
+  };
+
+  const toggleActive = async (pkg) => {
+    try { await LessonPackageSvc.toggleActive(pkg.id, !pkg.is_active); loadPackages(); }
+    catch (e) { alert(e.message); }
+  };
+
+  const deletePkg = async (pkg) => {
+    if (!confirm(`"${pkg.name}" paketini silmek istediğinize emin misiniz?`)) return;
+    try { await LessonPackageSvc.deletePackage(pkg.id); loadPackages(); loadStats(); }
+    catch (e) { alert(e.message); }
+  };
+
+  const doConfirmPayment = async () => {
+    const pp  = confirmModal.playerPkg;
+    const pkg = pp.package;
+    setConfirming(true);
+    try {
+      await LessonPackageSvc.confirmPayment(
+        pp.id, pkg?.validity_days, pkg?.price,
+        pp.player?.full_name || 'Öğrenci', pkg?.name || 'Ders Paketi', clubId
+      );
+      setConfirmModal(null);
+      loadPlayerPackages(); loadStats();
+    } catch (e) { alert(e.message); }
+    finally { setConfirming(false); }
+  };
+
+  const activeStudents  = playerPkgs.filter(p => p.payment_status === 'paid');
+  const pendingStudents = playerPkgs.filter(p => p.payment_status === 'pending');
+  const perLesson = (pkg) => pkg.total_lessons > 0 ? pkg.price / pkg.total_lessons : 0;
+  // lesson_packages.coach_id = profiles.id = club_coaches.individual_coach_id
+  const coachName = (coachId) => {
+    if (!coachId) return null;
+    const c = coaches.find(c => c.individual_coach_id === coachId || c.id === coachId);
+    return c?.full_name ?? null;
+  };
+  // Kaydetme için: club_coaches.id → individual_coach_id (profiles.id)
+  const coachProfileId = (clubCoachId) => {
+    if (!clubCoachId) return null;
+    const c = coaches.find(c => c.id === clubCoachId);
+    return c?.individual_coach_id ?? clubCoachId;
+  };
+
+  return (
+    <div className="page fade-in">
+      <div className="page-head">
+        <div>
+          <h1>Ders Paketleri</h1>
+          <div className="sub">{packages.length} paket tanımı</div>
+        </div>
+        {tab === 'packages' && (
+          <button className="btn btn-pri" onClick={openCreate}>
+            <span className="material-icons">add</span> Paket Oluştur
+          </button>
+        )}
+      </div>
+
+      {/* İstatistik kartları */}
+      {stats && (
+        <div style={{ display:'grid', gridTemplateColumns:'repeat(auto-fill,minmax(160px,1fr))', gap:10, marginBottom:16 }}>
+          {[
+            { label:'Toplam Gelir',   value: fmtMoney(stats.totalRevenue), icon:'account_balance_wallet', color:'#22C55E' },
+            { label:'Aktif Paket',    value: stats.activeCount,            icon:'school',                 color:'#003399' },
+            { label:'Bekleyen',       value: stats.pendingCount,           icon:'pending',                color:'#F59E0B' },
+            { label:'Tamamlanan',     value: stats.completedCount,         icon:'check_circle',           color:'#9CA3AF' },
+          ].map(s => (
+            <div key={s.label} className="card" style={{ padding:'12px 14px', display:'flex', alignItems:'center', gap:10 }}>
+              <span className="material-icons" style={{ color: s.color, fontSize:22 }}>{s.icon}</span>
+              <div>
+                <div style={{ fontWeight:800, fontSize:16 }}>{s.value}</div>
+                <div style={{ fontSize:11, color:'var(--text-2)' }}>{s.label}</div>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {/* Sekmeler */}
+      <div style={{ display:'flex', gap:8, marginBottom:16 }}>
+        {[
+          { key:'packages', label:'Paketler',    icon:'inventory_2' },
+          { key:'students', label:'Öğrenciler',  icon:'school' },
+          { key:'pending',  label:`Bekleyen${pendingStudents.length ? ` (${pendingStudents.length})` : ''}`, icon:'pending' },
+        ].map(t => (
+          <button key={t.key}
+            className={'btn btn-sm ' + (tab === t.key ? 'btn-pri' : 'btn-ghost')}
+            onClick={() => setTab(t.key)}>
+            <span className="material-icons" style={{fontSize:15}}>{t.icon}</span>
+            {t.label}
+          </button>
+        ))}
+      </div>
+
+      {/* ── PAKETLER SEKMESİ ── */}
+      {tab === 'packages' && (
+        loading ? <Spinner /> : packages.length === 0 ? (
+          <EmptyState icon="inventory_2" title="Henüz paket yok" sub="İlk ders paketini oluşturun." />
+        ) : (
+          <div style={{ display:'grid', gridTemplateColumns:'repeat(auto-fill,minmax(300px,1fr))', gap:14 }}>
+            {packages.map(pkg => (
+              <div key={pkg.id} className="card" style={{ display:'flex', flexDirection:'column', gap:10 }}>
+                <div style={{ display:'flex', justifyContent:'space-between', alignItems:'flex-start' }}>
+                  <div style={{ fontWeight:800, fontSize:16 }}>{pkg.name}</div>
+                  <button
+                    style={{ background:'none', border:'none', cursor:'pointer', padding:'3px 10px', borderRadius:20,
+                      backgroundColor: pkg.is_active ? '#DCFCE7' : '#FEF3C7',
+                      color: pkg.is_active ? '#22C55E' : '#F59E0B', fontSize:11, fontWeight:700, flexShrink:0 }}
+                    onClick={() => toggleActive(pkg)}>
+                    {pkg.is_active ? 'Aktif' : 'Pasif'}
+                  </button>
+                </div>
+
+                {pkg.description && <p style={{ fontSize:13, color:'var(--text-2)', margin:0 }}>{pkg.description}</p>}
+
+                <div style={{ display:'flex', flexWrap:'wrap', gap:6 }}>
+                  <span style={{ fontSize:12, background:'#EEF2FF', color:'var(--brand-navy)', border:'1px solid #C7D2FE', borderRadius:8, padding:'4px 9px', fontWeight:700 }}>
+                    {pkg.total_lessons} ders
+                  </span>
+                  <span style={{ fontSize:12, background:'#F0FDF4', color:'#22C55E', border:'1px solid #BBF7D0', borderRadius:8, padding:'4px 9px', fontWeight:700 }}>
+                    {fmtMoney(pkg.price)}
+                  </span>
+                  <span style={{ fontSize:12, background:'var(--bg)', color:'var(--text-2)', border:'1px solid var(--border)', borderRadius:8, padding:'4px 9px' }}>
+                    {pkg.validity_days} gün geçerli
+                  </span>
+                  {pkg.coach_percentage < 100 && (
+                    <span style={{ fontSize:12, background:'#F5F3FF', color:'#7C3AED', border:'1px solid #DDD6FE', borderRadius:8, padding:'4px 9px' }}>
+                      Koç %{pkg.coach_percentage}
+                    </span>
+                  )}
+                  {coachName(pkg.coach_id) && (
+                    <span style={{ fontSize:12, background:'#EEF2FF', color:'var(--brand-navy)', border:'1px solid #C7D2FE', borderRadius:8, padding:'4px 9px', fontWeight:600 }}>
+                      {coachName(pkg.coach_id)}
+                    </span>
+                  )}
+                </div>
+
+                <div style={{ fontSize:12, color:'var(--text-2)' }}>
+                  Ders başı: <strong>{fmtMoney(perLesson(pkg))}</strong>
+                  {pkg.coach_percentage < 100 && (
+                    <> · Koç payı: <strong>{fmtMoney(perLesson(pkg) * pkg.coach_percentage / 100)}</strong>/ders</>
+                  )}
+                </div>
+
+                <div style={{ height:1, background:'var(--border)' }} />
+
+                <div style={{ display:'flex', gap:6 }}>
+                  <button className="btn btn-ghost btn-sm btn-icon" title="Düzenle" onClick={() => openEdit(pkg)}>
+                    <span className="material-icons" style={{fontSize:15}}>edit</span>
+                  </button>
+                  <button className="btn btn-danger btn-sm btn-icon" title="Sil" onClick={() => deletePkg(pkg)}>
+                    <span className="material-icons" style={{fontSize:15}}>delete</span>
+                  </button>
+                </div>
+              </div>
+            ))}
+          </div>
+        )
+      )}
+
+      {/* ── ÖĞRENCİLER SEKMESİ ── */}
+      {tab === 'students' && (
+        playerLoading ? <Spinner /> : activeStudents.length === 0 ? (
+          <EmptyState icon="school" title="Aktif öğrenci paketi yok" sub="Öğrenciler ders paketi satın aldığında burada görünür." />
+        ) : (
+          <div style={{ display:'flex', flexDirection:'column', gap:10 }}>
+            {activeStudents.map(pp => {
+              const pkg       = pp.package;
+              const used      = pp.used_lessons ?? 0;
+              const total     = pp.total_lessons ?? pkg?.total_lessons ?? 0;
+              const pct       = total > 0 ? Math.round(used / total * 100) : 0;
+              const expired   = pp.expiry_date && new Date(pp.expiry_date) < new Date();
+              const completed = pp.status === 'completed';
+              return (
+                <div key={pp.id} className="card" style={{ display:'flex', alignItems:'center', gap:14 }}>
+                  <Av name={pp.player?.full_name} size="md" />
+                  <div style={{ flex:1, minWidth:0 }}>
+                    <div style={{ fontWeight:700, fontSize:14 }}>{pp.player?.full_name || '—'}</div>
+                    <div style={{ fontSize:12, color:'var(--text-2)', marginTop:2 }}>{pkg?.name || '—'}</div>
+                    <div style={{ marginTop:8 }}>
+                      <div style={{ display:'flex', justifyContent:'space-between', fontSize:11, color:'var(--text-2)', marginBottom:4 }}>
+                        <span>{used} / {total} ders kullanıldı</span>
+                        <span>{pct}%</span>
+                      </div>
+                      <div style={{ height:6, background:'var(--border)', borderRadius:3, overflow:'hidden' }}>
+                        <div style={{ height:'100%', width:`${pct}%`, borderRadius:3, transition:'width 0.3s',
+                          background: completed ? '#9CA3AF' : expired ? '#F59E0B' : 'var(--brand-navy)' }} />
+                      </div>
+                    </div>
+                  </div>
+                  <div style={{ display:'flex', flexDirection:'column', alignItems:'flex-end', gap:6, flexShrink:0 }}>
+                    <span style={{ fontSize:11, fontWeight:700, padding:'3px 10px', borderRadius:20,
+                      background: completed ? '#F3F4F6' : expired ? '#FEF3C7' : '#DCFCE7',
+                      color:      completed ? '#6B7280' : expired ? '#F59E0B' : '#22C55E' }}>
+                      {completed ? 'Tamamlandı' : expired ? 'Süresi Doldu' : 'Aktif'}
+                    </span>
+                    {pp.expiry_date && (
+                      <span style={{ fontSize:11, color:'var(--text-2)' }}>Son: {fmtDate(pp.expiry_date)}</span>
+                    )}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        )
+      )}
+
+      {/* ── BEKLEYEN SEKMESİ ── */}
+      {tab === 'pending' && (
+        playerLoading ? <Spinner /> : pendingStudents.length === 0 ? (
+          <EmptyState icon="pending" title="Bekleyen ödeme yok" sub="Yeni paket satın alımları burada görünür." />
+        ) : (
+          <div style={{ display:'flex', flexDirection:'column', gap:10 }}>
+            {pendingStudents.map(pp => {
+              const pkg = pp.package;
+              return (
+                <div key={pp.id} className="card" style={{ display:'flex', alignItems:'center', gap:14 }}>
+                  <Av name={pp.player?.full_name} size="md" />
+                  <div style={{ flex:1, minWidth:0 }}>
+                    <div style={{ fontWeight:700, fontSize:14 }}>{pp.player?.full_name || '—'}</div>
+                    <div style={{ fontSize:12, color:'var(--text-2)', marginTop:2 }}>
+                      {pkg?.name || '—'} · {pkg?.total_lessons} ders
+                    </div>
+                    <div style={{ fontSize:12, color:'var(--text-2)', marginTop:2 }}>
+                      Satın alım: {fmtDate(pp.purchase_date || pp.created_at)}
+                    </div>
+                  </div>
+                  <div style={{ display:'flex', flexDirection:'column', alignItems:'flex-end', gap:8, flexShrink:0 }}>
+                    <div style={{ fontWeight:800, fontSize:18, color:'#22C55E' }}>{fmtMoney(pkg?.price)}</div>
+                    <button className="btn btn-pri btn-sm" onClick={() => setConfirmModal({ playerPkg: pp })}>
+                      <span className="material-icons" style={{fontSize:14}}>check_circle</span>
+                      Ödemeyi Onayla
+                    </button>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        )
+      )}
+
+      {/* ══ PAKET OLUŞTUR / DÜZENLE MODALI ══ */}
+      {pkgModal && (
+        <Modal
+          title={pkgModal.type === 'add' ? 'Paket Oluştur' : 'Paketi Düzenle'}
+          wide
+          onClose={() => setPkgModal(null)}
+          footer={
+            <>
+              <button className="btn btn-ghost btn-sm" onClick={() => setPkgModal(null)}>Vazgeç</button>
+              <button className="btn btn-pri btn-sm" onClick={savePkg} disabled={saving}>
+                {saving ? 'Kaydediliyor…' : (pkgModal.type === 'add' ? 'Oluştur' : 'Güncelle')}
+              </button>
+            </>
+          }
+        >
+          <div className="fields" style={{ gap:14 }}>
+            <Field label="Paket Adı *">
+              <input value={form.name || ''} placeholder="Örn: 10 Ders Paketi"
+                onChange={e => setForm({...form, name: e.target.value})} />
+            </Field>
+            <Field label="Açıklama">
+              <textarea rows={2} value={form.description || ''} placeholder="Paket hakkında kısa bilgi…"
+                onChange={e => setForm({...form, description: e.target.value})} style={{ resize:'vertical' }} />
+            </Field>
+
+            <div className="fields-2">
+              <Field label="Ders Sayısı *">
+                <input type="number" min={1} placeholder="10" value={form.total_lessons ?? ''}
+                  onChange={e => setForm({...form, total_lessons: e.target.value})} />
+              </Field>
+              <Field label="Fiyat (₺) *">
+                <input type="number" min={0} placeholder="0" value={form.price ?? ''}
+                  onChange={e => setForm({...form, price: e.target.value})} />
+              </Field>
+            </div>
+
+            <div className="fields-2">
+              <Field label="Geçerlilik Süresi (gün)">
+                <input type="number" min={1} placeholder="90" value={form.validity_days ?? ''}
+                  onChange={e => setForm({...form, validity_days: e.target.value})} />
+              </Field>
+              <Field label="Koç Payı (%)">
+                <input type="number" min={0} max={100} placeholder="70" value={form.coach_percentage ?? ''}
+                  onChange={e => setForm({...form, coach_percentage: e.target.value})} />
+              </Field>
+            </div>
+
+            {Number(form.total_lessons) > 0 && Number(form.price) > 0 && (
+              <div style={{ background:'#F5F3FF', border:'1px solid #DDD6FE', borderRadius:8, padding:'8px 12px', fontSize:12, color:'#7C3AED' }}>
+                Ders başı: {fmtMoney(Number(form.price) / Number(form.total_lessons))}
+                {Number(form.coach_percentage) > 0 && Number(form.coach_percentage) < 100 && (
+                  <> · Koç payı/ders: {fmtMoney(Number(form.price) * Number(form.coach_percentage) / 100 / Number(form.total_lessons))}</>
+                )}
+              </div>
+            )}
+
+            <Field label="Antrenör (isteğe bağlı)">
+              <select value={form.coach_id || ''} onChange={e => setForm({...form, coach_id: e.target.value})}>
+                <option value="">Antrenör seçin…</option>
+                {coaches.map(c => <option key={c.id} value={c.id}>{c.full_name}</option>)}
+              </select>
+            </Field>
+
+            <Switch on={form.is_active !== false} onChange={v => setForm({...form, is_active: v})} label="Aktif Paket" />
+          </div>
+        </Modal>
+      )}
+
+      {/* ══ ÖDEME ONAY MODALI ══ */}
+      {confirmModal && (
+        <Modal
+          title="Ödemeyi Onayla"
+          onClose={() => setConfirmModal(null)}
+          footer={
+            <>
+              <button className="btn btn-ghost btn-sm" onClick={() => setConfirmModal(null)}>Vazgeç</button>
+              <button className="btn btn-pri btn-sm" onClick={doConfirmPayment} disabled={confirming}>
+                {confirming ? 'İşleniyor…' : 'Ödemeyi Onayla'}
+              </button>
+            </>
+          }
+        >
+          <div style={{ display:'flex', flexDirection:'column', gap:12 }}>
+            <div style={{ background:'var(--bg)', borderRadius:10, padding:'12px 16px', border:'1px solid var(--border)' }}>
+              <div style={{ fontWeight:700, fontSize:15 }}>{confirmModal.playerPkg.player?.full_name || '—'}</div>
+              <div style={{ fontSize:13, color:'var(--text-2)', marginTop:4 }}>{confirmModal.playerPkg.package?.name}</div>
+              <div style={{ fontSize:13, color:'var(--text-2)' }}>{confirmModal.playerPkg.package?.total_lessons} ders · {confirmModal.playerPkg.package?.validity_days} gün geçerli</div>
+            </div>
+            <div style={{ background:'#F0FDF4', border:'1px solid #BBF7D0', borderRadius:10, padding:'12px 16px' }}>
+              <div style={{ fontSize:13, color:'#22C55E', fontWeight:600 }}>Tahsil edilecek tutar</div>
+              <div style={{ fontSize:26, fontWeight:800, color:'#22C55E' }}>{fmtMoney(confirmModal.playerPkg.package?.price)}</div>
+            </div>
+            <div style={{ fontSize:13, color:'var(--text-2)' }}>
+              Onayladığınızda bu tutar finanslara "Ders Paketi Geliri" olarak kaydedilecek ve öğrencinin paketi aktif hale gelecektir.
+            </div>
+          </div>
         </Modal>
       )}
     </div>

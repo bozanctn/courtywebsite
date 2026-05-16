@@ -450,8 +450,7 @@ button { font-family: var(--font); cursor: pointer; }
   background-position: center top;
   background-repeat: no-repeat;
 }
-.home-screen        { background-image: url('screenshots/player/player-01-home.jpeg'); }
-.reservation-screen { background-image: url('screenshots/club/club-01-dashboard.jpeg'); }
+.home-screen { background-image: url('screenshots/player/player-01-home.jpeg'); }
 
 /* Second phone (tilted) */
 .phone-2,
