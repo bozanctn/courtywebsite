@@ -86,7 +86,10 @@ function fmtDateTime(iso) {
 }
 
 function todayISO() {
-  return new Date().toISOString().split('T')[0];
+  // UTC+3 (Türkiye) yerel tarihini döndürür — UTC değil
+  const d = new Date();
+  d.setUTCHours(d.getUTCHours() + 3);
+  return d.toISOString().slice(0, 10);
 }
 
 function isoToLocal(iso) {

@@ -859,6 +859,15 @@ function AnalyticsScreen({ clubId }) {
           )}
         </div>
       </div>
+
+      {/* ── Akıllı İçgörüler ── */}
+      <div style={{ marginTop:14 }}>
+        <div style={{ fontWeight:700, fontSize:17, marginBottom:12, display:'flex', alignItems:'center', gap:8 }}>
+          <span className="material-icons" style={{ color:'var(--brand-navy)', fontSize:20 }}>insights</span>
+          Akıllı İçgörüler
+        </div>
+        <AnalyticsInsightsPanel clubId={clubId} />
+      </div>
     </div>
   );
 }

@@ -104,12 +104,11 @@ body {
 .field-pw { position: relative; }
 .field-pw input { padding-right: 42px; width: 100%; }
 .toggle-pw {
-  position: absolute; right: 12px; top: 50%; transform: translateY(-50%);
+  position: absolute; right: 10px; top: 50%; transform: translateY(-50%);
   background: none; border: none; cursor: pointer; color: var(--text-2);
-  font-size: 20px; line-height: 1; padding: 0;
-  font-family: 'Material Icons'; font-style: normal;
-  -webkit-font-feature-settings: 'liga'; -webkit-font-smoothing: antialiased;
+  display: flex; align-items: center; padding: 4px;
 }
+.toggle-pw:hover { color: var(--text-1); }
 .toggle-pw:hover { color: var(--text-1); }
 
 .forgot { text-align: right; }
@@ -211,7 +210,13 @@ body {
           <label for="password">Şifre</label>
           <div class="field-pw">
             <input type="password" id="password" placeholder="••••••••" autocomplete="current-password" required>
-            <button type="button" class="toggle-pw" id="togglePw" title="Şifreyi göster/gizle">visibility_off</button>
+            <button type="button" class="toggle-pw" id="togglePw" title="Şifreyi göster/gizle">
+              <svg id="eyeIcon" xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M17.94 17.94A10.07 10.07 0 0112 20c-7 0-11-8-11-8a18.45 18.45 0 015.06-5.94"/>
+                <path d="M9.9 4.24A9.12 9.12 0 0112 4c7 0 11 8 11 8a18.5 18.5 0 01-2.16 3.19"/>
+                <line x1="1" y1="1" x2="23" y2="23"/>
+              </svg>
+            </button>
           </div>
         </div>
         <div class="forgot">
@@ -253,10 +258,14 @@ body {
   const togglePw = document.getElementById('togglePw');
   const pwInput  = document.getElementById('password');
 
+  const eyeOpen  = `<path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/>`;
+  const eyeClosed = `<path d="M17.94 17.94A10.07 10.07 0 0112 20c-7 0-11-8-11-8a18.45 18.45 0 015.06-5.94"/><path d="M9.9 4.24A9.12 9.12 0 0112 4c7 0 11 8 11 8a18.5 18.5 0 01-2.16 3.19"/><line x1="1" y1="1" x2="23" y2="23"/>`;
+  const eyeIcon = document.getElementById('eyeIcon');
+
   togglePw.addEventListener('click', () => {
     const show = pwInput.type === 'password';
     pwInput.type = show ? 'text' : 'password';
-    togglePw.textContent = show ? 'visibility' : 'visibility_off';
+    eyeIcon.innerHTML = show ? eyeOpen : eyeClosed;
   });
 
   const appStoreLink = document.getElementById('appStoreLink');

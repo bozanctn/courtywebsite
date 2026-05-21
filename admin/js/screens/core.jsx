@@ -1,5 +1,76 @@
 // ── Dashboard, Rezervasyonlar, Kortlar ─────────────────────────
 
+// Rezervasyon formunda üye arama ve limit kontrolü için bileşen
+function MemberLimitSearch({ clubId, value, onChange }) {
+  const { useState, useEffect } = React;
+  const [query,   setQuery]   = React.useState('');
+  const [results, setResults] = React.useState([]);
+  const [chosen,  setChosen]  = React.useState(null);
+  const [limWarn, setLimWarn] = React.useState([]);
+
+  const search = async (q) => {
+    setQuery(q);
+    if (q.length < 2) { setResults([]); return; }
+    const { data } = await sb.from('club_memberships')
+      .select('user_id, member_name, profile:profiles!club_memberships_user_id_fkey(id, full_name)')
+      .eq('club_id', clubId).eq('status', 'active')
+      .limit(8);
+    const filtered = (data || []).filter(m => {
+      const name = m.profile?.full_name || m.member_name || '';
+      return name.toLowerCase().includes(q.toLowerCase());
+    });
+    setResults(filtered);
+  };
+
+  const select = (m) => {
+    const name = m.profile?.full_name || m.member_name || '';
+    setChosen({ id: m.user_id || m.id, name });
+    setResults([]);
+    setQuery('');
+    onChange(m.user_id || m.id);
+  };
+
+  const clear = () => {
+    setChosen(null);
+    setLimWarn([]);
+    onChange(null);
+  };
+
+  if (chosen) {
+    return (
+      <div style={{ display:'flex', alignItems:'center', gap:8, background:'#EEF2FF', borderRadius:8, padding:'8px 12px' }}>
+        <span className="material-icons" style={{ color:'var(--brand-navy)', fontSize:16 }}>person</span>
+        <span style={{ flex:1, fontWeight:600, fontSize:13 }}>{chosen.name}</span>
+        <button type="button" onClick={clear}
+          style={{ background:'none', border:'none', cursor:'pointer', color:'var(--text-2)', padding:0 }}>
+          <span className="material-icons" style={{ fontSize:16 }}>close</span>
+        </button>
+      </div>
+    );
+  }
+
+  return (
+    <div style={{ position:'relative' }}>
+      <input placeholder="Üye adı ara…" value={query} onChange={e => search(e.target.value)}
+        style={{ width:'100%' }} />
+      {results.length > 0 && (
+        <div style={{ position:'absolute', top:'100%', left:0, right:0, zIndex:20, background:'#fff', border:'1px solid var(--border)', borderRadius:8, boxShadow:'0 4px 12px rgba(0,0,0,0.1)', overflow:'hidden' }}>
+          {results.map(m => {
+            const name = m.profile?.full_name || m.member_name || '';
+            return (
+              <div key={m.user_id || m.id}
+                style={{ padding:'10px 14px', cursor:'pointer', borderBottom:'1px solid var(--border)', fontSize:13, fontWeight:500 }}
+                onMouseDown={() => select(m)}>
+                {name}
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ═══════════════════════════════════════════════════════════════
 // DASHBOARD
 // ═══════════════════════════════════════════════════════════════
@@ -166,13 +237,26 @@ function ReservationsScreen({ clubId }) {
   const [loadingL,     setLoadingL]     = useState(false);
   const [lessonModal,  setLessonModal]  = useState(null);
   const [lessonForm,   setLessonForm]   = useState({});
+  const [lessonMarkingId, setLessonMarkingId] = useState(null);
 
   useEffect(() => { if (clubId) { loadCourts(); loadDotDates(); } }, [clubId]);
   useEffect(() => { if (clubId) loadDay(); }, [clubId, selDate]);
   useEffect(() => { if (clubId && mainTab === 'lessons') loadLessons(); }, [clubId, mainTab, selDate]);
 
+  // Süre seçilince bitiş saatini otomatik hesapla (mobil ile aynı)
+  useEffect(() => {
+    if (!lessonForm.duration || !lessonForm.start_time || lessonForm.start_time.length < 5) return;
+    const [sh, sm] = lessonForm.start_time.split(':').map(Number);
+    if (isNaN(sh) || isNaN(sm)) return;
+    const totalMin = sh * 60 + sm + Math.round(lessonForm.duration * 60);
+    const endH = Math.floor(totalMin / 60) % 24;
+    const endM = totalMin % 60;
+    const newEnd = `${String(endH).padStart(2,'0')}:${String(endM).padStart(2,'0')}`;
+    setLessonForm(prev => ({ ...prev, end_time: newEnd }));
+  }, [lessonForm.duration, lessonForm.start_time]);
+
   const loadCourts = async () => {
-    const { data } = await sb.from('courts').select('id,court_number,court_type').eq('club_id', clubId).eq('is_active', true);
+    const { data } = await sb.from('courts').select('id,court_number,court_type,hourly_rate').eq('club_id', clubId).eq('is_active', true);
     setCourts(data || []);
   };
 
@@ -225,22 +309,195 @@ function ReservationsScreen({ clubId }) {
     loadDay();
   };
 
+  const markBookingPaid = async (booking) => {
+    const amount = Number(booking.total_amount) || 0;
+    const amtStr = amount > 0 ? `\n\nTutar: ₺${amount.toLocaleString('tr-TR')}` : '';
+    if (!confirm(`Bu rezervasyon için ödeme alındı mı?${amtStr}`)) return;
+    try {
+      const { error } = await sb.from('bookings').update({ payment_status: 'paid' }).eq('id', booking.id);
+      if (error) throw error;
+      if (amount > 0) {
+        const playerName = booking.booking_players?.find(p => p.is_primary_player)?.profiles?.full_name
+          || booking.booking_players?.[0]?.profiles?.full_name || 'Misafir';
+        await sb.from('club_finances').insert({
+          club_id:     clubId,
+          type:        'income',
+          category:    'Rezervasyon Geliri',
+          amount,
+          description: `${playerName} - Kort ${booking.courts?.court_number || '?'} rezervasyon ödemesi`,
+          date:        booking.start_time?.slice(0, 10) || todayISO(),
+        });
+      }
+      loadDay();
+    } catch (e) { alert(e.message); }
+  };
+
   const openAdd = () => {
     const dt = selDate + 'T09:00';
     setForm({ start_time: dt, end_time: selDate + 'T10:00', court_id: courts[0]?.id || '', status: 'confirmed', notes: '' });
     setModal({ type: 'add' });
   };
 
+  // ── Üyelik limit kontrolü ───────────────────────────────────
+  const checkMembershipLimits = async (memberId, startTime) => {
+    const warnings = [];
+    try {
+      const { data: membership } = await sb.from('club_memberships')
+        .select('*, package:club_membership_packages(*)')
+        .eq('user_id', memberId).eq('club_id', clubId).eq('status', 'active').maybeSingle();
+
+      if (!membership?.package) return warnings;
+      const pkg = membership.package;
+
+      // Geçerli günler kontrolü
+      if (pkg.valid_days && pkg.valid_days !== 'all') {
+        const day = new Date(startTime).getDay(); // 0=Paz, 6=Cmt
+        const isWeekend = day === 0 || day === 6;
+        if (pkg.valid_days === 'weekdays' && isWeekend)
+          warnings.push('Bu üyenin paketi sadece hafta içi geçerli. Hafta sonu rezervasyon kısıtlı!');
+        if (pkg.valid_days === 'weekends' && !isWeekend)
+          warnings.push('Bu üyenin paketi sadece hafta sonu geçerli. Hafta içi rezervasyon kısıtlı!');
+      }
+
+      // Yaptırım kontrolü
+      if (pkg.penalty_no_reservation && pkg.penalty_duration_days) {
+        const { data: lastCancelled } = await sb.from('bookings')
+          .select('updated_at')
+          .in('court_id', await getClubCourtIds(clubId))
+          .eq('status', 'cancelled')
+          .order('updated_at', { ascending: false })
+          .limit(1);
+        // Basit kontrol: son iptali bulduk muyuz?
+        if (lastCancelled?.length > 0) {
+          const since = new Date(lastCancelled[0].updated_at);
+          const cutoff = new Date(since);
+          cutoff.setDate(cutoff.getDate() + pkg.penalty_duration_days);
+          if (new Date() < cutoff)
+            warnings.push(`Bu üye yaptırım cezası altında — ${cutoff.toLocaleDateString('tr-TR')} tarihine kadar rezervasyon yapamaz.`);
+        }
+      }
+
+      // Haftalık saat limiti kontrolü
+      if (pkg.weekly_court_hours_limit) {
+        const weekStart = new Date(startTime);
+        weekStart.setDate(weekStart.getDate() - weekStart.getDay());
+        weekStart.setHours(0, 0, 0, 0);
+        const weekEnd = new Date(weekStart);
+        weekEnd.setDate(weekStart.getDate() + 7);
+
+        const courtIds = await getClubCourtIds(clubId);
+        if (courtIds.length > 0) {
+          const { data: weekBks } = await sb.from('booking_players')
+            .select('booking:bookings!booking_players_booking_id_fkey(start_time, end_time, status)')
+            .eq('player_id', memberId)
+            .not('booking.status', 'eq', 'cancelled');
+
+          let usedHours = 0;
+          (weekBks || []).forEach(bp => {
+            const b = bp.booking;
+            if (!b?.start_time) return;
+            const bs = new Date(b.start_time);
+            if (bs >= weekStart && bs < weekEnd) {
+              const be = new Date(b.end_time);
+              usedHours += (be - bs) / 3600000;
+            }
+          });
+
+          const remaining = pkg.weekly_court_hours_limit - usedHours;
+          if (remaining <= 0) {
+            warnings.push(`Bu üye haftalık kort limitini (${pkg.weekly_court_hours_limit} saat) doldurmuş!`);
+          } else if (remaining < 1) {
+            warnings.push(`Bu üyenin bu hafta sadece ${(remaining * 60).toFixed(0)} dakika hakkı kaldı.`);
+          }
+        }
+      }
+    } catch (e) { console.error('checkMembershipLimits:', e); }
+    return warnings;
+  };
+
   const saveBooking = async () => {
+    // Üye seçildiyse limit kontrolü yap
+    if (form.member_id) {
+      const warnings = await checkMembershipLimits(form.member_id, form.start_time);
+      if (warnings.length > 0) {
+        const proceed = confirm('⚠️ Üyelik Uyarısı:\n\n' + warnings.join('\n') + '\n\nYine de rezervasyon oluşturulsun mu?');
+        if (!proceed) return;
+      }
+    }
+    // ── Geçmiş tarih kontrolü ───────────────────────────────────
+    if (new Date(form.start_time) < new Date()) {
+      alert('Geçmiş bir tarihe rezervasyon oluşturamazsınız.');
+      return;
+    }
+
+    // ── Double booking kontrolü ──────────────────────────────────
+    if (form.court_id) {
+      const startDb = localTimeToDb(form.start_time);
+      const endDb   = localTimeToDb(form.end_time);
+      const dateStr = form.start_time.slice(0, 10);
+      const startHH = form.start_time.slice(11, 16);
+      const endHH   = form.end_time.slice(11, 16);
+
+      const [{ data: bConflict }, { data: mConflict }, { data: closures }] = await Promise.all([
+        sb.from('bookings').select('id').eq('court_id', form.court_id)
+          .in('status', ['pending', 'confirmed']).lt('start_time', endDb).gt('end_time', startDb),
+        sb.from('club_manual_lessons').select('id, start_time, end_time')
+          .eq('court_id', form.court_id).eq('date', dateStr),
+        sb.from('court_closures').select('*').eq('court_id', form.court_id).eq('is_active', true),
+      ]);
+
+      if (bConflict?.length > 0) { alert('Bu kort seçilen saatte zaten rezerve edilmiş.'); return; }
+
+      const hasManualConflict = (mConflict || []).some(l => {
+        const ls = (l.start_time || '').slice(0, 5);
+        const le = (l.end_time   || '').slice(0, 5);
+        return ls < endHH && le > startHH;
+      });
+      if (hasManualConflict) { alert('Bu kort seçilen saatte planlanmış bir ders var.'); return; }
+
+      const dow = new Date(dateStr + 'T12:00:00').getDay();
+      const closureBlock = (closures || []).some(cl => {
+        const cs = String(cl.start_hour ?? 0).padStart(2,'0') + ':00';
+        const ce = String(cl.end_hour   ?? 0).padStart(2,'0') + ':00';
+        if (!(cs < endHH && ce > startHH)) return false;
+        if (cl.closure_type === 'recurring_weekly') return cl.day_of_week === dow;
+        return (!cl.start_date || cl.start_date <= dateStr) && (!cl.end_date || cl.end_date >= dateStr);
+      });
+      if (closureBlock) { alert('Bu kort seçilen saatte kapalı (bakım veya etkinlik).'); return; }
+    }
     setSaving(true);
     try {
-      await sb.from('bookings').insert({
-        court_id:   form.court_id,
-        start_time: localTimeToDb(form.start_time),
-        end_time:   localTimeToDb(form.end_time),
-        status:     form.status || 'confirmed',
-        notes:      form.notes || null,
-      });
+      const { data: { user } } = await sb.auth.getUser();
+      if (!user) throw new Error('Oturum bulunamadı.');
+
+      const startDb = localTimeToDb(form.start_time);
+      const endDb   = localTimeToDb(form.end_time);
+      const durationHours = Math.round((new Date(endDb) - new Date(startDb)) / 3600000 * 100) / 100;
+      const court = courts.find(c => c.id === form.court_id);
+      const totalAmount = Math.round((court?.hourly_rate || 0) * durationHours * 100) / 100;
+
+      const { data: bk, error: bkErr } = await sb.from('bookings').insert({
+        court_id:        form.court_id,
+        user_id:         user.id,
+        start_time:      startDb,
+        end_time:        endDb,
+        status:          form.status || 'confirmed',
+        is_solo_booking: !form.member_id,
+        duration_hours:  durationHours,
+        total_amount:    totalAmount,
+      }).select().single();
+      if (bkErr) throw bkErr;
+
+      // Üye seçildiyse booking_players'a ekle
+      if (form.member_id && bk?.id) {
+        await sb.from('booking_players').insert({
+          booking_id:        bk.id,
+          player_id:         form.member_id,
+          is_primary_player: true,
+          status:            'confirmed',
+        });
+      }
+
       setModal(null);
       loadDay();
     } catch (e) { alert(e.message); }
@@ -257,8 +514,8 @@ function ReservationsScreen({ clubId }) {
 
       // Kulübün koçlarını al
       const [coachRes, courtRes] = await Promise.all([
-        sb.from('club_coaches').select('id, full_name').eq('club_id', clubId),
-        sb.from('courts').select('id, court_number').eq('club_id', clubId).eq('is_active', true),
+        sb.from('club_coaches').select('id, full_name, hourly_rate').eq('club_id', clubId),
+        sb.from('courts').select('id, court_number, hourly_rate').eq('club_id', clubId).eq('is_active', true),
       ]);
       const allClubCoaches = coachRes.data || [];
       const myCoachIds = allClubCoaches.map(c => c.id);
@@ -299,7 +556,7 @@ function ReservationsScreen({ clubId }) {
 
       // 2) club_manual_lessons tablosu — kulüp yöneticisinin eklediği manuel dersler
       const { data: manual } = await sb.from('club_manual_lessons')
-        .select('*, club_coaches(full_name), courts(court_number)')
+        .select('*, club_coaches(full_name)')
         .eq('club_id', clubId)
         .eq('date', d)
         .order('start_time', { ascending: true });
@@ -313,18 +570,19 @@ function ReservationsScreen({ clubId }) {
           student_name:   m.student_name || null,
           coach_name:     m.coach_name || m.club_coaches?.full_name || 'Antrenör',
           coach_id:       m.coach_id || null,
-          location:       m.location || (m.courts?.court_number ? `Kort ${m.courts.court_number}` : '—'),
-          notes:          m.notes || null,
+          court_id:       m.court_id || null,
+          court_fee:      m.court_fee || 0,
+          location:       m.location || '—',
           source:         'manual',
           payment_status: m.payment_status || 'unpaid',
-          amount:         m.amount || null,
+          amount:         m.amount || 0,
         });
       });
 
       // 3) lessons tablosu — koçların oluşturduğu dersler
       if (myCoachIds.length > 0) {
         const { data: directLessons } = await sb.from('lessons')
-          .select('id, start_time, end_time, student_name, club_coach_id, amount, payment_status, notes, courts(court_number)')
+          .select('id, start_time, end_time, student_name, club_coach_id, amount, payment_status, courts(court_number)')
           .in('club_coach_id', myCoachIds)
           .neq('status', 'cancelled')
           .gte('start_time', dbStart)
@@ -343,7 +601,6 @@ function ReservationsScreen({ clubId }) {
             coach_name:     l.club_coach_id ? (coachMap.get(l.club_coach_id) || 'Antrenör') : 'Antrenör',
             coach_id:       l.club_coach_id || null,
             location:       court?.court_number ? `Kort ${court.court_number}` : '—',
-            notes:          l.notes || null,
             source:         'lesson',
             payment_status: l.payment_status === 'paid' ? 'paid' : 'unpaid',
             amount:         l.amount || null,
@@ -358,28 +615,159 @@ function ReservationsScreen({ clubId }) {
   };
 
   const saveLesson = async () => {
+    const isNew = !lessonModal?.id;
+
+    // Zorunlu alan kontrolü
+    if (!lessonForm.date || !lessonForm.start_time || !lessonForm.end_time) {
+      alert('Tarih, başlangıç ve bitiş saati zorunludur.'); return;
+    }
+    if (!lessonForm.court_id) {
+      alert('Lütfen kort seçin.'); return;
+    }
+
+    // Geçmiş tarih kontrolü (yalnızca yeni ders)
+    if (isNew) {
+      if (new Date(`${lessonForm.date}T${lessonForm.start_time}`) < new Date()) {
+        alert('Geçmiş bir tarihe ders ekleyemezsiniz.'); return;
+      }
+    }
+
+    // Double booking kontrolü (yalnızca yeni ders)
+    if (isNew) {
+      const dateStr  = lessonForm.date;
+      const startHH  = lessonForm.start_time.slice(0, 5);
+      const endHH    = lessonForm.end_time.slice(0, 5);
+      const startDb  = localTimeToDb(`${dateStr}T${startHH}`);
+      const endDb    = localTimeToDb(`${dateStr}T${endHH}`);
+      const courtRow0 = lessonCourts.find(c => c.id === lessonForm.court_id);
+      const locationStr = courtRow0 ? `Kort ${courtRow0.court_number}` : '';
+
+      const [{ data: bConflict }, { data: mConflict }, { data: closures }] = await Promise.all([
+        sb.from('bookings').select('id').eq('court_id', lessonForm.court_id)
+          .in('status', ['pending', 'confirmed']).lt('start_time', endDb).gt('end_time', startDb),
+        sb.from('club_manual_lessons').select('id,start_time,end_time,location')
+          .eq('club_id', clubId).eq('date', dateStr),
+        sb.from('court_closures').select('*').eq('court_id', lessonForm.court_id).eq('is_active', true),
+      ]);
+
+      if (bConflict?.length > 0) { alert('Bu kort seçilen saatte zaten rezerve edilmiş.'); return; }
+
+      const hasManualConflict = (mConflict || [])
+        .filter(l => l.location === locationStr)
+        .some(l => {
+          const ls = (l.start_time || '').slice(0, 5);
+          const le = (l.end_time   || '').slice(0, 5);
+          return ls < endHH && le > startHH;
+        });
+      if (hasManualConflict) { alert('Bu kort seçilen saatte planlanmış bir ders var.'); return; }
+
+      const dow = new Date(dateStr + 'T12:00:00').getDay();
+      const closureBlock = (closures || []).some(cl => {
+        const cs = String(cl.start_hour ?? 0).padStart(2,'0') + ':00';
+        const ce = String(cl.end_hour   ?? 0).padStart(2,'0') + ':00';
+        if (!(cs < endHH && ce > startHH)) return false;
+        if (cl.closure_type === 'recurring_weekly') return cl.day_of_week === dow;
+        return (!cl.start_date || cl.start_date <= dateStr) && (!cl.end_date || cl.end_date >= dateStr);
+      });
+      if (closureBlock) {
+        if (!confirm('Bu kort seçilen saatte kapalı olarak işaretlenmiş. Yine de ders oluşturulsun mu?')) return;
+      }
+
+      if (!lessonForm.use_manual_coach && lessonForm.coach_id) {
+        const [sh, sm] = startHH.split(':').map(Number);
+        const [eh, em] = endHH.split(':').map(Number);
+        const startMin = sh * 60 + sm;
+        const endMin   = eh * 60 + em;
+        const lessonDow = new Date(dateStr + 'T12:00:00').getDay();
+        const coachLabel = coaches.find(c => c.id === lessonForm.coach_id)?.full_name || 'Antrenör';
+
+        // Manuel ders çakışması
+        const { data: coachConflict } = await sb.from('club_manual_lessons')
+          .select('id,start_time,end_time').eq('coach_id', lessonForm.coach_id).eq('date', dateStr);
+        const hasCoachConflict = (coachConflict || []).some(l => {
+          const ls = (l.start_time || '').slice(0, 5);
+          const le = (l.end_time   || '').slice(0, 5);
+          return ls < endHH && le > startHH;
+        });
+        if (hasCoachConflict) { alert('Bu antrenörün seçilen saatte başka bir dersi var.'); return; }
+
+        // Grup dersi / program bloğu çakışması (court_closures.coach_id) — mobil ile aynı
+        const { data: coachClosures } = await sb.from('court_closures')
+          .select('closure_type, day_of_week, start_hour, end_hour, start_date, end_date, reason')
+          .eq('coach_id', lessonForm.coach_id)
+          .eq('is_active', true);
+
+        const conflicts = [];
+        for (const cl of coachClosures || []) {
+          const clStart = (cl.start_hour || 0) * 60;
+          const clEnd   = (cl.end_hour   || 0) * 60;
+          if (startMin >= clEnd || endMin <= clStart) continue;
+          if (cl.closure_type === 'recurring_weekly' && cl.day_of_week === lessonDow) {
+            conflicts.push(`Grup Programı: ${cl.reason || 'Antrenman'} · ${String(cl.start_hour).padStart(2,'0')}:00–${String(cl.end_hour).padStart(2,'0')}:00`);
+          } else if (cl.closure_type === 'one_time' && cl.start_date && cl.end_date) {
+            if (dateStr >= cl.start_date && dateStr <= cl.end_date) {
+              conflicts.push(`Tek Seferlik Program: ${cl.reason || 'Kapalı'} · ${cl.start_date}–${cl.end_date}`);
+            }
+          }
+        }
+        if (conflicts.length > 0) {
+          if (!confirm(`⚠️ Hoca Çakışması\n\n${coachLabel} adlı hocanın bu saatte başka programı var:\n\n${conflicts.join('\n')}\n\nYine de eklensin mi?`)) return;
+        }
+      }
+    }
+
     setSaving(true);
     try {
-      const courtRow = lessonCourts.find(c => c.id === lessonForm.court_id);
+      const courtRow  = lessonCourts.find(c => c.id === lessonForm.court_id);
+      const coachId   = !lessonForm.use_manual_coach ? (lessonForm.coach_id || null) : null;
+      const coachName = lessonForm.use_manual_coach ? (lessonForm.manual_coach_name || null) : null;
+      const amountVal = lessonForm.amount ? parseFloat(String(lessonForm.amount).replace(',', '.')) : null;
+
       const payload = {
         club_id:        clubId,
-        coach_id:       lessonForm.coach_id || null,
-        coach_name:     null,
-        court_id:       lessonForm.court_id || null,
+        coach_id:       coachId,
+        coach_name:     coachName,
         date:           lessonForm.date,
-        start_time:     lessonForm.start_time,
-        end_time:       lessonForm.end_time,
+        start_time:     lessonForm.start_time.slice(0, 5),
+        end_time:       lessonForm.end_time.slice(0, 5),
         student_name:   lessonForm.student_name || null,
-        location:       courtRow ? `Kort ${courtRow.court_number}` : null,
-        notes:          lessonForm.notes || null,
+        location:       courtRow ? `Kort ${courtRow.court_number}` : '',
+        notes:          lessonForm.notes?.trim() || null,
         payment_status: lessonForm.payment_status || 'unpaid',
-        amount:         lessonForm.amount ? parseFloat(String(lessonForm.amount).replace(',', '.')) : null,
+        amount:         amountVal,
       };
+
       if (lessonModal?.id) {
         await sb.from('club_manual_lessons').update(payload).eq('id', lessonModal.id);
       } else {
-        await sb.from('club_manual_lessons').insert(payload);
+        const { data: inserted, error: insErr } = await sb.from('club_manual_lessons')
+          .insert(payload).select('id').single();
+        if (insErr) throw insErr;
+
+        // Mobilden: kort takvimini bloke etmek için bookings tablosuna da yaz
+        if (inserted?.id) {
+          const { data: { user } } = await sb.auth.getUser();
+          const bookingUserId = user?.id;
+          if (bookingUserId && lessonForm.court_id) {
+            const startDb = localTimeToDb(`${lessonForm.date}T${lessonForm.start_time.slice(0,5)}`);
+            const endDb   = localTimeToDb(`${lessonForm.date}T${lessonForm.end_time.slice(0,5)}`);
+            const durH    = Math.round((new Date(endDb) - new Date(startDb)) / 3600000 * 100) / 100;
+            const { error: bErr } = await sb.from('bookings').insert({
+              court_id:        lessonForm.court_id,
+              user_id:         bookingUserId,
+              start_time:      startDb,
+              end_time:        endDb,
+              status:          'confirmed',
+              is_solo_booking: false,
+              duration_hours:  durH,
+              total_amount:    amountVal || 0,
+              club_coach_id:   coachId,
+            });
+            if (bErr) console.warn('Kort takvim bloğu eklenemedi:', bErr.message);
+          }
+        }
       }
+
       setLessonModal(null);
       loadLessons();
     } catch (e) { alert(e.message); }
@@ -395,34 +783,84 @@ function ReservationsScreen({ clubId }) {
   };
 
   const markLessonPaid = async (lesson) => {
-    const amtStr = lesson.amount ? ` · ₺${Number(lesson.amount).toLocaleString('tr-TR')}` : '';
-    if (!confirm(`Bu ders için ödeme alındı olarak işaretlensin mi?${amtStr}`)) return;
+    // ── Mobil ReservationsScreen handleLessonPayment ile birebir aynı mantık ──
+    // Kort ücreti: kortun saatlik ücreti × süre (saat)
+    const locationMatch = (lesson.location || '').match(/Kort\s*(\d+)/i);
+    const courtNum      = locationMatch ? parseInt(locationMatch[1]) : null;
+    const courtRow      = courtNum != null ? lessonCourts.find(c => c.court_number === courtNum) : null;
+    const [sh, sm]      = (lesson.start_time || '00:00').split(':').map(Number);
+    const [eh, em]      = (lesson.end_time   || '00:00').split(':').map(Number);
+    const durationH     = Math.max(0, ((eh * 60 + em) - (sh * 60 + sm)) / 60);
+    const courtFee      = Math.round((courtRow?.hourly_rate || 0) * durationH * 100) / 100;
+    const coachAmount   = Math.round((Number(lesson.amount) || 0) * 100) / 100;
+    const total         = Math.round((courtFee + coachAmount) * 100) / 100;
+
+    // Kaynak 'booking' ise sadece ödeme durumunu güncelle (rezervasyon ödemesi, koru bölünmez)
+    if (lesson.source === 'booking') {
+      if (!confirm('Bu rezervasyon için ödeme alındı mı?')) return;
+      setLessonMarkingId(lesson.id);
+      try {
+        const { error } = await sb.from('bookings').update({ payment_status: 'paid' }).eq('id', lesson.id);
+        if (error) throw error;
+        loadLessons();
+      } catch (e) { alert(e.message); }
+      finally { setLessonMarkingId(null); }
+      return;
+    }
+
+    // Ders kaynağı (manual / lesson) → detaylı özet göster + böl
+    const lines = [
+      `Hoca Hakedişi: ₺${coachAmount.toLocaleString('tr-TR')}`,
+      `Kort Ücreti:   ₺${courtFee.toLocaleString('tr-TR')}`,
+      `─────────────────────`,
+      `Toplam:        ₺${total.toLocaleString('tr-TR')}`,
+    ].join('\n');
+    if (!confirm(`Ödeme Al\n\n${lines}\n\nÖdeme alındı olarak işaretlensin mi?`)) return;
+
+    setLessonMarkingId(lesson.id);
     try {
-      if (lesson.source === 'booking') {
-        await sb.from('bookings').update({ payment_status: 'paid' }).eq('id', lesson.id);
-      } else if (lesson.source === 'lesson') {
-        await sb.from('lessons').update({ payment_status: 'paid' }).eq('id', lesson.id);
-        if (lesson.amount > 0) {
-          await sb.from('club_finances').insert({
-            club_id: clubId, type: 'income', category: 'Ders Geliri',
-            amount: lesson.amount,
-            description: `${lesson.coach_name}${lesson.student_name ? ' - ' + lesson.student_name : ''} - Ders ödemesi`,
-            date: lesson.date,
-          });
-        }
+      // 1) Ders ödeme durumunu güncelle
+      if (lesson.source === 'lesson') {
+        const { error } = await sb.from('lessons').update({ payment_status: 'paid' }).eq('id', lesson.id);
+        if (error) throw error;
       } else {
-        await sb.from('club_manual_lessons').update({ payment_status: 'paid' }).eq('id', lesson.id);
-        if (lesson.amount > 0) {
-          await sb.from('club_finances').insert({
-            club_id: clubId, type: 'income', category: 'Ders Geliri',
-            amount: lesson.amount,
-            description: `${lesson.coach_name}${lesson.student_name ? ' - ' + lesson.student_name : ''} - Ders ödemesi`,
-            date: lesson.date,
-          });
-        }
+        const { error } = await sb.from('club_manual_lessons').update({ payment_status: 'paid' }).eq('id', lesson.id);
+        if (error) throw error;
       }
+
+      // 2) Kort ücreti → club_finances (Rezervasyon Geliri) — mobil ile aynı kategori
+      if (courtFee > 0) {
+        const { error } = await sb.from('club_finances').insert({
+          club_id:     clubId,
+          type:        'income',
+          category:    'Rezervasyon Geliri',
+          amount:      courtFee,
+          description: `${lesson.coach_name} - ${lesson.student_name || 'Öğrenci'} - Özel ders kort ücreti`,
+          date:        lesson.date,
+        });
+        if (error) throw error;
+      }
+
+      // 3) Hoca hakedişi → coach_earnings — mobil CoachEarningsService.createEarning ile aynı
+      if (coachAmount > 0) {
+        const { error } = await sb.from('coach_earnings').insert({
+          club_id:        clubId,
+          coach_id:       lesson.coach_id || null,
+          lesson_id:      lesson.source === 'lesson' ? (lesson.id || null) : null,
+          coach_name:     lesson.coach_name,
+          student_name:   lesson.student_name || null,
+          amount:         coachAmount,
+          court_fee:      courtFee,
+          date:           lesson.date,
+          description:    `Özel ders - ${lesson.student_name || 'Öğrenci'} - ${lesson.start_time}`,
+          payment_status: 'unpaid',
+        });
+        if (error) throw error;
+      }
+
       loadLessons();
     } catch (e) { alert(e.message); }
+    finally { setLessonMarkingId(null); }
   };
 
 
@@ -437,7 +875,7 @@ function ReservationsScreen({ clubId }) {
         </div>
         {mainTab === 'bookings'
           ? <button className="btn btn-pri" onClick={openAdd}><span className="material-icons">add</span> Yeni Rezervasyon</button>
-          : <button className="btn btn-pri" onClick={() => { setLessonForm({ date: selDate, start_time:'09:00', end_time:'10:00' }); setLessonModal({ type:'add' }); }}>
+          : <button className="btn btn-pri" onClick={() => { setLessonForm({ date: selDate, start_time:'09:00', end_time:'10:00', payment_status:'unpaid', use_manual_coach: false }); setLessonModal({ type:'add' }); }}>
               <span className="material-icons">add</span> Ders Ekle
             </button>
         }
@@ -477,8 +915,16 @@ function ReservationsScreen({ clubId }) {
                         </div>
                         {b.notes && <div style={{ fontSize: 11, color: 'var(--text-2)', marginTop: 2 }}>{b.notes}</div>}
                       </div>
-                      <Badge cls={paymentClass(b.payment_status)}>{paymentLabel(b.payment_status)}</Badge>
-                      <div style={{ display:'flex', gap:4 }}>
+                      <div style={{ display:'flex', gap:4, alignItems:'center' }}>
+                        {b.payment_status !== 'paid' && ['confirmed','completed'].includes(b.status) ? (
+                          <button className="btn btn-success btn-sm" style={{ fontSize:11, padding:'4px 10px', display:'flex', alignItems:'center', gap:4 }}
+                            onClick={() => markBookingPaid(b)}>
+                            <span className="material-icons" style={{fontSize:13}}>payments</span>
+                            Ödeme Al{b.total_amount > 0 ? ` · ₺${Number(b.total_amount).toLocaleString('tr-TR')}` : ''}
+                          </button>
+                        ) : (
+                          <Badge cls={paymentClass(b.payment_status)}>{paymentLabel(b.payment_status)}</Badge>
+                        )}
                         {b.status === 'confirmed' && (
                           <button className="btn btn-ghost btn-sm btn-icon" title="Tamamlandı" onClick={() => updateStatus(b.id, 'completed')}>
                             <span className="material-icons" style={{fontSize:15}}>done_all</span>
@@ -506,56 +952,104 @@ function ReservationsScreen({ clubId }) {
             {loadingL ? <Spinner size={28} /> : lessons.length === 0 ? (
               <EmptyState icon="school" title="Bu tarihte ders yok" sub="Ders eklemek için + butonunu kullanın." />
             ) : (
-              lessons.map(l => (
-                <div key={`${l.source}-${l.id}`} className="card tight">
-                  <div style={{ display:'flex', alignItems:'center', gap:12, padding:'14px 16px' }}>
-                    <div className="time-bubble">
-                      <b>{l.start_time}</b>
-                      <b>{l.end_time}</b>
-                    </div>
-                    <div style={{ flex:1 }}>
-                      <div style={{ fontWeight:700, display:'flex', alignItems:'center', gap:6 }}>
-                        {l.student_name || <span style={{ color:'var(--text-2)', fontWeight:400 }}>Öğrenci belirtilmemiş</span>}
+              lessons.map(l => {
+                const isToday = l.date === todayISO();
+                return (
+                  <div key={`${l.source}-${l.id}`} style={{
+                    background:'var(--bg)', borderRadius:12, padding:12, display:'flex', flexDirection:'column', gap:10,
+                    border:'1px solid var(--border)', boxShadow:'0 1px 3px rgba(0,0,0,0.06)'
+                  }}>
+                    {/* Üst satır: ikon + başlık + durum etiketi */}
+                    <div style={{ display:'flex', alignItems:'center', gap:10 }}>
+                      <div style={{ width:38, height:38, borderRadius:10, background:'#EEF2FF', display:'grid', placeItems:'center', flexShrink:0 }}>
+                        <span className="material-icons" style={{ fontSize:18, color:'var(--brand-navy)' }}>school</span>
                       </div>
-                      <div style={{ fontSize:12, color:'var(--text-2)', marginTop:2, display:'flex', alignItems:'center', gap:8 }}>
-                        <span><span className="material-icons" style={{fontSize:12,verticalAlign:'middle'}}>person</span> {l.coach_name || '—'}</span>
-                        {l.location && l.location !== '—' && (
-                          <span><span className="material-icons" style={{fontSize:12,verticalAlign:'middle'}}>sports_tennis</span> {l.location}</span>
-                        )}
+                      <div style={{ flex:1 }}>
+                        <div style={{ fontWeight:700, fontSize:14, color:'var(--text-1)' }}>
+                          {l.student_name ? `${l.student_name} · Ders` : 'Tenis Dersi'}
+                        </div>
+                        <div style={{ fontSize:12, color:'var(--text-2)', marginTop:1 }}>
+                          {l.start_time} – {l.end_time}
+                        </div>
                       </div>
-                      {l.notes && <div style={{ fontSize:11, color:'var(--text-2)', marginTop:2 }}>{l.notes}</div>}
+                      <div style={{
+                        display:'flex', alignItems:'center', gap:4,
+                        padding:'4px 8px', borderRadius:999, flexShrink:0,
+                        background: isToday ? '#DCFCE7' : '#FEF3C7'
+                      }}>
+                        <div style={{ width:6, height:6, borderRadius:3, background: isToday ? '#22C55E' : '#F59E0B' }} />
+                        <span style={{ fontSize:11, fontWeight:700, color: isToday ? '#22C55E' : '#F59E0B' }}>
+                          {isToday ? 'Bugün' : 'Yaklaşan'}
+                        </span>
+                      </div>
                     </div>
-                    <div style={{ display:'flex', flexDirection:'column', alignItems:'flex-end', gap:6 }}>
-                      {l.source === 'booking' && <Badge cls="b-info">Rezervasyon</Badge>}
-                      {l.source === 'manual'  && <Badge cls="b-warning">Manuel</Badge>}
-                      {l.source === 'lesson'  && <Badge cls="">Koç</Badge>}
+                    {/* Chip satırı */}
+                    <div style={{ display:'flex', flexWrap:'wrap', gap:6 }}>
+                      <span style={{ display:'flex', alignItems:'center', gap:4, background:'#fff', border:'1px solid var(--border)', borderRadius:8, padding:'4px 8px', fontSize:12, color:'var(--text-2)' }}>
+                        <span className="material-icons" style={{fontSize:13}}>person</span>{l.coach_name}
+                      </span>
+                      {l.location && l.location !== '—' && (
+                        <span style={{ display:'flex', alignItems:'center', gap:4, background:'#fff', border:'1px solid var(--border)', borderRadius:8, padding:'4px 8px', fontSize:12, color:'var(--text-2)' }}>
+                          <span className="material-icons" style={{fontSize:13}}>location_on</span>{l.location}
+                        </span>
+                      )}
+                      {l.source === 'manual' && (
+                        <span style={{ display:'flex', alignItems:'center', gap:4, background:'#FEF3C7', border:'1px solid #FDE68A', borderRadius:8, padding:'4px 8px', fontSize:12, color:'#F59E0B' }}>
+                          <span className="material-icons" style={{fontSize:13}}>edit_note</span>Manuel
+                        </span>
+                      )}
+                      {l.source === 'booking' && (
+                        <span style={{ display:'flex', alignItems:'center', gap:4, background:'#EEF2FF', border:'1px solid #C7D2FE', borderRadius:8, padding:'4px 8px', fontSize:12, color:'var(--brand-navy)' }}>
+                          <span className="material-icons" style={{fontSize:13}}>event</span>Rezervasyon
+                        </span>
+                      )}
+                    </div>
+                    {l.notes && <div style={{ fontSize:12, color:'var(--text-2)', fontStyle:'italic', paddingLeft:2 }}>{l.notes}</div>}
+                    {/* Ayraç */}
+                    <div style={{ height:1, background:'var(--border)' }} />
+                    {/* Ödeme + aksiyon satırı */}
+                    <div style={{ display:'flex', alignItems:'center', gap:8 }}>
                       {l.payment_status === 'paid' ? (
-                        <div style={{ display:'flex', alignItems:'center', gap:4 }}>
-                          <Badge cls="b-success">Ödendi</Badge>
-                          {l.amount > 0 && <span style={{ fontSize:11, color:'var(--text-2)' }}>₺{Number(l.amount).toLocaleString('tr-TR')}</span>}
+                        <div style={{ flex:1, display:'flex', alignItems:'center', gap:5, padding:'7px 10px', borderRadius:10, background:'#DCFCE7' }}>
+                          <span className="material-icons" style={{fontSize:14, color:'#22C55E'}}>check_circle</span>
+                          <span style={{ fontSize:13, fontWeight:700, color:'#22C55E' }}>Ödendi</span>
+                          {l.amount > 0 && <span style={{ fontSize:12, fontWeight:600, color:'#22C55E' }}>· ₺{Number(l.amount).toLocaleString('tr-TR')}</span>}
                         </div>
                       ) : (
-                        <button className="btn btn-success btn-sm" style={{ fontSize:11, padding:'3px 8px' }}
-                          onClick={() => markLessonPaid(l)}>
-                          <span className="material-icons" style={{fontSize:13}}>payments</span>
-                          Ödeme Al{l.amount > 0 ? ` · ₺${Number(l.amount).toLocaleString('tr-TR')}` : ''}
+                        <button
+                          style={{ flex:1, display:'flex', alignItems:'center', justifyContent:'center', gap:6, padding:'9px', borderRadius:10, background:'#22C55E', border:'none', cursor: lessonMarkingId === l.id ? 'not-allowed' : 'pointer', opacity: lessonMarkingId === l.id ? 0.5 : 1 }}
+                          onClick={() => markLessonPaid(l)}
+                          disabled={lessonMarkingId === l.id}
+                        >
+                          <span className="material-icons" style={{fontSize:15, color:'#fff'}}>payments</span>
+                          <span style={{ fontSize:13, fontWeight:700, color:'#fff' }}>
+                            {(() => {
+                              if (lessonMarkingId === l.id) return 'İşleniyor...';
+                              if (l.source === 'booking') return `Ödeme Al${l.amount > 0 ? ` · ₺${Number(l.amount).toLocaleString('tr-TR')}` : ''}`;
+                              const lm = (l.location||'').match(/Kort\s*(\d+)/i);
+                              const cr = lm ? lessonCourts.find(c => c.court_number === parseInt(lm[1])) : null;
+                              const [sh2,sm2] = (l.start_time||'0:0').split(':').map(Number);
+                              const [eh2,em2] = (l.end_time||'0:0').split(':').map(Number);
+                              const dur2 = Math.max(0,((eh2*60+em2)-(sh2*60+sm2))/60);
+                              const cf2 = Math.round((cr?.hourly_rate||0)*dur2*100)/100;
+                              const tot2 = Math.round((cf2 + (Number(l.amount)||0))*100)/100;
+                              return `Ödeme Al${tot2 > 0 ? ` · ₺${tot2.toLocaleString('tr-TR')}` : ''}`;
+                            })()}
+                          </span>
                         </button>
                       )}
-                    </div>
-                    <div style={{ display:'flex', gap:4 }}>
                       {l.source !== 'booking' && (
-                        <button className="btn btn-ghost btn-sm btn-icon" title="Düzenle"
-                          onClick={() => { setLessonForm({ ...l, payment_status: l.payment_status || 'unpaid' }); setLessonModal({ type:'edit', id: l.id }); }}>
-                          <span className="material-icons" style={{fontSize:15}}>edit</span>
+                        <button
+                          style={{ width:36, height:36, borderRadius:10, background:'#FEE2E2', border:'none', display:'grid', placeItems:'center', cursor:'pointer' }}
+                          title="Sil" onClick={() => deleteLesson(l)}
+                        >
+                          <span className="material-icons" style={{fontSize:15, color:'#EF4444'}}>delete_outline</span>
                         </button>
                       )}
-                      <button className="btn btn-danger btn-sm btn-icon" title="Sil" onClick={() => deleteLesson(l)}>
-                        <span className="material-icons" style={{fontSize:15}}>delete</span>
-                      </button>
                     </div>
                   </div>
-                </div>
-              ))
+                );
+              })
             )}
           </div>
           <MiniCalendar selected={selDate} onSelect={setSelDate} dotDates={dotDates} />
@@ -586,80 +1080,168 @@ function ReservationsScreen({ clubId }) {
                 {courts.map(c => <option key={c.id} value={c.id}>Kort {c.court_number} — {courtTypeLabel(c.court_type)}</option>)}
               </select>
             </Field>
+            <Field label="Üye Seç (İsteğe Bağlı — Limit Kontrolü İçin)">
+              <MemberLimitSearch clubId={clubId} value={form.member_id} onChange={mid => setForm({...form, member_id: mid})} />
+            </Field>
             <Field label="Durum">
               <select value={form.status || 'confirmed'} onChange={e => setForm({...form, status: e.target.value})}>
                 <option value="confirmed">Rezerveli</option>
                 <option value="completed">Tamamlandı</option>
               </select>
             </Field>
-            <Field label="Notlar">
-              <textarea rows={2} value={form.notes || ''} placeholder="İsteğe bağlı not…"
-                onChange={e => setForm({...form, notes: e.target.value})}
-                style={{ resize: 'vertical' }} />
-            </Field>
           </div>
         </Modal>
       )}
 
-      {/* Özel Ders Ekle / Düzenle Modalı */}
+      {/* Özel Ders Ekle / Düzenle Modalı — Mobil ile birebir aynı */}
       {lessonModal && (
-        <Modal
-          title={lessonModal.type === 'edit' ? 'Dersi Düzenle' : 'Yeni Özel Ders'}
-          onClose={() => setLessonModal(null)}
-          footer={
-            <>
-              <button className="btn btn-ghost btn-sm" onClick={() => setLessonModal(null)}>Vazgeç</button>
-              <button className="btn btn-pri btn-sm" onClick={saveLesson} disabled={saving}>
-                {saving ? 'Kaydediliyor…' : 'Kaydet'}
+        <div style={{ position:'fixed', inset:0, background:'rgba(0,0,0,0.45)', zIndex:1000, display:'flex', flexDirection:'column', justifyContent:'flex-end' }}
+          onClick={e => { if (e.target === e.currentTarget) setLessonModal(null); }}>
+          <div style={{ background:'#fff', borderTopLeftRadius:24, borderTopRightRadius:24, padding:20, maxHeight:'92vh', display:'flex', flexDirection:'column', gap:0 }}>
+            {/* Header */}
+            <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', marginBottom:20 }}>
+              <span style={{ fontSize:18, fontWeight:800, color:'var(--text-1)' }}>
+                {lessonModal.type === 'edit' ? 'Dersi Düzenle' : 'Ders Ekle'}
+              </span>
+              <button style={{ background:'none', border:'none', cursor:'pointer', display:'grid', placeItems:'center' }} onClick={() => setLessonModal(null)}>
+                <span className="material-icons" style={{ fontSize:24, color:'var(--text-2)' }}>close</span>
               </button>
-            </>
-          }
-        >
-          <div className="fields" style={{ gap: 14 }}>
-            <Field label="Tarih">
-              <input type="date" value={lessonForm.date || ''} onChange={e => setLessonForm({...lessonForm, date: e.target.value})} />
-            </Field>
-            <div className="fields-2">
-              <Field label="Başlangıç Saati">
-                <input type="time" value={lessonForm.start_time || ''} onChange={e => setLessonForm({...lessonForm, start_time: e.target.value})} />
-              </Field>
-              <Field label="Bitiş Saati">
-                <input type="time" value={lessonForm.end_time || ''} onChange={e => setLessonForm({...lessonForm, end_time: e.target.value})} />
-              </Field>
             </div>
-            <Field label="Öğrenci Adı">
-              <input type="text" placeholder="Öğrenci adı soyadı…" value={lessonForm.student_name || ''} onChange={e => setLessonForm({...lessonForm, student_name: e.target.value})} />
-            </Field>
-            <Field label="Koç">
-              <select value={lessonForm.coach_id || ''} onChange={e => setLessonForm({...lessonForm, coach_id: e.target.value})}>
-                <option value="">Koç seçin…</option>
-                {coaches.map(c => <option key={c.id} value={c.id}>{c.full_name}</option>)}
-              </select>
-            </Field>
-            <Field label="Kort">
-              <select value={lessonForm.court_id || ''} onChange={e => setLessonForm({...lessonForm, court_id: e.target.value})}>
-                <option value="">Kort seçin…</option>
-                {lessonCourts.map(c => <option key={c.id} value={c.id}>Kort {c.court_number}</option>)}
-              </select>
-            </Field>
-            <div className="fields-2">
-              <Field label="Ders Ücreti (₺)">
-                <input type="number" min="0" step="0.01" placeholder="0,00" value={lessonForm.amount || ''} onChange={e => setLessonForm({...lessonForm, amount: e.target.value})} />
-              </Field>
-              <Field label="Ödeme Durumu">
-                <select value={lessonForm.payment_status || 'unpaid'} onChange={e => setLessonForm({...lessonForm, payment_status: e.target.value})}>
-                  <option value="unpaid">Ödenmedi</option>
-                  <option value="paid">Ödendi</option>
-                </select>
-              </Field>
+
+            <div style={{ overflowY:'auto', flex:1, display:'flex', flexDirection:'column', gap:0 }}>
+              {/* ── Antrenör ─────────────────────────────────── */}
+              <div style={{ fontSize:12, fontWeight:700, color:'var(--text-2)', marginBottom:8, letterSpacing:0.4 }}>ANTRENÖR</div>
+              {/* Toggle butonları */}
+              <div style={{ display:'flex', gap:8, marginBottom:12 }}>
+                <button
+                  style={{ flex:1, padding:'9px', borderRadius:10, border: !lessonForm.use_manual_coach ? '1.5px solid var(--brand-navy)' : '1.5px solid var(--border)', background: !lessonForm.use_manual_coach ? '#EEF2FF' : 'var(--bg)', cursor:'pointer', fontSize:13, fontWeight:600, color: !lessonForm.use_manual_coach ? 'var(--brand-navy)' : 'var(--text-2)' }}
+                  onClick={() => setLessonForm({...lessonForm, use_manual_coach: false, manual_coach_name:''})}
+                >
+                  Listeden Seç
+                </button>
+                <button
+                  style={{ flex:1, padding:'9px', borderRadius:10, border: lessonForm.use_manual_coach ? '1.5px solid var(--brand-navy)' : '1.5px solid var(--border)', background: lessonForm.use_manual_coach ? '#EEF2FF' : 'var(--bg)', cursor:'pointer', fontSize:13, fontWeight:600, color: lessonForm.use_manual_coach ? 'var(--brand-navy)' : 'var(--text-2)' }}
+                  onClick={() => setLessonForm({...lessonForm, use_manual_coach: true, coach_id:''})}
+                >
+                  Manuel Giriş
+                </button>
+              </div>
+              {lessonForm.use_manual_coach ? (
+                <input style={{ width:'100%', border:'1.5px solid var(--border)', borderRadius:12, padding:'11px 12px', fontSize:15, color:'var(--text-1)', background:'var(--bg)', boxSizing:'border-box', marginBottom:16 }}
+                  placeholder="Antrenör adı" value={lessonForm.manual_coach_name || ''}
+                  onChange={e => setLessonForm({...lessonForm, manual_coach_name: e.target.value})} />
+              ) : coaches.length === 0 ? (
+                <div style={{ padding:16, borderRadius:12, background:'var(--bg)', border:'1px solid var(--border)', textAlign:'center', color:'var(--text-2)', fontSize:13, marginBottom:16 }}>Henüz antrenör eklenmemiş.</div>
+              ) : (
+                <div style={{ display:'flex', flexDirection:'column', gap:8, marginBottom:16 }}>
+                  {coaches.map(c => (
+                    <div key={c.id}
+                      style={{ display:'flex', alignItems:'center', gap:10, padding:10, borderRadius:12, border: lessonForm.coach_id === c.id ? '1.5px solid var(--brand-navy)' : '1.5px solid var(--border)', background: lessonForm.coach_id === c.id ? '#EEF2FF' : 'var(--bg)', cursor:'pointer' }}
+                      onClick={() => setLessonForm({...lessonForm, coach_id: c.id})}
+                    >
+                      <div style={{ width:34, height:34, borderRadius:17, background:'rgba(0,51,153,0.12)', display:'grid', placeItems:'center', flexShrink:0 }}>
+                        <span style={{ fontSize:14, fontWeight:700, color:'var(--brand-navy)' }}>{c.full_name.charAt(0).toUpperCase()}</span>
+                      </div>
+                      <span style={{ flex:1, fontSize:14, color:'var(--text-1)', fontWeight: lessonForm.coach_id === c.id ? 700 : 500 }}>{c.full_name}</span>
+                      {lessonForm.coach_id === c.id && <span className="material-icons" style={{fontSize:18, color:'var(--brand-navy)'}}>check_circle</span>}
+                    </div>
+                  ))}
+                </div>
+              )}
+
+              {/* ── Tarih ve Saat ─────────────────────────────── */}
+              <div style={{ fontSize:12, fontWeight:700, color:'var(--text-2)', marginBottom:8, letterSpacing:0.4, marginTop:4 }}>TARİH VE SAAT</div>
+              <div style={{ display:'flex', gap:8, marginBottom:0 }}>
+                <input type="date" style={{ flex:2, border:'1.5px solid var(--border)', borderRadius:12, padding:'11px 12px', fontSize:15, color:'var(--text-1)', background:'var(--bg)', boxSizing:'border-box' }}
+                  value={lessonForm.date || ''} onChange={e => setLessonForm({...lessonForm, date: e.target.value})} />
+                <input type="time" style={{ flex:1, border:'1.5px solid var(--border)', borderRadius:12, padding:'11px 8px', fontSize:14, color:'var(--text-1)', background:'var(--bg)', boxSizing:'border-box' }}
+                  placeholder="Başlangıç" value={lessonForm.start_time || ''} onChange={e => setLessonForm({...lessonForm, start_time: e.target.value})} />
+                <input type="time" style={{ flex:1, border:'1.5px solid var(--border)', borderRadius:12, padding:'11px 8px', fontSize:14, color:'var(--text-1)', background:'var(--bg)', boxSizing:'border-box' }}
+                  placeholder="Bitiş" value={lessonForm.end_time || ''} onChange={e => setLessonForm({...lessonForm, end_time: e.target.value})} />
+              </div>
+
+              {/* ── Süre hızlı seçim ─────────────────────────── */}
+              <div style={{ fontSize:12, fontWeight:700, color:'var(--text-2)', marginBottom:8, letterSpacing:0.4, marginTop:14 }}>SÜRE (opsiyonel — bitiş saatini otomatik doldurur)</div>
+              <div style={{ display:'flex', flexWrap:'wrap', gap:8, marginBottom:16 }}>
+                {[{label:'30 dk', value:0.5}, {label:'45 dk', value:0.75}, {label:'1 saat', value:1}, {label:'1.5 saat', value:1.5}, {label:'2 saat', value:2}].map(d => (
+                  <div key={d.value}
+                    style={{ display:'flex', alignItems:'center', gap:5, padding:'10px 14px', borderRadius:12, border: lessonForm.duration === d.value ? '1.5px solid var(--brand-navy)' : '1.5px solid var(--border)', background: lessonForm.duration === d.value ? '#EEF2FF' : 'var(--bg)', cursor:'pointer' }}
+                    onClick={() => setLessonForm({...lessonForm, duration: lessonForm.duration === d.value ? null : d.value})}
+                  >
+                    <span style={{ fontSize:13, color: lessonForm.duration === d.value ? 'var(--brand-navy)' : 'var(--text-2)', fontWeight: lessonForm.duration === d.value ? 700 : 500 }}>{d.label}</span>
+                  </div>
+                ))}
+              </div>
+
+              {/* ── Öğrenci ───────────────────────────────────── */}
+              <div style={{ fontSize:12, fontWeight:700, color:'var(--text-2)', marginBottom:8, letterSpacing:0.4 }}>ÖĞRENCİ ADI (opsiyonel)</div>
+              <input style={{ width:'100%', border:'1.5px solid var(--border)', borderRadius:12, padding:'11px 12px', fontSize:15, color:'var(--text-1)', background:'var(--bg)', boxSizing:'border-box', marginBottom:16 }}
+                placeholder="Öğrenci adı veya boş bırakın" value={lessonForm.student_name || ''}
+                onChange={e => setLessonForm({...lessonForm, student_name: e.target.value})} />
+
+              {/* ── Kort ─────────────────────────────────────── */}
+              <div style={{ fontSize:12, fontWeight:700, color:'var(--text-2)', marginBottom:8, letterSpacing:0.4 }}>KORT</div>
+              {lessonCourts.length === 0 ? (
+                <div style={{ padding:16, borderRadius:12, background:'var(--bg)', border:'1px solid var(--border)', textAlign:'center', color:'var(--text-2)', fontSize:13, marginBottom:16 }}>Henüz kort eklenmemiş.</div>
+              ) : (
+                <div style={{ display:'flex', flexWrap:'wrap', gap:8, marginBottom:16 }}>
+                  {lessonCourts.map(c => (
+                    <div key={c.id}
+                      style={{ display:'flex', alignItems:'center', gap:5, padding:'10px 14px', borderRadius:12, border: lessonForm.court_id === c.id ? '1.5px solid var(--brand-navy)' : '1.5px solid var(--border)', background: lessonForm.court_id === c.id ? '#EEF2FF' : 'var(--bg)', cursor:'pointer' }}
+                      onClick={() => setLessonForm({...lessonForm, court_id: c.id})}
+                    >
+                      <span className="material-icons" style={{fontSize:14, color: lessonForm.court_id === c.id ? 'var(--brand-navy)' : 'var(--text-2)'}}>sports_tennis</span>
+                      <span style={{ fontSize:13, color: lessonForm.court_id === c.id ? 'var(--brand-navy)' : 'var(--text-2)', fontWeight: lessonForm.court_id === c.id ? 700 : 500 }}>Kort {c.court_number}</span>
+                      {lessonForm.court_id === c.id && <span className="material-icons" style={{fontSize:14, color:'var(--brand-navy)'}}>check</span>}
+                    </div>
+                  ))}
+                </div>
+              )}
+
+              {/* ── Not ──────────────────────────────────────── */}
+              <div style={{ fontSize:12, fontWeight:700, color:'var(--text-2)', marginBottom:8, letterSpacing:0.4 }}>NOT (opsiyonel)</div>
+              <textarea style={{ width:'100%', border:'1.5px solid var(--border)', borderRadius:12, padding:'11px 12px', fontSize:15, color:'var(--text-1)', background:'var(--bg)', boxSizing:'border-box', minHeight:72, resize:'vertical', marginBottom:16 }}
+                placeholder="Ders hakkında not..." value={lessonForm.notes || ''}
+                onChange={e => setLessonForm({...lessonForm, notes: e.target.value})} />
+
+              {/* ── Ders Ücreti ──────────────────────────────── */}
+              <div style={{ fontSize:12, fontWeight:700, color:'var(--text-2)', marginBottom:8, letterSpacing:0.4 }}>DERS ÜCRETİ (opsiyonel)</div>
+              <div style={{ display:'flex', alignItems:'center', border:'1.5px solid var(--border)', borderRadius:12, background:'var(--bg)', paddingLeft:12, marginBottom:16 }}>
+                <span style={{ fontSize:16, fontWeight:700, color:'var(--text-2)', marginRight:4 }}>₺</span>
+                <input type="number" min="0" step="0.01" style={{ flex:1, border:'none', background:'transparent', padding:'11px 12px 11px 0', fontSize:15, color:'var(--text-1)', outline:'none' }}
+                  placeholder="0,00" value={lessonForm.amount || ''}
+                  onChange={e => setLessonForm({...lessonForm, amount: e.target.value})} />
+              </div>
+
+              {/* ── Ödeme Durumu ─────────────────────────────── */}
+              <div style={{ fontSize:12, fontWeight:700, color:'var(--text-2)', marginBottom:8, letterSpacing:0.4 }}>ÖDEME DURUMU</div>
+              <div style={{ display:'flex', gap:10, marginBottom:20 }}>
+                <button
+                  style={{ flex:1, display:'flex', alignItems:'center', justifyContent:'center', gap:6, padding:'11px', borderRadius:12, border: (lessonForm.payment_status||'unpaid') === 'unpaid' ? '1.5px solid #F59E0B' : '1.5px solid var(--border)', background: (lessonForm.payment_status||'unpaid') === 'unpaid' ? '#FEF3C7' : 'var(--bg)', cursor:'pointer' }}
+                  onClick={() => setLessonForm({...lessonForm, payment_status:'unpaid'})}
+                >
+                  <span className="material-icons" style={{fontSize:16, color:(lessonForm.payment_status||'unpaid')==='unpaid'?'#F59E0B':'var(--text-2)'}}>schedule</span>
+                  <span style={{ fontSize:13, fontWeight:600, color:(lessonForm.payment_status||'unpaid')==='unpaid'?'#F59E0B':'var(--text-2)' }}>Ödenmedi</span>
+                </button>
+                <button
+                  style={{ flex:1, display:'flex', alignItems:'center', justifyContent:'center', gap:6, padding:'11px', borderRadius:12, border: lessonForm.payment_status === 'paid' ? '1.5px solid #22C55E' : '1.5px solid var(--border)', background: lessonForm.payment_status === 'paid' ? '#DCFCE7' : 'var(--bg)', cursor:'pointer' }}
+                  onClick={() => setLessonForm({...lessonForm, payment_status:'paid'})}
+                >
+                  <span className="material-icons" style={{fontSize:16, color:lessonForm.payment_status==='paid'?'#22C55E':'var(--text-2)'}}>check_circle</span>
+                  <span style={{ fontSize:13, fontWeight:600, color:lessonForm.payment_status==='paid'?'#22C55E':'var(--text-2)' }}>Ödendi</span>
+                </button>
+              </div>
+
+              {/* ── Kaydet butonu ─────────────────────────────── */}
+              <button
+                style={{ width:'100%', background:'var(--brand-navy)', color:'#fff', border:'none', borderRadius:14, padding:'15px', fontSize:15, fontWeight:800, cursor: saving ? 'not-allowed' : 'pointer', opacity: saving ? 0.6 : 1 }}
+                onClick={saveLesson} disabled={saving}
+              >
+                {saving ? 'Kaydediliyor...' : 'Dersi Kaydet'}
+              </button>
             </div>
-            <Field label="Notlar">
-              <textarea rows={2} value={lessonForm.notes || ''} placeholder="İsteğe bağlı not…"
-                onChange={e => setLessonForm({...lessonForm, notes: e.target.value})}
-                style={{ resize: 'vertical' }} />
-            </Field>
           </div>
-        </Modal>
+        </div>
       )}
     </div>
   );

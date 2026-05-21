@@ -8,13 +8,13 @@
 function dbTimeToLocal(iso) {
   if (!iso) return iso;
   const d = new Date(iso);
-  d.setHours(d.getHours() - 3);
+  d.setUTCHours(d.getUTCHours() - 3);
   return d.toISOString();
 }
 function localTimeToDb(iso) {
   if (!iso) return iso;
   const d = new Date(iso);
-  d.setHours(d.getHours() + 3);
+  d.setUTCHours(d.getUTCHours() + 3);
   return d.toISOString();
 }
 
@@ -798,13 +798,13 @@ const GroupScheduleSvc = {
       const { data: coachMeta } = await sb
         .from('club_coaches').select('individual_coach_id').eq('id', coach.id).maybeSingle();
       if (coachMeta?.individual_coach_id) {
-        const today = new Date().toISOString().split('T')[0];
+        const todayTs = new Date().toISOString().split('T')[0] + 'T00:00:00';
         const { data: lessons } = await sb
           .from('lessons')
           .select('start_time, end_time, student_name')
           .eq('coach_id', coachMeta.individual_coach_id)
           .neq('status', 'cancelled')
-          .gte('date', today);
+          .gte('start_time', todayTs);
         const seen = new Set();
         for (const l of lessons ?? []) {
           const ls = new Date(l.start_time);

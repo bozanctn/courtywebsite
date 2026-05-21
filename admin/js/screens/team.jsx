@@ -745,6 +745,64 @@ function LessonsScreen({ clubId }) {
     if (!form.date)       { alert('Tarih seçin.'); return; }
     if (!form.start_time) { alert('Başlangıç saati girin.'); return; }
     if (!form.end_time)   { alert('Bitiş saati girin.'); return; }
+
+    // ── Double booking kontrolü ──────────────────────────────────
+    {
+      const dateStr = form.date;
+      const startHH = (form.start_time || '').slice(0, 5);
+      const endHH   = (form.end_time   || '').slice(0, 5);
+
+      // Kort çakışması — yalnızca kort seçildiyse
+      if (form.court_id) {
+        const startDb = localTimeToDb(`${dateStr}T${startHH}`);
+        const endDb   = localTimeToDb(`${dateStr}T${endHH}`);
+
+        const [{ data: bConflict }, { data: mConflict }, { data: closures }] = await Promise.all([
+          sb.from('bookings').select('id').eq('court_id', form.court_id)
+            .in('status', ['pending', 'confirmed']).lt('start_time', endDb).gt('end_time', startDb),
+          sb.from('club_manual_lessons').select('id, start_time, end_time')
+            .eq('court_id', form.court_id).eq('date', dateStr),
+          sb.from('court_closures').select('*').eq('court_id', form.court_id).eq('is_active', true),
+        ]);
+
+        if (bConflict?.length > 0) { alert('Bu kort seçilen saatte zaten rezerve edilmiş.'); return; }
+
+        const hasManualConflict = (mConflict || []).some(l => {
+          const ls = (l.start_time || '').slice(0, 5);
+          const le = (l.end_time   || '').slice(0, 5);
+          return ls < endHH && le > startHH;
+        });
+        if (hasManualConflict) { alert('Bu kort seçilen saatte planlanmış bir ders var.'); return; }
+
+        const dow = new Date(dateStr + 'T12:00:00').getDay();
+        const closureBlock = (closures || []).some(cl => {
+          const cs = String(cl.start_hour ?? 0).padStart(2,'0') + ':00';
+          const ce = String(cl.end_hour   ?? 0).padStart(2,'0') + ':00';
+          if (!(cs < endHH && ce > startHH)) return false;
+          if (cl.closure_type === 'recurring_weekly') return cl.day_of_week === dow;
+          return (!cl.start_date || cl.start_date <= dateStr) && (!cl.end_date || cl.end_date >= dateStr);
+        });
+        if (closureBlock) {
+          const proceed = confirm('Bu kort seçilen saatte kapalı olarak işaretlenmiş. Yine de ders oluşturulsun mu?');
+          if (!proceed) return;
+        }
+      }
+
+      // Koç çakışması — yalnızca sistem koçu seçildiyse (kort seçiminden bağımsız)
+      const coachId = !form.use_manual_coach ? (form.coach_id || null) : null;
+      if (coachId) {
+        const { data: coachConflict } = await sb.from('club_manual_lessons')
+          .select('id, start_time, end_time')
+          .eq('coach_id', coachId)
+          .eq('date', dateStr);
+        const hasCoachConflict = (coachConflict || []).some(l => {
+          const ls = (l.start_time || '').slice(0, 5);
+          const le = (l.end_time   || '').slice(0, 5);
+          return ls < endHH && le > startHH;
+        });
+        if (hasCoachConflict) { alert('Bu antrenörün seçilen saatte başka bir dersi var.'); return; }
+      }
+    }
     setSaving(true);
     try {
       const courtNum = form.court_id ? courts.find(c => c.id === form.court_id)?.court_number : null;

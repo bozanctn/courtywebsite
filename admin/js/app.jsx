@@ -4,21 +4,26 @@ const { useState, useEffect, useCallback } = React;
 
 // ── Navigasyon tanımları ───────────────────────────────────────
 const ALL_NAV_ITEMS = [
-  { key: 'dashboard',    icon: 'dashboard',              label: 'Dashboard',     section: 'GENEL',      employeeOk: true  },
-  { key: 'reservations', icon: 'event_available',        label: 'Rezervasyonlar',section: 'YÖNETİM',    employeeOk: true  },
-  { key: 'courts',       icon: 'sports_tennis',          label: 'Kortlar',       section: null,         employeeOk: true  },
-  { key: 'members',      icon: 'group',                  label: 'Üyeler',        section: null,         employeeOk: true  },
-  { key: 'coaches',      icon: 'person',                 label: 'Koçlar',        section: null,         employeeOk: true  },
-  { key: 'employees',    icon: 'badge',                  label: 'Çalışanlar',    section: null,         employeeOk: false },
-  { key: 'lessons',      icon: 'school',                 label: 'Dersler',       section: null,         employeeOk: true  },
-  { key: 'tournaments',  icon: 'emoji_events',           label: 'Turnuvalar',    section: 'ETKİNLİKLER',employeeOk: true  },
-  { key: 'groups',       icon: 'groups',                 label: 'Gruplar',       section: null,         employeeOk: true  },
-  { key: 'packages',     icon: 'inventory_2',            label: 'Ders Paketleri',section: null,         employeeOk: true  },
-  { key: 'finance',      icon: 'account_balance_wallet', label: 'Finans',        section: 'ANALİZ',     employeeOk: false },
-  { key: 'analytics',    icon: 'bar_chart',              label: 'Analitik',      section: null,         employeeOk: false },
-  { key: 'chat',         icon: 'chat',                   label: 'Sohbet',        section: 'İLETİŞİM',   employeeOk: true  },
-  { key: 'notifications',icon: 'notifications',          label: 'Bildirimler',   section: null,         employeeOk: true  },
-  { key: 'profile',      icon: 'business',               label: 'Kulüp Profili', section: 'AYARLAR',    employeeOk: false },
+  { key: 'dashboard',      icon: 'dashboard',              label: 'Dashboard',          section: 'GENEL',      employeeOk: true  },
+  { key: 'reservations',   icon: 'event_available',        label: 'Rezervasyonlar',     section: 'YÖNETİM',    employeeOk: true  },
+  { key: 'courts',         icon: 'sports_tennis',          label: 'Kortlar',            section: null,         employeeOk: true  },
+  { key: 'members',        icon: 'group',                  label: 'Üyeler',             section: null,         employeeOk: true  },
+  { key: 'coaches',        icon: 'person',                 label: 'Koçlar',             section: null,         employeeOk: true  },
+  { key: 'employees',      icon: 'badge',                  label: 'Çalışanlar',         section: null,         employeeOk: false },
+  { key: 'lesson_requests',icon: 'mark_email_unread',      label: 'Ders Talepleri',     section: null,         employeeOk: true  },
+  { key: 'packages',       icon: 'inventory_2',            label: 'Ders Paketleri',     section: null,         employeeOk: true  },
+  { key: 'student_notes',  icon: 'sticky_note_2',          label: 'Öğrenci Notları',    section: null,         employeeOk: true  },
+  { key: 'tournaments',    icon: 'emoji_events',           label: 'Turnuvalar',         section: 'ETKİNLİKLER',employeeOk: true  },
+  { key: 'groups',         icon: 'groups',                 label: 'Gruplar',            section: null,         employeeOk: true  },
+  { key: 'program',        icon: 'calendar_today',         label: 'Program',            section: null,         employeeOk: true  },
+  { key: 'cafe',           icon: 'local_cafe',             label: 'Kafe / Market',      section: null,         employeeOk: true  },
+  { key: 'finance',        icon: 'account_balance_wallet', label: 'Finans',             section: 'ANALİZ',     employeeOk: false },
+  { key: 'analytics',      icon: 'bar_chart',              label: 'Analitik',           section: null,         employeeOk: false },
+  { key: 'reviews',        icon: 'star',                   label: 'Yorumlar',           section: null,         employeeOk: false },
+  { key: 'chat',           icon: 'chat',                   label: 'Sohbet',             section: 'İLETİŞİM',   employeeOk: true  },
+  { key: 'notifications',  icon: 'notifications',          label: 'Bildirimler',        section: null,         employeeOk: true  },
+  { key: 'notif_prefs',    icon: 'tune',                   label: 'Bildirim Tercihleri',section: null,         employeeOk: true  },
+  { key: 'profile',        icon: 'business',               label: 'Kulüp Profili',      section: 'AYARLAR',    employeeOk: false },
 ];
 
 // ── Sidebar ────────────────────────────────────────────────────
@@ -123,7 +128,7 @@ function AccessDenied() {
 }
 
 // ── Ekran yönlendirici ─────────────────────────────────────────
-const EMPLOYEE_BLOCKED = new Set(['employees', 'finance', 'analytics', 'profile']);
+const EMPLOYEE_BLOCKED = new Set(['employees', 'finance', 'wallet', 'analytics', 'reviews', 'profile']);
 
 function ScreenRouter({ screen, setScreen, clubId, clubProfile, userType }) {
   const ctx = { clubId, clubProfile, setScreen, userType };
@@ -133,22 +138,27 @@ function ScreenRouter({ screen, setScreen, clubId, clubProfile, userType }) {
   }
 
   switch (screen) {
-    case 'dashboard':     return <DashboardScreen    {...ctx} />;
-    case 'reservations':  return <ReservationsScreen {...ctx} />;
-    case 'courts':        return <CourtsScreen        {...ctx} />;
-    case 'members':       return <MembersScreen       {...ctx} />;
-    case 'coaches':       return <CoachesScreen        {...ctx} />;
-    case 'employees':     return <EmployeesScreen      {...ctx} />;
-    case 'lessons':       return <LessonsScreen        {...ctx} />;
-    case 'tournaments':   return <TournamentsScreen    {...ctx} />;
-    case 'groups':        return <GroupsScreen          {...ctx} />;
-    case 'packages':      return <LessonPackagesScreen  {...ctx} />;
-    case 'finance':       return <FinanceScreen         {...ctx} />;
-    case 'analytics':     return <AnalyticsScreen       {...ctx} />;
-    case 'chat':          return <ChatScreen             {...ctx} />;
-    case 'notifications': return <NotificationsScreen   {...ctx} />;
-    case 'profile':       return <ClubProfileScreen     {...ctx} />;
-    default:              return <DashboardScreen       {...ctx} />;
+    case 'dashboard':       return <DashboardScreen            {...ctx} />;
+    case 'reservations':    return <ReservationsScreen         {...ctx} />;
+    case 'courts':          return <CourtsScreen               {...ctx} />;
+    case 'members':         return <MembersScreen              {...ctx} />;
+    case 'coaches':         return <CoachesScreen              {...ctx} />;
+    case 'employees':       return <EmployeesScreen            {...ctx} />;
+    case 'lesson_requests': return <LessonRequestsScreen       {...ctx} />;
+    case 'packages':        return <LessonPackagesScreen       {...ctx} />;
+    case 'student_notes':   return <StudentNotesScreen         {...ctx} />;
+    case 'tournaments':     return <TournamentsScreen          {...ctx} />;
+    case 'groups':          return <GroupsScreen               {...ctx} />;
+    case 'program':         return <MyProgramScreen            {...ctx} />;
+    case 'cafe':            return <CafeScreen                 {...ctx} />;
+    case 'finance':         return <FinanceScreen              {...ctx} />;
+    case 'analytics':       return <AnalyticsScreen            {...ctx} />;
+    case 'reviews':         return <ClubReviewsScreen          {...ctx} />;
+    case 'chat':            return <ChatScreen                 {...ctx} />;
+    case 'notifications':   return <NotificationsScreen        {...ctx} />;
+    case 'notif_prefs':     return <NotificationPreferencesScreen {...ctx} />;
+    case 'profile':         return <ClubProfileScreen          {...ctx} />;
+    default:                return <DashboardScreen            {...ctx} />;
   }
 }
 

@@ -25,6 +25,114 @@ function pkgMeta(pkg) {
   return parts.join(' · ');
 }
 
+function MemberProfileModal({ member, clubId, packages, onClose }) {
+  const { useState, useEffect } = React;
+  const [bookings,  setBookings]  = useState([]);
+  const [loadingBk, setLoadingBk] = useState(true);
+
+  useEffect(() => {
+    if (!member?.user_id) { setLoadingBk(false); return; }
+    (async () => {
+      setLoadingBk(true);
+      try {
+        const courtIds = await getClubCourtIds(clubId);
+        if (courtIds.length === 0) { setLoadingBk(false); return; }
+        const { data } = await sb.from('booking_players')
+          .select('booking:bookings!booking_players_booking_id_fkey(id,start_time,end_time,status,payment_status,total_amount,court:courts!bookings_court_id_fkey(court_number,court_type))')
+          .eq('player_id', member.user_id)
+          .in('booking.court_id', courtIds)
+          .order('booking(start_time)', { ascending: false })
+          .limit(10);
+        setBookings((data || []).map(d => d.booking).filter(Boolean));
+      } catch (e) { console.error(e); }
+      finally { setLoadingBk(false); }
+    })();
+  }, [member?.user_id, clubId]);
+
+  const name  = member.profile?.full_name || member.member_name || 'İsimsiz Üye';
+  const pkg   = packages.find(p => p.id === member.package_id);
+  const STATUS_CLS = { confirmed:'b-success', completed:'b-muted', cancelled:'b-danger', pending:'b-warning' };
+
+  return (
+    <Modal title="Üye Profili" wide onClose={onClose} footer={
+      <button className="btn btn-ghost btn-sm" onClick={onClose}>Kapat</button>
+    }>
+      <div style={{ display:'flex', flexDirection:'column', gap:16 }}>
+        {/* Üst bilgi */}
+        <div style={{ display:'flex', alignItems:'center', gap:14 }}>
+          <Av name={name} size={56} />
+          <div>
+            <div style={{ fontWeight:800, fontSize:18 }}>{name}</div>
+            {(member.member_email || member.profile?.email) && (
+              <div style={{ fontSize:13, color:'var(--text-2)' }}>{member.member_email || member.profile?.email}</div>
+            )}
+            {member.member_phone && <div style={{ fontSize:13, color:'var(--text-2)' }}>{member.member_phone}</div>}
+          </div>
+        </div>
+
+        {/* Detaylar */}
+        <div className="card" style={{ gap:0, padding:0, overflow:'hidden' }}>
+          {[
+            { label:'Durum',         value: STATUS_LABELS[member.status] || member.status },
+            { label:'Üyelik Paketi', value: pkg?.name || 'Paketsiz' },
+            { label:'Katılım Tarihi',value: member.join_date ? fmtDate(member.join_date) : '—' },
+            { label:'Cinsiyet',      value: GENDER_LABELS[member.gender] || '—' },
+            { label:'Doğum Tarihi',  value: member.birth_date ? fmtDate(member.birth_date) : '—' },
+          ].map((row, i) => (
+            <div key={i} style={{ display:'flex', justifyContent:'space-between', padding:'10px 14px', borderBottom:'1px solid var(--border)' }}>
+              <span style={{ fontSize:13, color:'var(--text-2)' }}>{row.label}</span>
+              <span style={{ fontSize:13, fontWeight:600 }}>{row.value}</span>
+            </div>
+          ))}
+          {pkg && (
+            <div style={{ padding:'10px 14px' }}>
+              <div style={{ fontSize:11, fontWeight:700, color:'var(--text-2)', marginBottom:6 }}>PAKET DETAYLARI</div>
+              <div style={{ fontSize:12, color:'var(--text-2)', display:'flex', flexDirection:'column', gap:2 }}>
+                {pkg.price != null && <span>Fiyat: {fmtMoney(pkg.price)} / {pkg.price_period === 'monthly' ? 'ay' : pkg.price_period === 'yearly' ? 'yıl' : 'tek seferlik'}</span>}
+                {pkg.duration_days && <span>Süre: {pkg.duration_days} gün</span>}
+                {pkg.weekly_court_hours_limit && <span>Haftalık kort limiti: {pkg.weekly_court_hours_limit} saat</span>}
+                {pkg.cancellation_limit && <span>Aylık iptal limiti: {pkg.cancellation_limit}</span>}
+                {pkg.court_extra_fee && <span>Rezervasyon ek ücreti: {fmtMoney(pkg.court_extra_fee)}</span>}
+              </div>
+            </div>
+          )}
+        </div>
+
+        {/* Rezervasyon geçmişi */}
+        {member.user_id && (
+          <div>
+            <div style={{ fontWeight:700, fontSize:15, marginBottom:8 }}>Son Rezervasyonlar</div>
+            {loadingBk ? <Spinner /> : bookings.length === 0 ? (
+              <div style={{ fontSize:13, color:'var(--text-2)', textAlign:'center', padding:'12px 0' }}>Henüz rezervasyon yok.</div>
+            ) : (
+              <div className="table-wrap">
+                {bookings.map((b, i) => {
+                  const start = b.start_time ? new Date(b.start_time) : null;
+                  return (
+                    <div key={b.id} style={{ display:'flex', alignItems:'center', padding:'10px 14px', gap:10, borderBottom: i < bookings.length-1 ? '1px solid var(--border)' : 'none' }}>
+                      <div style={{ flex:1 }}>
+                        <div style={{ fontWeight:600, fontSize:13 }}>Kort {b.court?.court_number || '?'} — {b.court?.court_type || ''}</div>
+                        <div style={{ fontSize:11, color:'var(--text-2)' }}>
+                          {start ? start.toLocaleDateString('tr-TR', { day:'2-digit', month:'short', year:'numeric' }) : '—'}
+                          {start ? ` ${start.toLocaleTimeString('tr-TR', { hour:'2-digit', minute:'2-digit' })}` : ''}
+                        </div>
+                      </div>
+                      <Badge cls={STATUS_CLS[b.status] || 'b-muted'}>{b.status === 'confirmed' ? 'Onaylı' : b.status === 'completed' ? 'Tamamlandı' : b.status === 'cancelled' ? 'İptal' : b.status}</Badge>
+                      {b.total_amount != null && (
+                        <span style={{ fontWeight:700, fontSize:13 }}>{fmtMoney(b.total_amount)}</span>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+        )}
+      </div>
+    </Modal>
+  );
+}
+
 function MembersScreen({ clubId }) {
   const { useState, useEffect, useCallback } = React;
 
@@ -36,6 +144,7 @@ function MembersScreen({ clubId }) {
   const [search,       setSearch]       = useState('');
   const [view,         setView]         = useState('members');
   const [approvingId,  setApprovingId]  = useState(null);
+  const [profileMember, setProfileMember] = useState(null);
 
   // Üye ekle modal
   const [addVisible,      setAddVisible]      = useState(false);
@@ -331,6 +440,9 @@ function MembersScreen({ clubId }) {
                   </div>
                   <Badge cls={STATUS_CLS[m.status] || ''}>{STATUS_LABELS[m.status] || m.status}</Badge>
                   <div className="actions">
+                    <button className="btn btn-ghost btn-sm btn-icon" title="Profil Detayı" onClick={() => setProfileMember(m)}>
+                      <span className="material-icons" style={{fontSize:16}}>person</span>
+                    </button>
                     {m.status === 'pending' && (
                       <>
                         <button
@@ -520,6 +632,16 @@ function MembersScreen({ clubId }) {
             </div>
           )}
         </Modal>
+      )}
+
+      {/* ── Üye Profil Modalı ── */}
+      {profileMember && (
+        <MemberProfileModal
+          member={profileMember}
+          clubId={clubId}
+          packages={packages}
+          onClose={() => setProfileMember(null)}
+        />
       )}
 
       {/* ── Paket Ekle/Düzenle Modalı ── */}
