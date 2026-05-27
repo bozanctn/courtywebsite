@@ -106,7 +106,8 @@ window.BookingRow = function BookingRow({ booking, onClick }) {
   const players = booking.players || booking.booking_players || [];
   const playerName = booking.player_name ||
     players.find(p => p.is_primary_player)?.profiles?.full_name ||
-    players[0]?.profiles?.full_name || '—';
+    players[0]?.profiles?.full_name ||
+    booking.user_profile?.full_name || '—';
   const others = players.length - 1;
 
   const courtNum = booking.court_number ||

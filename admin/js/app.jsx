@@ -184,7 +184,7 @@ function App() {
         // Kulüp hesabı mı?
         const profile = await getClubProfile(sess.user.id);
         if (profile) {
-          setClubProfile(profile);
+          setClubProfile({ ...profile, email: profile.email || sess.user.email });
           setUserType('club');
           fetchBadgeCounts(profile.id, sess.user.id);
           setLoading(false);

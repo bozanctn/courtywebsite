@@ -405,8 +405,12 @@ function GroupsScreen({ clubId }) {
       if (valid.length < 3) { alert('Grup oluşturmak için en az 3 üye gereklidir.'); return; }
     }
     if (schedConflicts.length) { alert('Program çakışmaları giderilmeden kaydedilemez.'); return; }
-    if (schedSelCourts.length > 0 && schedSelDays.length > 0 && schedStartH >= schedEndH) {
+    if (schedSelDays.length > 0 && schedStartH >= schedEndH) {
       alert('Bitiş saati başlangıçtan büyük olmalı.'); return;
+    }
+    const clubPct = Number(form.club_percentage);
+    if (!isNaN(clubPct) && form.club_percentage !== '' && (clubPct < 0 || clubPct > 100)) {
+      alert('Kulüp yüzdesi 0-100 arasında olmalıdır.'); return;
     }
     setSaving(true);
     try {

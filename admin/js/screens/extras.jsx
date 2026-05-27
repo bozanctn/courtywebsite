@@ -574,12 +574,21 @@ function StudentNotesScreen({ clubId }) {
 // Mobil MyProgramScreen.tsx yapısının birebir kopyası:
 // Tüm veriler tek seferde çekilir, tarih filtresi JS'de useMemo ile yapılır.
 // ═══════════════════════════════════════════════════════════════
-function MyProgramScreen({ clubId }) {
+function MyProgramScreen({ clubId, setScreen }) {
   const { useState, useEffect, useMemo } = React;
   const [selDate,    setSelDate]    = useState(todayISO());
   const [courts,     setCourts]     = useState([]);
   const [selCourtId, setSelCourtId] = useState(null);
   const [loading,    setLoading]    = useState(true);
+
+  // Slot tıklama / sürükleme state
+  const [slotClickInfo,  setSlotClickInfo]  = useState(null); // { courtId, startHour, endHour }
+  const [slotTypeModal,  setSlotTypeModal]  = useState(false);
+  const [closureGroups,  setClosureGroups]  = useState([]);
+  const [closureType,    setClosureType]    = useState(null); // 'closure' | 'group'
+  const [selectedGroup,  setSelectedGroup]  = useState('');
+  const [slotSaving,     setSlotSaving]     = useState(false);
+  const [dragState,      setDragState]      = useState(null); // { courtId, startHour, currentHour }
 
   // Ham veri — sorgu yok, useMemo'da filtre var
   const [allBookings,       setAllBookings]       = useState([]);
@@ -592,8 +601,17 @@ function MyProgramScreen({ clubId }) {
   const START_H = 6;
   const END_H   = 23;
 
-  // Yalnızca clubId değişince yükle — selDate değişince YÜKLEME YOK
+  // clubId değişince veya ekrana her gelindiğinde yükle (window focus)
   useEffect(() => { if (clubId) load(); }, [clubId]);
+  React.useEffect(() => {
+    const onFocus = () => { if (clubId && !document.hidden) load(); };
+    document.addEventListener('visibilitychange', onFocus);
+    window.addEventListener('focus', onFocus);
+    return () => {
+      document.removeEventListener('visibilitychange', onFocus);
+      window.removeEventListener('focus', onFocus);
+    };
+  }, [clubId]);
 
   const load = async () => {
     setLoading(true);
@@ -749,6 +767,171 @@ function MyProgramScreen({ clubId }) {
   const noCourtLessons = useMemo(() =>
     dayEvents.filter(e => !e.courtId && e.type === 'lesson'), [dayEvents]);
 
+  const isSlotOccupied = (courtId, hour) =>
+    dayEvents.some(e => e.courtId === courtId && e.sh <= hour && e.eh > hour);
+
+  // Sürükleme state — courtIdx: displayCourts içindeki indeks
+  const { useRef } = React;
+  const dragStateRef = useRef(null);
+
+  // Dikdörtgendeki tüm slotlar boş mu?
+  const rectAllEmpty = (minCIdx, maxCIdx, minH, maxH, dcourts) => {
+    for (let ci = minCIdx; ci <= maxCIdx; ci++) {
+      const cId = dcourts[ci]?.id;
+      if (!cId) return false;
+      for (let h = minH; h <= maxH; h++) {
+        if (isSlotOccupied(cId, h)) return false;
+      }
+    }
+    return true;
+  };
+
+  const commitDrag = (ds, dcourts) => {
+    if (!ds) return;
+    const startHour  = Math.min(ds.startHour,   ds.currentHour);
+    const endHour    = Math.max(ds.startHour,   ds.currentHour) + 1;
+    const minCIdx    = Math.min(ds.startCIdx,   ds.currentCIdx);
+    const maxCIdx    = Math.max(ds.startCIdx,   ds.currentCIdx);
+    const courtIds   = (dcourts || []).slice(minCIdx, maxCIdx + 1).map(c => c.id);
+    setDragState(null);
+    dragStateRef.current = null;
+    setSlotClickInfo({ courtIds, startHour, endHour });
+    setClosureType(null);
+    setSelectedGroup('');
+    setSlotTypeModal(true);
+  };
+
+  // displayCourts'u ref'te tut — global mouseup closure'unda güncel değer olsun
+  const displayCourtsRef = useRef([]);
+
+  // Global mouseup — fare ekran dışına taşsa da sürükleme biter
+  React.useEffect(() => {
+    const onUp = () => {
+      if (dragStateRef.current) commitDrag(dragStateRef.current, displayCourtsRef.current);
+    };
+    window.addEventListener('mouseup', onUp);
+    return () => window.removeEventListener('mouseup', onUp);
+  }, []);
+
+  const handleMouseDown = (courtIdx, courtId, hour) => {
+    if (isSlotOccupied(courtId, hour)) return;
+    const ds = { startCIdx: courtIdx, currentCIdx: courtIdx, startHour: hour, currentHour: hour };
+    dragStateRef.current = ds;
+    setDragState(ds);
+  };
+
+  const handleMouseEnter = (courtIdx, courtId, hour) => {
+    const cur = dragStateRef.current;
+    if (!cur) return;
+    const minCIdx = Math.min(cur.startCIdx, courtIdx);
+    const maxCIdx = Math.max(cur.startCIdx, courtIdx);
+    const minH    = Math.min(cur.startHour, hour);
+    const maxH    = Math.max(cur.startHour, hour);
+    if (!rectAllEmpty(minCIdx, maxCIdx, minH, maxH, displayCourtsRef.current)) return;
+    const ds = { ...cur, currentCIdx: courtIdx, currentHour: hour };
+    dragStateRef.current = ds;
+    setDragState(ds);
+  };
+
+  const applySlotPrefill = async (type) => {
+    const { courtIds, startHour, endHour } = slotClickInfo;
+    const startStr = `${String(startHour).padStart(2,'0')}:00`;
+    const endStr   = `${String(endHour).padStart(2,'0')}:00`;
+
+    if (type === 'reservation' || type === 'lesson') {
+      // Tek kort — çoklu seçimde ilk kortu kullan
+      window.__slotPrefill = { type, court_id: courtIds[0], date: selDate, start_time: startStr, end_time: endStr };
+      setSlotTypeModal(false);
+      setSlotClickInfo(null);
+      setScreen('reservations');
+    } else {
+      if (type === 'group' && closureGroups.length === 0) {
+        const { data } = await sb.from('club_groups').select('id,name,coach_id').eq('club_id', clubId).eq('is_active', true);
+        setClosureGroups(data || []);
+      }
+      setClosureType(type);
+    }
+  };
+
+  const saveInlineClosure = async () => {
+    if (!slotClickInfo) return;
+    setSlotSaving(true);
+    try {
+      // Grup dersi → seçili grubun hocası varsa müsaitlik kontrolü
+      if (closureType === 'group' && selectedGroup) {
+        const group = closureGroups.find(g => g.id === selectedGroup);
+        const coachId = group?.coach_id;
+        if (coachId) {
+          const startISO = `${selDate}T${String(slotClickInfo.startHour).padStart(2,'0')}:00:00`;
+          const endISO   = `${selDate}T${String(slotClickInfo.endHour).padStart(2,'0')}:00:00`;
+          // Hoca bu saatlerde başka ders/rezervasyonun var mı?
+          const [{ data: lessonConflict }, { data: manualConflict }, { data: closureConflict }] = await Promise.all([
+            sb.from('lessons')
+              .select('id')
+              .eq('club_coach_id', coachId)
+              .neq('status', 'cancelled')
+              .lt('start_time', endISO)
+              .gt('end_time', startISO),
+            sb.from('club_manual_lessons')
+              .select('id, start_time, end_time')
+              .eq('coach_id', coachId)
+              .eq('date', selDate),
+            sb.from('court_closures')
+              .select('id, coach_id, start_hour, end_hour, start_date, end_date, closure_type, day_of_week')
+              .eq('coach_id', coachId)
+              .eq('is_active', true),
+          ]);
+
+          if (lessonConflict?.length > 0) {
+            const ok = confirm('⚠️ Bu saatte hocanın başka bir dersi var. Yine de eklensin mi?');
+            if (!ok) { setSlotSaving(false); return; }
+          } else {
+            const sh = String(slotClickInfo.startHour).padStart(2,'0') + ':00';
+            const eh = String(slotClickInfo.endHour).padStart(2,'0') + ':00';
+            const manualOk = !(manualConflict || []).some(l =>
+              (l.start_time || '').slice(0,5) < eh && (l.end_time || '').slice(0,5) > sh
+            );
+            const dow = new Date(selDate + 'T12:00:00').getDay();
+            const closureOk = !(closureConflict || []).some(cl => {
+              const cs = String(cl.start_hour ?? 0).padStart(2,'0') + ':00';
+              const ce = String(cl.end_hour   ?? 0).padStart(2,'0') + ':00';
+              if (!(cs < eh && ce > sh)) return false;
+              if (cl.closure_type === 'recurring_weekly') return cl.day_of_week === dow;
+              return (!cl.start_date || cl.start_date <= selDate) && (!cl.end_date || cl.end_date >= selDate);
+            });
+            if (!manualOk || !closureOk) {
+              const ok = confirm('⚠️ Bu saatte hocanın başka bir programı var. Yine de eklensin mi?');
+              if (!ok) { setSlotSaving(false); return; }
+            }
+          }
+        }
+      }
+
+      // Her kort için ayrı kayıt
+      const rows = slotClickInfo.courtIds.map(cId => ({
+        court_id:     cId,
+        closure_type: 'one_time',
+        reason:       closureType === 'group' ? 'Grup Dersi' : 'Kapalı',
+        start_hour:   slotClickInfo.startHour,
+        end_hour:     slotClickInfo.endHour,
+        start_date:   selDate,
+        end_date:     selDate,
+        is_active:    true,
+        group_id:     selectedGroup || null,
+      }));
+      const { error } = await sb.from('court_closures').insert(rows);
+      if (error) throw error;
+      setSlotTypeModal(false);
+      setSlotClickInfo(null);
+      setClosureType(null);
+      await load();
+    } catch (e) { alert('Hata: ' + e.message); }
+    finally { setSlotSaving(false); }
+  };
+
+  // displayCourts değişince ref'i güncelle (global mouseup için)
+  React.useEffect(() => { displayCourtsRef.current = displayCourts; }, [displayCourts]);
+
   const prevDay = () => {
     const d = new Date(selDate + 'T12:00:00');
     d.setDate(d.getDate() - 1);
@@ -785,7 +968,7 @@ function MyProgramScreen({ clubId }) {
     );
   };
 
-  const CourtColumn = ({ courtId, label }) => {
+  const CourtColumn = ({ courtId, courtIdx, label }) => {
     const evs = courtId ? dayEvents.filter(e => e.courtId === courtId) : noCourtLessons;
     return (
       <div style={{ flex:1, minWidth:120, borderLeft:'1px solid var(--border)', position:'relative' }}>
@@ -797,9 +980,32 @@ function MyProgramScreen({ clubId }) {
               background: occupiedCourtIds.has(courtId) ? '#EF4444' : '#22C55E' }} />
           )}
         </div>
-        {Array.from({ length: END_H - START_H }, (_, i) => (
-          <div key={i} style={{ height:SLOT_H, borderBottom:'1px solid var(--border,#f1f5f9)' }} />
-        ))}
+        {Array.from({ length: END_H - START_H }, (_, i) => {
+          const hour = START_H + i;
+          const occupied = courtId ? isSlotOccupied(courtId, hour) : true;
+          const inDrag = dragState && courtId != null &&
+            courtIdx >= Math.min(dragState.startCIdx, dragState.currentCIdx) &&
+            courtIdx <= Math.max(dragState.startCIdx, dragState.currentCIdx) &&
+            hour >= Math.min(dragState.startHour, dragState.currentHour) &&
+            hour <= Math.max(dragState.startHour, dragState.currentHour);
+          return (
+            <div key={i}
+              onMouseDown={() => courtId != null && !occupied && handleMouseDown(courtIdx, courtId, hour)}
+              onMouseEnter={() => courtId != null && handleMouseEnter(courtIdx, courtId, hour)}
+              title={courtId != null && !occupied ? `${String(hour).padStart(2,'0')}:00 – sürükleyerek seç` : undefined}
+              style={{
+                height: SLOT_H,
+                borderBottom: '1px solid var(--border,#f1f5f9)',
+                cursor: courtId != null && !occupied ? 'crosshair' : 'default',
+                background: inDrag ? '#EEF2FF' : '',
+                outline: inDrag ? '2px solid #6366F1' : 'none',
+                outlineOffset: '-2px',
+                userSelect: 'none',
+                transition: 'background 0.05s',
+              }}
+            />
+          );
+        })}
         {evs.map((ev, idx) => <EventBlock key={ev.id || idx} ev={ev} />)}
       </div>
     );
@@ -862,12 +1068,77 @@ function MyProgramScreen({ clubId }) {
                 </div>
               ))}
             </div>
-            {displayCourts.map(c => (
-              <CourtColumn key={c.id} courtId={c.id} label={`Kort ${c.court_number}`} />
+            {displayCourts.map((c, idx) => (
+              <CourtColumn key={c.id} courtId={c.id} courtIdx={idx} label={`Kort ${c.court_number}`} />
             ))}
             {!selCourtId && noCourtLessons.length > 0 && (
               <CourtColumn courtId={null} label="Genel" />
             )}
+          </div>
+        </div>
+      )}
+
+      {/* Slot Tip Seçim Modalı */}
+      {slotTypeModal && slotClickInfo && (
+        <div style={{ position:'fixed', inset:0, background:'rgba(0,0,0,0.45)', zIndex:1100, display:'flex', alignItems:'center', justifyContent:'center' }}
+          onClick={e => { if (e.target === e.currentTarget) { setSlotTypeModal(false); setSlotClickInfo(null); setClosureType(null); } }}>
+          <div style={{ background:'#fff', borderRadius:20, padding:24, width:340, display:'flex', flexDirection:'column', gap:10 }}>
+            <div style={{ fontWeight:800, fontSize:17, color:'var(--text-1)', marginBottom:2 }}>
+              {slotClickInfo.courtIds.map(id => { const c = courts.find(x => x.id === id); return c ? `Kort ${c.court_number}` : ''; }).join(', ')}
+              {' · '}{String(slotClickInfo.startHour).padStart(2,'0')}:00 – {String(slotClickInfo.endHour).padStart(2,'0')}:00
+            </div>
+            {slotClickInfo.courtIds.length > 1 && (
+              <div style={{ fontSize:11, color:'#6366F1', background:'#EEF2FF', borderRadius:8, padding:'4px 10px', marginBottom:4 }}>
+                {slotClickInfo.courtIds.length} kort seçildi — Rezervasyon/Ders için yalnızca ilk kort kullanılır
+              </div>
+            )}
+
+            {!closureType ? (
+              <>
+                <div style={{ fontSize:13, color:'var(--text-2)', marginBottom:4 }}>Ne yapmak istersiniz?</div>
+                {[
+                  { type:'reservation', icon:'event',  label:'Rezervasyon', color:'#003399' },
+                  { type:'lesson',      icon:'school', label:'Özel Ders',   color:'#7C3AED' },
+                  { type:'group',       icon:'groups', label:'Grup Dersi',  color:'#0891B2' },
+                  { type:'closure',     icon:'lock',   label:'Kapatma',     color:'#DC2626' },
+                ].map(({ type, icon, label, color }) => (
+                  <button key={type}
+                    style={{ display:'flex', alignItems:'center', gap:12, padding:'13px 16px', borderRadius:14, border:`1.5px solid ${color}20`, background:`${color}08`, cursor:'pointer', fontSize:14, fontWeight:700, color, textAlign:'left' }}
+                    onClick={() => applySlotPrefill(type)}
+                  >
+                    <span className="material-icons" style={{ fontSize:20, color }}>{icon}</span>
+                    {label}
+                  </button>
+                ))}
+              </>
+            ) : (
+              <>
+                <div style={{ fontSize:13, fontWeight:600, color:'var(--text-1)', marginBottom:4 }}>
+                  {closureType === 'group' ? 'Grup seçin (opsiyonel)' : 'Kapatma Onayı'}
+                </div>
+                {closureType === 'group' && (
+                  <select value={selectedGroup} onChange={e => setSelectedGroup(e.target.value)}
+                    style={{ border:'1.5px solid var(--border)', borderRadius:10, padding:'10px 12px', fontSize:14 }}>
+                    <option value="">— Grup seçin (opsiyonel)</option>
+                    {closureGroups.map(g => <option key={g.id} value={g.id}>{g.name}</option>)}
+                  </select>
+                )}
+                <button
+                  style={{ padding:'13px', borderRadius:14, background: closureType==='group' ? '#0891B2' : '#DC2626', border:'none', color:'#fff', fontWeight:700, fontSize:14, cursor: slotSaving ? 'not-allowed' : 'pointer', opacity: slotSaving ? 0.6 : 1 }}
+                  onClick={saveInlineClosure} disabled={slotSaving}>
+                  {slotSaving ? 'Kaydediliyor…' : closureType === 'group' ? 'Grup Dersi Ekle' : 'Kapat'}
+                </button>
+                <button style={{ padding:'10px', borderRadius:12, border:'1px solid var(--border)', background:'var(--bg)', cursor:'pointer', fontSize:13, color:'var(--text-2)', fontWeight:600 }}
+                  onClick={() => setClosureType(null)}>
+                  ← Geri
+                </button>
+              </>
+            )}
+
+            <button style={{ marginTop:2, padding:'10px', borderRadius:12, border:'1px solid var(--border)', background:'var(--bg)', cursor:'pointer', fontSize:13, color:'var(--text-2)', fontWeight:600 }}
+              onClick={() => { setSlotTypeModal(false); setSlotClickInfo(null); setClosureType(null); }}>
+              İptal
+            </button>
           </div>
         </div>
       )}

@@ -102,6 +102,7 @@ function DashboardScreen({ clubId, clubProfile, setScreen }) {
           ? sb.from('bookings')
               .select('*, courts!bookings_court_id_fkey(court_number,court_type), booking_players!booking_players_booking_id_fkey(player_id,is_primary_player, profiles!booking_players_player_id_fkey(id,full_name,email))')
               .in('court_id', courtIds)
+              .neq('status', 'cancelled')
               .gte('start_time', dbStart)
               .lte('start_time', dbEnd)
               .order('start_time', { ascending: true })
@@ -215,10 +216,16 @@ function DashboardScreen({ clubId, clubProfile, setScreen }) {
   );
 }
 
+function lesson_court_row(lesson, courts) {
+  if (lesson.court_id) return courts.find(c => c.id === lesson.court_id);
+  const m = (lesson.location || '').match(/Kort\s*(\d+)/i);
+  return m ? courts.find(c => c.court_number === parseInt(m[1])) : null;
+}
+
 // ═══════════════════════════════════════════════════════════════
 // REZERVASYONLAR
 // ═══════════════════════════════════════════════════════════════
-function ReservationsScreen({ clubId }) {
+function ReservationsScreen({ clubId, setScreen }) {
   const { useState, useEffect } = React;
   const [mainTab,   setMainTab]   = useState('bookings'); // 'bookings' | 'lessons'
   const [selDate,   setSelDate]   = useState(todayISO());
@@ -237,11 +244,28 @@ function ReservationsScreen({ clubId }) {
   const [loadingL,     setLoadingL]     = useState(false);
   const [lessonModal,  setLessonModal]  = useState(null);
   const [lessonForm,   setLessonForm]   = useState({});
-  const [lessonMarkingId, setLessonMarkingId] = useState(null);
+  const [lessonMarkingId,    setLessonMarkingId]    = useState(null);
+  const [lessonPlayerSearch,   setLessonPlayerSearch]   = useState('');
+  const [lessonPlayerResults,  setLessonPlayerResults]  = useState([]);
+  const [lessonSelectedPlayer, setLessonSelectedPlayer] = useState(null);
 
   useEffect(() => { if (clubId) { loadCourts(); loadDotDates(); } }, [clubId]);
   useEffect(() => { if (clubId) loadDay(); }, [clubId, selDate]);
   useEffect(() => { if (clubId && mainTab === 'lessons') loadLessons(); }, [clubId, mainTab, selDate]);
+
+  // Kortlar ekranından slot tıklayarak gelen rezervasyon prefill
+  useEffect(() => {
+    const p = window.__slotPrefill;
+    if (!p) return;
+    if (p.type === 'reservation') {
+      window.__slotPrefill = null;
+      setForm({ start_time: `${p.date}T${p.start_time}`, end_time: `${p.date}T${p.end_time}`, court_id: p.court_id, status: 'confirmed', notes: '' });
+      setModal({ type: 'add' });
+    } else if (p.type === 'lesson') {
+      // Özel ders: coaches yüklendikten sonra açılacak — loadLessons içinde handle ediliyor
+      setMainTab('lessons');
+    }
+  }, []);
 
   // Süre seçilince bitiş saatini otomatik hesapla (mobil ile aynı)
   useEffect(() => {
@@ -283,12 +307,15 @@ function ReservationsScreen({ clubId }) {
       const endDt   = new Date(selDate + 'T23:59:59');
       const courtIds = await getClubCourtIds(clubId);
       if (courtIds.length === 0) { setBookings([]); return; }
+      const startDb = localTimeToDb(startDt.toISOString());
+      const endDb   = localTimeToDb(endDt.toISOString());
       const { data, error } = await sb
         .from('bookings')
         .select('*, courts!bookings_court_id_fkey(court_number,court_type), booking_players!booking_players_booking_id_fkey(player_id, is_primary_player, profiles!booking_players_player_id_fkey(id,full_name,email))')
         .in('court_id', courtIds)
-        .gte('start_time', startDt.toISOString())
-        .lte('start_time', endDt.toISOString())
+        .neq('status', 'cancelled')
+        .gte('start_time', startDb)
+        .lte('start_time', endDb)
         .order('start_time', { ascending: true });
       if (error) { console.error('loadDay error:', error); setBookings([]); return; }
       setBookings((data || []).map(b => ({
@@ -304,9 +331,36 @@ function ReservationsScreen({ clubId }) {
     }
   };
 
-  const updateStatus = async (id, status) => {
-    await sb.from('bookings').update({ status }).eq('id', id);
-    loadDay();
+  const updateStatus = async (id, status, booking) => {
+    try {
+      if (status === 'cancelled') {
+        if (!confirm('Bu rezervasyonu iptal etmek istediğinize emin misiniz?')) return;
+        const { error } = await sb.from('bookings').update({ status }).eq('id', id);
+        if (error) throw error;
+        if (booking?.user_id) {
+          await sb.from('notifications').insert({
+            user_id: booking.user_id,
+            title:   'Rezervasyon İptal Edildi',
+            message: 'Rezervasyonunuz kulüp tarafından iptal edildi.',
+            type:    'reservation_cancelled',
+            data:    { booking_id: id },
+          });
+        }
+      } else {
+        const { error } = await sb.from('bookings').update({ status }).eq('id', id);
+        if (error) throw error;
+        if (status === 'confirmed' && booking?.user_id) {
+          await sb.from('notifications').insert({
+            user_id: booking.user_id,
+            title:   'Rezervasyon Onaylandı',
+            message: 'Rezervasyonunuz kulüp tarafından onaylandı.',
+            type:    'reservation_confirmed',
+            data:    { booking_id: id },
+          });
+        }
+      }
+      loadDay();
+    } catch (e) { alert(e.message); }
   };
 
   const markBookingPaid = async (booking) => {
@@ -465,14 +519,18 @@ function ReservationsScreen({ clubId }) {
       });
       if (closureBlock) { alert('Bu kort seçilen saatte kapalı (bakım veya etkinlik).'); return; }
     }
+    if (!form.start_time || !form.end_time) { alert('Başlangıç ve bitiş saati zorunludur.'); return; }
+    if (!form.court_id) { alert('Kort seçimi zorunludur.'); return; }
+    const startDb = localTimeToDb(form.start_time);
+    const endDb   = localTimeToDb(form.end_time);
+    const durationHours = Math.round((new Date(endDb) - new Date(startDb)) / 3600000 * 100) / 100;
+    if (!(durationHours > 0)) { alert('Bitiş saati başlangıç saatinden sonra olmalıdır.'); return; }
+
     setSaving(true);
     try {
       const { data: { user } } = await sb.auth.getUser();
       if (!user) throw new Error('Oturum bulunamadı.');
 
-      const startDb = localTimeToDb(form.start_time);
-      const endDb   = localTimeToDb(form.end_time);
-      const durationHours = Math.round((new Date(endDb) - new Date(startDb)) / 3600000 * 100) / 100;
       const court = courts.find(c => c.id === form.court_id);
       const totalAmount = Math.round((court?.hourly_rate || 0) * durationHours * 100) / 100;
 
@@ -500,17 +558,40 @@ function ReservationsScreen({ clubId }) {
 
       setModal(null);
       loadDay();
-    } catch (e) { alert(e.message); }
+    } catch (e) {
+      if (e.message?.includes('no_overlapping_bookings') || e.code === '23P01') {
+        alert('Bu kort seçilen saatte zaten dolu. Lütfen farklı bir saat veya kort seçin.');
+      } else {
+        alert(e.message);
+      }
+    }
     finally { setSaving(false); }
   };
 
+  useEffect(() => {
+    if (!lessonModal) {
+      setLessonSelectedPlayer(null);
+      setLessonPlayerSearch('');
+      setLessonPlayerResults([]);
+    }
+  }, [lessonModal]);
+
   // ── Özel ders fonksiyonları ──────────────────────────────────
+  const searchPlayers = async (q) => {
+    if (q.length < 2) { setLessonPlayerResults([]); return; }
+    const { data } = await sb.from('profiles').select('id,full_name,email')
+      .eq('user_type', 'player')
+      .or(`full_name.ilike.%${q}%,email.ilike.%${q}%`)
+      .limit(8);
+    setLessonPlayerResults(data || []);
+  };
+
   const loadLessons = async () => {
     setLoadingL(true);
     try {
       const d = selDate;
-      const dbStart = `${d}T00:00:00`;
-      const dbEnd   = `${d}T23:59:59`;
+      const dbStart = new Date(d + 'T00:00:00').toISOString();
+      const dbEnd   = new Date(d + 'T23:59:59').toISOString();
 
       // Kulübün koçlarını al
       const [coachRes, courtRes] = await Promise.all([
@@ -523,38 +604,17 @@ function ReservationsScreen({ clubId }) {
       setCoaches(allClubCoaches);
       setLessonCourts(courtRes.data || []);
 
-      const combined = [];
-
-      // 1) bookings tablosu — club_coach_id olan rezervasyonlar
-      if (myCoachIds.length > 0) {
-        const { data: bookings } = await sb.from('bookings')
-          .select('id, start_time, end_time, club_coach_id, payment_status, total_amount, courts!bookings_court_id_fkey(court_number)')
-          .not('club_coach_id', 'is', null)
-          .in('club_coach_id', myCoachIds)
-          .gte('start_time', dbStart)
-          .lte('start_time', dbEnd)
-          .order('start_time', { ascending: true });
-
-        (bookings || []).forEach(b => {
-          const court = Array.isArray(b.courts) ? b.courts[0] : b.courts;
-          const start = new Date(b.start_time);
-          const end   = new Date(b.end_time);
-          combined.push({
-            id:             b.id,
-            date:           start.toISOString().split('T')[0],
-            start_time:     start.toLocaleTimeString('tr-TR', { hour: '2-digit', minute: '2-digit' }),
-            end_time:       end.toLocaleTimeString('tr-TR',   { hour: '2-digit', minute: '2-digit' }),
-            coach_name:     coachMap.get(b.club_coach_id) || 'Antrenör',
-            coach_id:       b.club_coach_id,
-            location:       court?.court_number ? `Kort ${court.court_number}` : '—',
-            source:         'booking',
-            payment_status: b.payment_status === 'paid' ? 'paid' : 'unpaid',
-            amount:         b.total_amount || null,
-          });
-        });
+      // Kortlar ekranından slot tıklayarak gelen ders prefill (coaches yüklendikten sonra)
+      const p = window.__slotPrefill;
+      if (p?.type === 'lesson') {
+        window.__slotPrefill = null;
+        setLessonForm({ use_manual_coach: false, coach_id: '', manual_coach_name: '', date: p.date, start_time: p.start_time, end_time: p.end_time, duration: 1, student_name: '', player_id: null, court_id: p.court_id, notes: '', amount: '', payment_status: 'unpaid' });
+        setLessonModal({ type: 'add' });
       }
 
-      // 2) club_manual_lessons tablosu — kulüp yöneticisinin eklediği manuel dersler
+      const combined = [];
+
+      // 1) club_manual_lessons tablosu — kulüp yöneticisinin eklediği manuel dersler
       const { data: manual } = await sb.from('club_manual_lessons')
         .select('*, club_coaches(full_name)')
         .eq('club_id', clubId)
@@ -588,22 +648,31 @@ function ReservationsScreen({ clubId }) {
           .gte('start_time', dbStart)
           .lte('start_time', dbEnd);
 
+        const lessonIds = (directLessons || []).map(l => l.id);
+        let pkgLessonIds = new Set();
+        if (lessonIds.length > 0) {
+          const { data: pkgSessions } = await sb.from('lesson_package_sessions')
+            .select('lesson_id').in('lesson_id', lessonIds);
+          pkgLessonIds = new Set((pkgSessions || []).map(s => s.lesson_id));
+        }
+
         (directLessons || []).forEach(l => {
           const start = new Date(l.start_time);
           const end   = new Date(l.end_time);
           const court = Array.isArray(l.courts) ? l.courts[0] : l.courts;
           combined.push({
-            id:             l.id,
-            date:           start.toISOString().split('T')[0],
-            start_time:     start.toLocaleTimeString('tr-TR', { hour: '2-digit', minute: '2-digit' }),
-            end_time:       end.toLocaleTimeString('tr-TR',   { hour: '2-digit', minute: '2-digit' }),
-            student_name:   l.student_name || null,
-            coach_name:     l.club_coach_id ? (coachMap.get(l.club_coach_id) || 'Antrenör') : 'Antrenör',
-            coach_id:       l.club_coach_id || null,
-            location:       court?.court_number ? `Kort ${court.court_number}` : '—',
-            source:         'lesson',
-            payment_status: l.payment_status === 'paid' ? 'paid' : 'unpaid',
-            amount:         l.amount || null,
+            id:               l.id,
+            date:             start.toISOString().split('T')[0],
+            start_time:       start.toLocaleTimeString('tr-TR', { hour: '2-digit', minute: '2-digit' }),
+            end_time:         end.toLocaleTimeString('tr-TR',   { hour: '2-digit', minute: '2-digit' }),
+            student_name:     l.student_name || null,
+            coach_name:       l.club_coach_id ? (coachMap.get(l.club_coach_id) || 'Antrenör') : 'Antrenör',
+            coach_id:         l.club_coach_id || null,
+            location:         court?.court_number ? `Kort ${court.court_number}` : '—',
+            source:           'lesson',
+            payment_status:   l.payment_status === 'paid' ? 'paid' : 'unpaid',
+            amount:           l.amount || null,
+            is_package_lesson: pkgLessonIds.has(l.id),
           });
         });
       }
@@ -623,6 +692,11 @@ function ReservationsScreen({ clubId }) {
     }
     if (!lessonForm.court_id) {
       alert('Lütfen kort seçin.'); return;
+    }
+    const coachOk = lessonForm.use_manual_coach ? !!lessonForm.manual_coach_name?.trim() : !!lessonForm.coach_id;
+    if (!coachOk) { alert('Lütfen bir antrenör seçin veya antrenör adını girin.'); return; }
+    if (lessonForm.start_time >= lessonForm.end_time) {
+      alert('Bitiş saati başlangıç saatinden sonra olmalıdır.'); return;
     }
 
     // Geçmiş tarih kontrolü (yalnızca yeni ders)
@@ -644,8 +718,8 @@ function ReservationsScreen({ clubId }) {
 
       const [{ data: bConflict }, { data: mConflict }, { data: closures }] = await Promise.all([
         sb.from('bookings').select('id').eq('court_id', lessonForm.court_id)
-          .in('status', ['pending', 'confirmed']).lt('start_time', endDb).gt('end_time', startDb),
-        sb.from('club_manual_lessons').select('id,start_time,end_time,location')
+          .neq('status', 'cancelled').lt('start_time', endDb).gt('end_time', startDb),
+        sb.from('club_manual_lessons').select('id,start_time,end_time,court_id,location')
           .eq('club_id', clubId).eq('date', dateStr),
         sb.from('court_closures').select('*').eq('court_id', lessonForm.court_id).eq('is_active', true),
       ]);
@@ -653,13 +727,13 @@ function ReservationsScreen({ clubId }) {
       if (bConflict?.length > 0) { alert('Bu kort seçilen saatte zaten rezerve edilmiş.'); return; }
 
       const hasManualConflict = (mConflict || [])
-        .filter(l => l.location === locationStr)
+        .filter(l => l.court_id ? l.court_id === lessonForm.court_id : l.location === locationStr)
         .some(l => {
           const ls = (l.start_time || '').slice(0, 5);
           const le = (l.end_time   || '').slice(0, 5);
           return ls < endHH && le > startHH;
         });
-      if (hasManualConflict) { alert('Bu kort seçilen saatte planlanmış bir ders var.'); return; }
+      if (hasManualConflict) { alert('Bu kort seçilen saatte zaten dolu. Lütfen farklı bir saat veya kort seçin.'); return; }
 
       const dow = new Date(dateStr + 'T12:00:00').getDay();
       const closureBlock = (closures || []).some(cl => {
@@ -714,6 +788,31 @@ function ReservationsScreen({ clubId }) {
           if (!confirm(`⚠️ Hoca Çakışması\n\n${coachLabel} adlı hocanın bu saatte başka programı var:\n\n${conflicts.join('\n')}\n\nYine de eklensin mi?`)) return;
         }
       }
+
+      // Öğrenci müsaitlik kontrolü (yalnızca kayıtlı oyuncu seçiliyse)
+      if (lessonForm.player_id) {
+        const [{ data: ownBookings }, { data: allConflictBookings }, { data: studentLessons }] = await Promise.all([
+          sb.from('bookings').select('id').eq('user_id', lessonForm.player_id)
+            .in('status', ['pending', 'confirmed']).lt('start_time', endDb).gt('end_time', startDb),
+          sb.from('bookings').select('id')
+            .in('status', ['pending', 'confirmed']).lt('start_time', endDb).gt('end_time', startDb),
+          sb.from('lessons').select('id').eq('student_id', lessonForm.player_id)
+            .neq('status', 'cancelled').lt('start_time', endDb).gt('end_time', startDb),
+        ]);
+
+        const conflictBookingIds = (allConflictBookings || []).map(b => b.id);
+        let isInvited = false;
+        if (conflictBookingIds.length > 0) {
+          const { data: invited } = await sb.from('booking_players').select('player_id')
+            .eq('player_id', lessonForm.player_id).in('booking_id', conflictBookingIds);
+          isInvited = (invited?.length ?? 0) > 0;
+        }
+
+        if ((ownBookings?.length ?? 0) > 0 || isInvited || (studentLessons?.length ?? 0) > 0) {
+          alert(`${lessonSelectedPlayer?.full_name || 'Öğrenci'} adlı oyuncunun bu saatte başka bir rezervasyonu veya dersi bulunuyor.`);
+          return;
+        }
+      }
     }
 
     setSaving(true);
@@ -731,6 +830,7 @@ function ReservationsScreen({ clubId }) {
         start_time:     lessonForm.start_time.slice(0, 5),
         end_time:       lessonForm.end_time.slice(0, 5),
         student_name:   lessonForm.student_name || null,
+        court_id:       lessonForm.court_id,
         location:       courtRow ? `Kort ${courtRow.court_number}` : '',
         notes:          lessonForm.notes?.trim() || null,
         payment_status: lessonForm.payment_status || 'unpaid',
@@ -770,15 +870,46 @@ function ReservationsScreen({ clubId }) {
 
       setLessonModal(null);
       loadLessons();
-    } catch (e) { alert(e.message); }
+    } catch (e) {
+      if (e.message?.includes('no_overlapping_bookings') || e.code === '23P01') {
+        alert('Bu kort seçilen saatte zaten dolu. Lütfen farklı bir saat veya kort seçin.');
+      } else {
+        alert(e.message);
+      }
+    }
     finally { setSaving(false); }
   };
 
-  const deleteLesson = async (lesson) => {
-    if (lesson.source === 'booking') { alert('Rezervasyon kaynaklı dersler buradan silinemez.'); return; }
-    if (!confirm('Bu dersi silmek istediğinize emin misiniz?')) return;
-    const table = lesson.source === 'lesson' ? 'lessons' : 'club_manual_lessons';
-    await sb.from(table).delete().eq('id', lesson.id);
+  const cancelLesson = async (lesson) => {
+    if (lesson.source === 'booking') { alert('Rezervasyon kaynaklı dersler buradan iptal edilemez.'); return; }
+    if (!confirm('Bu dersi iptal etmek istediğinize emin misiniz?')) return;
+    try {
+      if (lesson.source === 'lesson') {
+        if (lesson.package_session_id) {
+          const { data: pkgSession } = await sb.from('lesson_package_sessions')
+            .select('package_id').eq('id', lesson.package_session_id).single();
+          if (pkgSession?.package_id) {
+            const { data: pkg } = await sb.from('player_lesson_packages')
+              .select('remaining_sessions').eq('id', pkgSession.package_id).single();
+            if (pkg) {
+              await sb.from('player_lesson_packages')
+                .update({ remaining_sessions: (pkg.remaining_sessions || 0) + 1 })
+                .eq('id', pkgSession.package_id);
+            }
+            await sb.from('lesson_package_sessions').delete().eq('id', lesson.package_session_id);
+          }
+        }
+        await sb.from('lessons').update({ status: 'cancelled' }).eq('id', lesson.id);
+      } else {
+        await sb.from('club_manual_lessons').delete().eq('id', lesson.id);
+        if (lesson.court_id) {
+          const startDb = localTimeToDb(`${lesson.date}T${lesson.start_time}`);
+          const endDb   = localTimeToDb(`${lesson.date}T${lesson.end_time}`);
+          await sb.from('bookings').update({ status: 'cancelled' })
+            .eq('court_id', lesson.court_id).eq('start_time', startDb).eq('end_time', endDb);
+        }
+      }
+    } catch (e) { console.warn('Ders iptal hatası:', e.message); }
     loadLessons();
   };
 
@@ -926,12 +1057,12 @@ function ReservationsScreen({ clubId }) {
                           <Badge cls={paymentClass(b.payment_status)}>{paymentLabel(b.payment_status)}</Badge>
                         )}
                         {b.status === 'confirmed' && (
-                          <button className="btn btn-ghost btn-sm btn-icon" title="Tamamlandı" onClick={() => updateStatus(b.id, 'completed')}>
+                          <button className="btn btn-ghost btn-sm btn-icon" title="Tamamlandı" onClick={() => updateStatus(b.id, 'completed', b)}>
                             <span className="material-icons" style={{fontSize:15}}>done_all</span>
                           </button>
                         )}
                         {['confirmed','completed'].includes(b.status) && (
-                          <button className="btn btn-danger btn-sm btn-icon" title="İptal Et" onClick={() => updateStatus(b.id, 'cancelled')}>
+                          <button className="btn btn-danger btn-sm btn-icon" title="İptal Et" onClick={() => updateStatus(b.id, 'cancelled', b)}>
                             <span className="material-icons" style={{fontSize:15}}>close</span>
                           </button>
                         )}
@@ -998,18 +1129,45 @@ function ReservationsScreen({ clubId }) {
                           <span className="material-icons" style={{fontSize:13}}>edit_note</span>Manuel
                         </span>
                       )}
-                      {l.source === 'booking' && (
-                        <span style={{ display:'flex', alignItems:'center', gap:4, background:'#EEF2FF', border:'1px solid #C7D2FE', borderRadius:8, padding:'4px 8px', fontSize:12, color:'var(--brand-navy)' }}>
-                          <span className="material-icons" style={{fontSize:13}}>event</span>Rezervasyon
+                      {l.is_package_lesson && (
+                        <span style={{ display:'flex', alignItems:'center', gap:4, background:'#EEF2FF', border:'1px solid #C7D2FE', borderRadius:8, padding:'4px 8px', fontSize:12, color:'#6366F1' }}>
+                          <span className="material-icons" style={{fontSize:13}}>inventory</span>Paket
                         </span>
                       )}
+                      {(() => {
+                        const cr = lesson_court_row(l, lessonCourts);
+                        const [sh2, sm2] = (l.start_time || '0:0').split(':').map(Number);
+                        const [eh2, em2] = (l.end_time   || '0:0').split(':').map(Number);
+                        const dur = Math.max(0, ((eh2 * 60 + em2) - (sh2 * 60 + sm2)) / 60);
+                        const courtFee = Math.round((cr?.hourly_rate || 0) * dur * 100) / 100;
+                        const coachFee = Math.round((Number(l.amount) || 0) * 100) / 100;
+                        return (
+                          <>
+                            {coachFee > 0 && (
+                              <span style={{ display:'flex', alignItems:'center', gap:4, background:'#EEF2FF', border:'1px solid #C7D2FE', borderRadius:8, padding:'4px 8px', fontSize:12, color:'var(--brand-navy)' }}>
+                                <span className="material-icons" style={{fontSize:13}}>person</span>Hoca: ₺{coachFee.toLocaleString('tr-TR')}
+                              </span>
+                            )}
+                            {courtFee > 0 && (
+                              <span style={{ display:'flex', alignItems:'center', gap:4, background:'#F0FDF4', border:'1px solid #BBF7D0', borderRadius:8, padding:'4px 8px', fontSize:12, color:'#16A34A' }}>
+                                <span className="material-icons" style={{fontSize:13}}>sports_tennis</span>Kort: ₺{courtFee.toLocaleString('tr-TR')}
+                              </span>
+                            )}
+                          </>
+                        );
+                      })()}
                     </div>
                     {l.notes && <div style={{ fontSize:12, color:'var(--text-2)', fontStyle:'italic', paddingLeft:2 }}>{l.notes}</div>}
                     {/* Ayraç */}
                     <div style={{ height:1, background:'var(--border)' }} />
                     {/* Ödeme + aksiyon satırı */}
                     <div style={{ display:'flex', alignItems:'center', gap:8 }}>
-                      {l.payment_status === 'paid' ? (
+                      {l.is_package_lesson ? (
+                        <div style={{ flex:1, display:'flex', alignItems:'center', gap:5, padding:'7px 10px', borderRadius:10, background:'#EEF2FF' }}>
+                          <span className="material-icons" style={{fontSize:14, color:'#6366F1'}}>inventory</span>
+                          <span style={{ fontSize:13, fontWeight:700, color:'#6366F1' }}>Paketten Düşüldü</span>
+                        </div>
+                      ) : l.payment_status === 'paid' ? (
                         <div style={{ flex:1, display:'flex', alignItems:'center', gap:5, padding:'7px 10px', borderRadius:10, background:'#DCFCE7' }}>
                           <span className="material-icons" style={{fontSize:14, color:'#22C55E'}}>check_circle</span>
                           <span style={{ fontSize:13, fontWeight:700, color:'#22C55E' }}>Ödendi</span>
@@ -1041,9 +1199,9 @@ function ReservationsScreen({ clubId }) {
                       {l.source !== 'booking' && (
                         <button
                           style={{ width:36, height:36, borderRadius:10, background:'#FEE2E2', border:'none', display:'grid', placeItems:'center', cursor:'pointer' }}
-                          title="Sil" onClick={() => deleteLesson(l)}
+                          title="İptal Et" onClick={() => cancelLesson(l)}
                         >
-                          <span className="material-icons" style={{fontSize:15, color:'#EF4444'}}>delete_outline</span>
+                          <span className="material-icons" style={{fontSize:15, color:'#EF4444'}}>cancel</span>
                         </button>
                       )}
                     </div>
@@ -1174,10 +1332,36 @@ function ReservationsScreen({ clubId }) {
               </div>
 
               {/* ── Öğrenci ───────────────────────────────────── */}
-              <div style={{ fontSize:12, fontWeight:700, color:'var(--text-2)', marginBottom:8, letterSpacing:0.4 }}>ÖĞRENCİ ADI (opsiyonel)</div>
-              <input style={{ width:'100%', border:'1.5px solid var(--border)', borderRadius:12, padding:'11px 12px', fontSize:15, color:'var(--text-1)', background:'var(--bg)', boxSizing:'border-box', marginBottom:16 }}
-                placeholder="Öğrenci adı veya boş bırakın" value={lessonForm.student_name || ''}
-                onChange={e => setLessonForm({...lessonForm, student_name: e.target.value})} />
+              <div style={{ fontSize:12, fontWeight:700, color:'var(--text-2)', marginBottom:8, letterSpacing:0.4 }}>ÖĞRENCİ (opsiyonel)</div>
+              {lessonSelectedPlayer ? (
+                <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', border:'1.5px solid var(--brand-navy)', borderRadius:12, padding:'11px 12px', marginBottom:16, background:'#EEF2FF' }}>
+                  <div>
+                    <div style={{ fontSize:14, fontWeight:700, color:'var(--brand-navy)' }}>{lessonSelectedPlayer.full_name}</div>
+                    <div style={{ fontSize:12, color:'var(--text-2)' }}>{lessonSelectedPlayer.email}</div>
+                  </div>
+                  <button style={{ background:'none', border:'none', cursor:'pointer', padding:4 }}
+                    onClick={() => { setLessonSelectedPlayer(null); setLessonPlayerSearch(''); setLessonPlayerResults([]); setLessonForm(prev => ({ ...prev, student_name: '', player_id: null })); }}>
+                    <span className="material-icons" style={{ fontSize:18, color:'var(--text-2)' }}>close</span>
+                  </button>
+                </div>
+              ) : (
+                <div style={{ position:'relative', marginBottom:16 }}>
+                  <input style={{ width:'100%', border:'1.5px solid var(--border)', borderRadius:12, padding:'11px 12px', fontSize:15, color:'var(--text-1)', background:'var(--bg)', boxSizing:'border-box' }}
+                    placeholder="Öğrenci adı yazın veya ara..." value={lessonPlayerSearch}
+                    onChange={e => { const v = e.target.value; setLessonPlayerSearch(v); setLessonForm(prev => ({ ...prev, student_name: v, player_id: null })); searchPlayers(v); }} />
+                  {lessonPlayerResults.length > 0 && (
+                    <div style={{ position:'absolute', top:'100%', left:0, right:0, zIndex:999, background:'var(--surface)', border:'1.5px solid var(--border)', borderRadius:12, boxShadow:'0 4px 16px rgba(0,0,0,0.12)', overflow:'hidden' }}>
+                      {lessonPlayerResults.map(p => (
+                        <div key={p.id} style={{ padding:'10px 14px', cursor:'pointer', borderBottom:'1px solid var(--border)' }}
+                          onMouseDown={() => { setLessonSelectedPlayer(p); setLessonForm(prev => ({ ...prev, student_name: p.full_name, player_id: p.id })); setLessonPlayerSearch(p.full_name); setLessonPlayerResults([]); }}>
+                          <div style={{ fontSize:14, fontWeight:600, color:'var(--text-1)' }}>{p.full_name}</div>
+                          <div style={{ fontSize:12, color:'var(--text-2)' }}>{p.email}</div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              )}
 
               {/* ── Kort ─────────────────────────────────────── */}
               <div style={{ fontSize:12, fontWeight:700, color:'var(--text-2)', marginBottom:8, letterSpacing:0.4 }}>KORT</div>
@@ -1250,7 +1434,7 @@ function ReservationsScreen({ clubId }) {
 // ═══════════════════════════════════════════════════════════════
 // KORTLAR
 // ═══════════════════════════════════════════════════════════════
-function CourtsScreen({ clubId }) {
+function CourtsScreen({ clubId, setScreen }) {
   const { useState, useEffect } = React;
   const [courts,    setCourts]    = useState([]);
   const [loading,   setLoading]   = useState(true);
@@ -1265,6 +1449,8 @@ function CourtsScreen({ clubId }) {
   const [closureCoaches, setClosureCoaches] = useState([]);
   const [closureGroups,  setClosureGroups]  = useState([]);
   const [courtClosures,  setCourtClosures]  = useState([]);
+  const [slotClickInfo,  setSlotClickInfo]  = useState(null); // { courtId, hour }
+  const [slotTypeModal,  setSlotTypeModal]  = useState(false);
 
   useEffect(() => { if (clubId) loadCourts(); }, [clubId]);
 
@@ -1280,7 +1466,7 @@ function CourtsScreen({ clubId }) {
     const end   = slotDate + 'T23:59:59';
     const [{ data: bk }, { data: cl }] = await Promise.all([
       sb.from('bookings').select('start_time,end_time,status,booking_players!booking_players_booking_id_fkey(profiles!booking_players_player_id_fkey(full_name))')
-        .eq('court_id', courtId).gte('start_time', start).lte('start_time', end),
+        .eq('court_id', courtId).neq('status', 'cancelled').gte('start_time', start).lte('start_time', end),
       sb.from('court_closures').select('*, coach:club_coaches(id,full_name), group:club_groups(id,name)')
         .eq('court_id', courtId)
         .eq('is_active', true)
@@ -1402,6 +1588,7 @@ function CourtsScreen({ clubId }) {
         reason:       autoReason,
         coach_id:     effectiveCoachId || null,
         group_id:     closureForm.group_id || null,
+        is_active:    true,
       };
       if ((closureForm.closure_type || 'recurring_weekly') === 'recurring_weekly') {
         payload.day_of_week = closureForm.day_of_week ?? 1;
@@ -1422,6 +1609,38 @@ function CourtsScreen({ clubId }) {
       if (expanded === closureModal.courtId) loadSlots(closureModal.courtId);
     } catch (e) { alert(e.message); }
     finally { setSaving(false); }
+  };
+
+  const handleSlotClick = (courtId, hour) => {
+    if (getSlotStatus(courtId, hour) !== 'empty') return;
+    setSlotClickInfo({ courtId, hour });
+    setSlotTypeModal(true);
+  };
+
+  const applySlotPrefill = (type) => {
+    const { courtId, hour } = slotClickInfo;
+    const startStr = `${String(hour).padStart(2,'0')}:00`;
+    const endStr   = `${String(hour+1).padStart(2,'0')}:00`;
+    setSlotTypeModal(false);
+    setSlotClickInfo(null);
+
+    if (type === 'closure') {
+      setClosureForm({ closure_type:'one_time', session_type:'maintenance', reason:'Kapalı', day_of_week:new Date(slotDate+'T12:00').getDay(), start_hour:hour, end_hour:hour+1, start_date:slotDate, end_date:slotDate, coach_id:'', group_id:'' });
+      loadClosureCoaches();
+      loadClosureGroups();
+      loadCourtClosures(courtId);
+      setClosureModal({ courtId });
+    } else if (type === 'group') {
+      setClosureForm({ closure_type:'one_time', session_type:'training', reason:'Grup Dersi', day_of_week:new Date(slotDate+'T12:00').getDay(), start_hour:hour, end_hour:hour+1, start_date:slotDate, end_date:slotDate, coach_id:'', group_id:'' });
+      loadClosureCoaches();
+      loadClosureGroups();
+      loadCourtClosures(courtId);
+      setClosureModal({ courtId });
+    } else {
+      // 'reservation' veya 'lesson' → ReservationsScreen'e yönlendir
+      window.__slotPrefill = { type, court_id: courtId, date: slotDate, start_time: startStr, end_time: endStr };
+      setScreen('reservations');
+    }
   };
 
   // Saat dilimi slot oluşturucu (06:00 – 22:00)
@@ -1533,7 +1752,11 @@ function CourtsScreen({ clubId }) {
                     {HOURS.map(h => {
                       const st = getSlotStatus(court.id, h);
                       return (
-                        <div key={h} className={`court-slot ${st}`}>
+                        <div key={h} className={`court-slot ${st}`}
+                          title={st === 'empty' ? 'Tıkla: ekle' : undefined}
+                          onClick={() => handleSlotClick(court.id, h)}
+                          style={{ cursor: st === 'empty' ? 'pointer' : 'default' }}
+                        >
                           {slotLabel(court.id, h, st)}
                         </div>
                       );
@@ -1639,6 +1862,37 @@ function CourtsScreen({ clubId }) {
             )}
           </div>
         </Modal>
+      )}
+
+      {/* Slot Tip Seçim Modalı */}
+      {slotTypeModal && slotClickInfo && (
+        <div style={{ position:'fixed', inset:0, background:'rgba(0,0,0,0.45)', zIndex:1100, display:'flex', alignItems:'center', justifyContent:'center' }}
+          onClick={e => { if (e.target === e.currentTarget) { setSlotTypeModal(false); setSlotClickInfo(null); } }}>
+          <div style={{ background:'#fff', borderRadius:20, padding:24, width:320, display:'flex', flexDirection:'column', gap:10 }}>
+            <div style={{ fontWeight:800, fontSize:17, color:'var(--text-1)', marginBottom:4 }}>
+              {String(slotClickInfo.hour).padStart(2,'0')}:00 – {String(slotClickInfo.hour+1).padStart(2,'0')}:00
+            </div>
+            <div style={{ fontSize:13, color:'var(--text-2)', marginBottom:8 }}>Ne yapmak istersiniz?</div>
+            {[
+              { type:'reservation', icon:'event', label:'Rezervasyon', color:'#003399' },
+              { type:'lesson',      icon:'school', label:'Özel Ders',   color:'#7C3AED' },
+              { type:'group',       icon:'groups', label:'Grup Dersi',  color:'#0891B2' },
+              { type:'closure',     icon:'lock',   label:'Kapatma',     color:'#DC2626' },
+            ].map(({ type, icon, label, color }) => (
+              <button key={type}
+                style={{ display:'flex', alignItems:'center', gap:12, padding:'13px 16px', borderRadius:14, border:`1.5px solid ${color}20`, background:`${color}08`, cursor:'pointer', fontSize:14, fontWeight:700, color }}
+                onClick={() => applySlotPrefill(type)}
+              >
+                <span className="material-icons" style={{ fontSize:20, color }}>{icon}</span>
+                {label}
+              </button>
+            ))}
+            <button style={{ marginTop:4, padding:'10px', borderRadius:12, border:'1px solid var(--border)', background:'var(--bg)', cursor:'pointer', fontSize:13, color:'var(--text-2)', fontWeight:600 }}
+              onClick={() => { setSlotTypeModal(false); setSlotClickInfo(null); }}>
+              İptal
+            </button>
+          </div>
+        </div>
       )}
 
       {/* Sabit Program Modalı */}
