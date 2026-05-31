@@ -851,6 +851,121 @@ const GroupScheduleSvc = {
 
     return msgs;
   },
+
+  // Gün bazında per-day kayıt (farklı kortlar + saatler + hocalar)
+  async saveGroupSchedulePerDay(groupId, groupName, daySettings, days, globalCoachIds, diffCoachPerDay, dayCoachIds) {
+    await sb.from('court_closures').delete().eq('group_id', groupId);
+    const rows = [];
+    for (const day of days) {
+      const { courts: dayCourts = [], start = 9, end = 11 } = daySettings[day] ?? {};
+      const sh = Math.floor(start),   sm = Math.round((start % 1) * 60);
+      const eh = Math.floor(end),     em = Math.round((end   % 1) * 60);
+      const coachIds = diffCoachPerDay ? (dayCoachIds[day] ?? []) : globalCoachIds;
+      for (const courtId of dayCourts) {
+        if (coachIds.length === 0) {
+          rows.push({ court_id: courtId, closure_type: 'recurring_weekly',
+            day_of_week: day, start_hour: sh, start_minute: sm, end_hour: eh, end_minute: em,
+            reason: groupName, group_id: groupId, is_active: true });
+        } else {
+          for (const coachId of coachIds) {
+            rows.push({ court_id: courtId, closure_type: 'recurring_weekly',
+              day_of_week: day, start_hour: sh, start_minute: sm, end_hour: eh, end_minute: em,
+              reason: groupName, group_id: groupId, coach_id: coachId, is_active: true });
+          }
+        }
+      }
+    }
+    if (rows.length === 0) return;
+    const { error } = await sb.from('court_closures').insert(rows);
+    if (error) throw error;
+  },
+
+  // Gün bazında çakışma kontrolü (per-day courts + coaches + half-hours)
+  async checkConflictsPerDay(groupId, daySettings, days, allCoaches, globalCoachIds, diffCoachPerDay, dayCoachIds) {
+    const msgs = [];
+    const DN = ['Pazar','Pazartesi','Salı','Çarşamba','Perşembe','Cuma','Cumartesi'];
+    const fmtH = h => `${String(Math.floor(h)).padStart(2,'0')}:${(h % 1) >= 0.5 ? '30' : '00'}`;
+
+    for (const day of days) {
+      const { courts: dayCourts = [], start = 9, end = 11 } = daySettings[day] ?? {};
+      if (!dayCourts.length) continue;
+      const startMins = start * 60, endMins = end * 60;
+      const eh = Math.floor(end);
+
+      // Kort çakışması
+      const { data: courtRows } = await sb
+        .from('court_closures')
+        .select('court_id, day_of_week, start_hour, start_minute, end_hour, end_minute, reason, group_id, courts(court_number)')
+        .in('court_id', dayCourts)
+        .eq('day_of_week', day)
+        .eq('closure_type', 'recurring_weekly')
+        .eq('is_active', true);
+      for (const row of courtRows ?? []) {
+        if (row.group_id === groupId) continue;
+        const rs = (row.start_hour + (row.start_minute ?? 0) / 60) * 60;
+        const re = (row.end_hour   + (row.end_minute   ?? 0) / 60) * 60;
+        if (startMins >= re || endMins <= rs) continue;
+        const label = row.reason ? ` (${row.reason})` : '';
+        msgs.push({ type: 'court', msg: `Kort ${row.courts?.court_number ?? '?'} · ${DN[day]} ${fmtH(row.start_hour + (row.start_minute??0)/60)}–${fmtH(row.end_hour + (row.end_minute??0)/60)} dolu${label}` });
+      }
+
+      // Hoca çakışması
+      const coachIds = diffCoachPerDay ? (dayCoachIds[day] ?? []) : globalCoachIds;
+      const effectiveCoaches = allCoaches.filter(c => coachIds.includes(c.id));
+      for (const coach of effectiveCoaches) {
+        const { data: coachRows } = await sb
+          .from('court_closures')
+          .select('court_id, day_of_week, start_hour, start_minute, end_hour, end_minute, reason, group_id, courts(court_number)')
+          .eq('coach_id', coach.id)
+          .eq('day_of_week', day)
+          .eq('closure_type', 'recurring_weekly')
+          .eq('is_active', true);
+        for (const row of coachRows ?? []) {
+          if (row.group_id === groupId) continue;
+          const rs = (row.start_hour + (row.start_minute ?? 0) / 60) * 60;
+          const re = (row.end_hour   + (row.end_minute   ?? 0) / 60) * 60;
+          if (startMins >= re || endMins <= rs) continue;
+          msgs.push({ type: 'coach', msg: `${coach.full_name} · Kort ${row.courts?.court_number ?? '?'} ${DN[day]} ${fmtH(row.start_hour + (row.start_minute??0)/60)}–${fmtH(row.end_hour + (row.end_minute??0)/60)}` });
+        }
+
+        // lessons çakışması
+        const { data: meta } = await sb.from('club_coaches').select('individual_coach_id').eq('id', coach.id).maybeSingle();
+        if (meta?.individual_coach_id) {
+          const todayTs = new Date().toISOString().split('T')[0] + 'T00:00:00';
+          const { data: lessons } = await sb.from('lessons').select('start_time,end_time,student_name')
+            .eq('coach_id', meta.individual_coach_id).neq('status','cancelled').gte('start_time', todayTs);
+          const seen = new Set();
+          for (const l of lessons ?? []) {
+            const ls = new Date(l.start_time);
+            if (ls.getDay() !== day) continue;
+            const lsh = ls.getHours() + ls.getMinutes() / 60;
+            const leh = new Date(l.end_time).getHours() + new Date(l.end_time).getMinutes() / 60;
+            if (start < leh && end > lsh && !seen.has(coach.id)) {
+              seen.add(coach.id);
+              msgs.push({ type: 'coach', msg: `${coach.full_name} · Ders: ${l.student_name || 'Öğrenci'} her ${DN[day]}` });
+            }
+          }
+        }
+
+        // manual lessons
+        const today2 = new Date().toISOString().split('T')[0];
+        const { data: manual } = await sb.from('club_manual_lessons').select('date,start_time,end_time,student_name')
+          .eq('coach_id', coach.id).gte('date', today2);
+        const seen2 = new Set();
+        for (const ml of manual ?? []) {
+          if (new Date(ml.date).getDay() !== day) continue;
+          const [msh, msm] = (ml.start_time ?? '0:0').split(':').map(Number);
+          const [meh, mem] = (ml.end_time   ?? '0:0').split(':').map(Number);
+          const lsh = msh + msm / 60, leh = meh + mem / 60;
+          if (start < leh && end > lsh && !seen2.has(coach.id)) {
+            seen2.add(coach.id);
+            msgs.push({ type: 'coach', msg: `${coach.full_name} · Manuel ders: ${ml.student_name || 'Öğrenci'} her ${DN[day]}` });
+          }
+        }
+      }
+    }
+    return msgs;
+  },
 };
 
 // ═══════════════════════════════════════════════════════════════

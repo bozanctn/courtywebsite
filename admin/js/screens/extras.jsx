@@ -743,16 +743,38 @@ function MyProgramScreen({ clubId, setScreen }) {
         label: `${m.student_name || 'Öğrenci'} · ${coachName}`, sh, sm, eh, em, color: '#8B5CF6' });
     });
 
-    // Kapatmalar
+    // Kapatmalar — aynı grup + saat + kort için hoca listesini tek event'ta birleştir
+    const groupedClosures = new Map();
     allClosureEvents.forEach(cl => {
       if (cl._date !== selDate) return;
       const coachName = cl.coach?.full_name;
       const groupName = cl.group?.name;
-      const label     = [cl.reason || 'Kapalı', groupName, coachName].filter(Boolean).join(' · ');
-      all.push({ id: 'cl_' + cl.id + '_' + cl._date, type: 'block', courtId: cl.court_id,
-        courtNum: courts.find(c => c.id === cl.court_id)?.court_number,
-        label, sh: cl.start_hour ?? 8, sm: 0, eh: cl.end_hour ?? 9, em: 0, color: '#F97316' });
+      if (cl.group_id) {
+        const key = `${cl.group_id}|${cl.court_id}|${cl.start_hour}|${cl.start_minute ?? 0}|${cl.end_hour}|${cl.end_minute ?? 0}`;
+        if (groupedClosures.has(key)) {
+          const ev = groupedClosures.get(key);
+          if (coachName && !ev.coaches.includes(coachName)) ev.coaches.push(coachName);
+        } else {
+          groupedClosures.set(key, {
+            id: `cl_grp_${cl.group_id}_${cl._date}_${cl.court_id}`,
+            type: 'block', courtId: cl.court_id,
+            courtNum: courts.find(c => c.id === cl.court_id)?.court_number,
+            label: groupName || cl.reason || 'Kapalı',
+            coaches: coachName ? [coachName] : [],
+            sh: cl.start_hour ?? 8, sm: cl.start_minute ?? 0,
+            eh: cl.end_hour ?? 9, em: cl.end_minute ?? 0, color: '#F97316',
+          });
+        }
+      } else {
+        all.push({ id: `cl_${cl.id}_${cl._date}`, type: 'block', courtId: cl.court_id,
+          courtNum: courts.find(c => c.id === cl.court_id)?.court_number,
+          label: groupName || cl.reason || 'Kapalı',
+          coaches: coachName ? [coachName] : [],
+          sh: cl.start_hour ?? 8, sm: cl.start_minute ?? 0,
+          eh: cl.end_hour ?? 9, em: cl.end_minute ?? 0, color: '#F97316' });
+      }
     });
+    groupedClosures.forEach(ev => all.push(ev));
 
     return all;
   }, [selDate, allBookings, allLessons, allManualLessons, allClosureEvents, courts, coachMap]);
@@ -768,7 +790,10 @@ function MyProgramScreen({ clubId, setScreen }) {
     dayEvents.filter(e => !e.courtId && e.type === 'lesson'), [dayEvents]);
 
   const isSlotOccupied = (courtId, hour) =>
-    dayEvents.some(e => e.courtId === courtId && e.sh <= hour && e.eh > hour);
+    dayEvents.some(e => e.courtId === courtId &&
+      (e.sh * 60 + e.sm) < (hour + 1) * 60 &&
+      (e.eh * 60 + e.em) > hour * 60
+    );
 
   // Sürükleme state — courtIdx: displayCourts içindeki indeks
   const { useRef } = React;
@@ -947,22 +972,34 @@ function MyProgramScreen({ clubId, setScreen }) {
     { weekday:'long', day:'numeric', month:'long', year:'numeric' });
   const isToday = selDate === todayISO();
 
-  const EventBlock = ({ ev }) => {
+  const EventBlock = ({ ev, col, totalCols }) => {
     const startMins = ev.sh * 60 + ev.sm;
     const endMins   = ev.eh * 60 + ev.em;
     const top    = (startMins - START_H * 60) / 60 * SLOT_H + 36;
     const height = Math.max((endMins - startMins) / 60 * SLOT_H, 22);
     if (endMins <= START_H * 60 || startMins >= END_H * 60 || endMins <= startMins) return null;
     const timeStr = `${String(ev.sh).padStart(2,'0')}:${String(ev.sm).padStart(2,'0')}–${String(ev.eh).padStart(2,'0')}:${String(ev.em).padStart(2,'0')}`;
+    const widthPct = 100 / totalCols;
     return (
       <div style={{
-        position:'absolute', top:top+'px', left:2, right:2, height:height+'px',
+        position:'absolute',
+        top: top+'px',
+        left: `calc(${col * widthPct}% + 2px)`,
+        width: `calc(${widthPct}% - 4px)`,
+        height: height+'px',
         background: ev.color + '25', borderLeft:`3px solid ${ev.color}`,
         borderRadius:'0 6px 6px 0', padding:'2px 6px', overflow:'hidden', zIndex:1,
       }}>
         <div style={{ fontSize:9, fontWeight:700, color:ev.color, lineHeight:1.4 }}>{timeStr}</div>
         {height >= 30 && (
-          <div style={{ fontSize:10, fontWeight:600, color:'var(--text-1)', whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis' }}>{ev.label}</div>
+          <>
+            <div style={{ fontSize:10, fontWeight:600, color:'var(--text-1)', whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis' }}>{ev.label}</div>
+            {ev.coaches && ev.coaches.length > 0 && (
+              <div style={{ fontSize:9, color:'var(--text-2)', lineHeight:1.4, overflowWrap:'break-word' }}>
+                {ev.coaches.join(', ')}
+              </div>
+            )}
+          </>
         )}
       </div>
     );
@@ -970,6 +1007,32 @@ function MyProgramScreen({ clubId, setScreen }) {
 
   const CourtColumn = ({ courtId, courtIdx, label }) => {
     const evs = courtId ? dayEvents.filter(e => e.courtId === courtId) : noCourtLessons;
+
+    // Çakışan event'ları yan yana yerleştirme algoritması
+    const evLayout = React.useMemo(() => {
+      const sorted = [...evs].sort((a, b) => (a.sh * 60 + a.sm) - (b.sh * 60 + b.sm));
+      const colEnds = []; // her sütundaki son event'in bitiş dakikası
+      const result = new Map(); // id -> { col, startMins, endMins }
+      sorted.forEach(ev => {
+        const startMins = ev.sh * 60 + ev.sm;
+        const endMins   = ev.eh * 60 + ev.em;
+        let col = colEnds.findIndex(end => end <= startMins);
+        if (col === -1) { col = colEnds.length; colEnds.push(endMins); }
+        else colEnds[col] = endMins;
+        result.set(ev.id, { col, startMins, endMins });
+      });
+      // Her event için kendi zaman dilimiyle çakışan event sayısına göre totalCols hesapla
+      result.forEach((val, id) => {
+        let maxCol = 0;
+        result.forEach(other => {
+          if (other.startMins < val.endMins && other.endMins > val.startMins)
+            maxCol = Math.max(maxCol, other.col);
+        });
+        result.set(id, { ...val, totalCols: maxCol + 1 });
+      });
+      return result;
+    }, [evs]);
+
     return (
       <div style={{ flex:1, minWidth:120, borderLeft:'1px solid var(--border)', position:'relative' }}>
         <div style={{ height:36, display:'flex', alignItems:'center', justifyContent:'center', fontWeight:700,
@@ -1002,11 +1065,17 @@ function MyProgramScreen({ clubId, setScreen }) {
                 outlineOffset: '-2px',
                 userSelect: 'none',
                 transition: 'background 0.05s',
+                position: 'relative',
               }}
-            />
+            >
+              <div style={{ position:'absolute', top:'50%', left:0, right:0, borderTop:'1px dashed var(--border,#e2e8f0)', pointerEvents:'none' }} />
+            </div>
           );
         })}
-        {evs.map((ev, idx) => <EventBlock key={ev.id || idx} ev={ev} />)}
+        {evs.map((ev, idx) => {
+          const lay = evLayout.get(ev.id) || { col: 0, totalCols: 1 };
+          return <EventBlock key={ev.id || idx} ev={ev} col={lay.col} totalCols={lay.totalCols} />;
+        })}
       </div>
     );
   };
@@ -1061,10 +1130,13 @@ function MyProgramScreen({ clubId, setScreen }) {
             <div style={{ width:52, flexShrink:0, borderRight:'1px solid var(--border)' }}>
               <div style={{ height:36, borderBottom:'1px solid var(--border)' }} />
               {Array.from({ length: END_H - START_H }, (_, i) => (
-                <div key={i} style={{ height:SLOT_H, display:'flex', alignItems:'flex-start',
-                  justifyContent:'flex-end', paddingRight:8, paddingTop:3, fontSize:11,
-                  color:'var(--text-2)', fontWeight:500, borderBottom:'1px solid var(--border,#f1f5f9)' }}>
-                  {String(START_H + i).padStart(2,'0')}:00
+                <div key={i} style={{ height:SLOT_H, borderBottom:'1px solid var(--border,#f1f5f9)', display:'flex', flexDirection:'column' }}>
+                  <div style={{ flex:1, display:'flex', alignItems:'flex-start', justifyContent:'flex-end', paddingRight:8, paddingTop:3, fontSize:11, color:'var(--text-2)', fontWeight:500 }}>
+                    {String(START_H + i).padStart(2,'0')}:00
+                  </div>
+                  <div style={{ flex:1, display:'flex', alignItems:'flex-start', justifyContent:'flex-end', paddingRight:8, paddingTop:3, fontSize:10, color:'var(--text-3,#94a3b8)', fontWeight:400, borderTop:'1px dashed var(--border,#e2e8f0)' }}>
+                    {String(START_H + i).padStart(2,'0')}:30
+                  </div>
                 </div>
               ))}
             </div>
