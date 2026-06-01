@@ -797,28 +797,33 @@ const GroupScheduleSvc = {
       // 3) lessons tablosu çakışması
       const { data: coachMeta } = await sb
         .from('club_coaches').select('individual_coach_id').eq('id', coach.id).maybeSingle();
+      const todayTs = new Date().toISOString().split('T')[0] + 'T00:00:00';
+      const lessonQueries = [];
       if (coachMeta?.individual_coach_id) {
-        const todayTs = new Date().toISOString().split('T')[0] + 'T00:00:00';
-        const { data: lessons } = await sb
-          .from('lessons')
-          .select('start_time, end_time, student_name')
-          .eq('coach_id', coachMeta.individual_coach_id)
-          .neq('status', 'cancelled')
-          .gte('start_time', todayTs);
-        const seen = new Set();
-        for (const l of lessons ?? []) {
-          const ls = new Date(l.start_time);
-          if (!days.includes(ls.getDay())) continue;
-          const lsh = ls.getHours() + ls.getMinutes() / 60;
-          const leh = new Date(l.end_time).getHours() + new Date(l.end_time).getMinutes() / 60;
-          if (startHour < leh && endHour > lsh) {
-            const key = `${coach.id}_${ls.getDay()}`;
-            if (!seen.has(key)) {
-              seen.add(key);
-              const dayName = ['Pazar','Pazartesi','Salı','Çarşamba','Perşembe','Cuma','Cumartesi'][ls.getDay()];
-              msgs.push({ type: 'coach',
-                msg: `${coach.full_name} · Ders: ${l.student_name || 'Öğrenci'} her ${dayName}` });
-            }
+        lessonQueries.push(
+          sb.from('lessons').select('start_time, end_time, student_name')
+            .eq('coach_id', coachMeta.individual_coach_id).neq('status', 'cancelled').gte('start_time', todayTs)
+        );
+      }
+      lessonQueries.push(
+        sb.from('lessons').select('start_time, end_time, student_name')
+          .eq('club_coach_id', coach.id).neq('status', 'cancelled').gte('start_time', todayTs)
+      );
+      const lessonResults = await Promise.all(lessonQueries);
+      const allLessons = lessonResults.flatMap(r => r.data ?? []);
+      const seen = new Set();
+      for (const l of allLessons) {
+        const ls = new Date(l.start_time);
+        if (!days.includes(ls.getDay())) continue;
+        const lsh = ls.getHours() + ls.getMinutes() / 60;
+        const leh = new Date(l.end_time).getHours() + new Date(l.end_time).getMinutes() / 60;
+        if (startHour < leh && endHour > lsh) {
+          const key = `${coach.id}_${ls.getDay()}`;
+          if (!seen.has(key)) {
+            seen.add(key);
+            const dayName = ['Pazar','Pazartesi','Salı','Çarşamba','Perşembe','Cuma','Cumartesi'][ls.getDay()];
+            msgs.push({ type: 'coach',
+              msg: `${coach.full_name} · Ders: ${l.student_name || 'Öğrenci'} her ${dayName}` });
           }
         }
       }
@@ -930,20 +935,29 @@ const GroupScheduleSvc = {
 
         // lessons çakışması
         const { data: meta } = await sb.from('club_coaches').select('individual_coach_id').eq('id', coach.id).maybeSingle();
+        const todayTs2 = new Date().toISOString().split('T')[0] + 'T00:00:00';
+        const lsnQueries = [];
         if (meta?.individual_coach_id) {
-          const todayTs = new Date().toISOString().split('T')[0] + 'T00:00:00';
-          const { data: lessons } = await sb.from('lessons').select('start_time,end_time,student_name')
-            .eq('coach_id', meta.individual_coach_id).neq('status','cancelled').gte('start_time', todayTs);
-          const seen = new Set();
-          for (const l of lessons ?? []) {
-            const ls = new Date(l.start_time);
-            if (ls.getDay() !== day) continue;
-            const lsh = ls.getHours() + ls.getMinutes() / 60;
-            const leh = new Date(l.end_time).getHours() + new Date(l.end_time).getMinutes() / 60;
-            if (start < leh && end > lsh && !seen.has(coach.id)) {
-              seen.add(coach.id);
-              msgs.push({ type: 'coach', msg: `${coach.full_name} · Ders: ${l.student_name || 'Öğrenci'} her ${DN[day]}` });
-            }
+          lsnQueries.push(
+            sb.from('lessons').select('start_time,end_time,student_name')
+              .eq('coach_id', meta.individual_coach_id).neq('status','cancelled').gte('start_time', todayTs2)
+          );
+        }
+        lsnQueries.push(
+          sb.from('lessons').select('start_time,end_time,student_name')
+            .eq('club_coach_id', coach.id).neq('status','cancelled').gte('start_time', todayTs2)
+        );
+        const lsnResults = await Promise.all(lsnQueries);
+        const allLsns = lsnResults.flatMap(r => r.data ?? []);
+        const seen = new Set();
+        for (const l of allLsns) {
+          const ls = new Date(l.start_time);
+          if (ls.getDay() !== day) continue;
+          const lsh = ls.getHours() + ls.getMinutes() / 60;
+          const leh = new Date(l.end_time).getHours() + new Date(l.end_time).getMinutes() / 60;
+          if (start < leh && end > lsh && !seen.has(coach.id)) {
+            seen.add(coach.id);
+            msgs.push({ type: 'coach', msg: `${coach.full_name} · Ders: ${l.student_name || 'Öğrenci'} her ${DN[day]}` });
           }
         }
 

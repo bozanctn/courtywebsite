@@ -2049,3 +2049,1234 @@ function AnalyticsInsightsPanel({ clubId }) {
     </div>
   );
 }
+
+// ═══════════════════════════════════════════════════════════════
+// GRUPLAR
+// ═══════════════════════════════════════════════════════════════
+
+function ScheduleDisplay({ groupId, courts, coaches }) {
+  const { useState, useEffect } = React;
+  const [closures, setClosures] = useState([]);
+  const DAY_NAMES = ['Pazar','Pazartesi','Salı','Çarşamba','Perşembe','Cuma','Cumartesi'];
+  const fmtH = (h, m) => `${String(h).padStart(2,'0')}:${String(m||0).padStart(2,'0')}`;
+
+  useEffect(() => {
+    if (!groupId) return;
+    sb.from('court_closures')
+      .select('*, courts(court_number)')
+      .eq('group_id', groupId)
+      .order('day_of_week')
+      .then(({ data }) => setClosures(data || []));
+  }, [groupId]);
+
+  if (closures.length === 0) return (
+    <EmptyState icon="calendar_today" title="Program tanımlanmamış" sub="Programı Düzenle butonundan program ekleyebilirsiniz." />
+  );
+
+  // Günlere göre grupla
+  const byDay = {};
+  closures.forEach(cl => {
+    const d = cl.day_of_week;
+    if (!byDay[d]) byDay[d] = [];
+    byDay[d].push(cl);
+  });
+
+  return (
+    <div style={{ display:'flex', flexDirection:'column', gap:8 }}>
+      {Object.keys(byDay).sort((a,b)=>Number(a)-Number(b)).map(day => {
+        const cls = byDay[day];
+        const first = cls[0];
+        const courtNums = [...new Set(cls.map(c => c.courts?.court_number).filter(Boolean))];
+        const coachIds = [...new Set(cls.map(c => c.coach_id).filter(Boolean))];
+        const coachNames = coachIds.map(id => coaches.find(c => c.id === id)?.full_name).filter(Boolean);
+        return (
+          <div key={day} style={{ display:'flex', gap:10, padding:'10px 14px', background:'var(--bg)', borderRadius:10, border:'1px solid var(--border)', alignItems:'center' }}>
+            <div style={{ width:4, alignSelf:'stretch', borderRadius:2, background:'#8B5CF6', flexShrink:0 }} />
+            <div style={{ flex:1 }}>
+              <div style={{ fontWeight:600, fontSize:13 }}>
+                {DAY_NAMES[Number(day)]} · {fmtH(first.start_hour, first.start_minute)}–{fmtH(first.end_hour, first.end_minute)}
+              </div>
+              <div style={{ fontSize:11, color:'var(--text-2)', marginTop:2 }}>
+                {courtNums.length > 0 && `Kort ${courtNums.join(', ')}`}
+                {courtNums.length > 0 && coachNames.length > 0 && ' · '}
+                {coachNames.join(', ')}
+              </div>
+            </div>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+function GroupsScreen({ clubId, setScreen }) {
+  const { useState, useEffect } = React;
+  const PAGE_SIZE = 5;
+  const DAYS = [['Pzt',1],['Sal',2],['Çar',3],['Per',4],['Cum',5],['Cmt',6],['Paz',0]];
+  const DAY_NAMES = ['Pazar','Pazartesi','Salı','Çarşamba','Perşembe','Cuma','Cumartesi'];
+  const MONTHS_TR = ['Ocak','Şubat','Mart','Nisan','Mayıs','Haziran','Temmuz','Ağustos','Eylül','Ekim','Kasım','Aralık'];
+
+  const formatHour = (h) => {
+    const w = Math.floor(h);
+    const m = (h % 1) >= 0.5 ? '30' : '00';
+    return `${String(w).padStart(2,'0')}:${m}`;
+  };
+  const combineHour = (h, m) => h + (m || 0) / 60;
+  const splitHour  = (h) => ({ hour: Math.floor(h), minute: Math.round((h % 1) * 60) });
+  const makeMember = () => ({ key: Date.now() + Math.random(), name:'', phone:'', contact:'', fee:'' });
+
+  // ── List ─────────────────────────────────────────────────────
+  const [groups,       setGroups]       = useState([]);
+  const [totalGroups,  setTotalGroups]  = useState(0);
+  const [currentPage,  setCurrentPage]  = useState(0);
+  const [searchQuery,  setSearchQuery]  = useState('');
+  const [coaches,      setCoaches]      = useState([]);
+  const [courts,       setCourts]       = useState([]);
+  const [loading,      setLoading]      = useState(true);
+  const [saving,       setSaving]       = useState(false);
+
+  // ── Create modal ─────────────────────────────────────────────
+  const [createVisible,      setCreateVisible]      = useState(false);
+  const [groupName,          setGroupName]          = useState('');
+  const [groupDesc,          setGroupDesc]          = useState('');
+  const [selectedCoachIds,   setSelectedCoachIds]   = useState([]);
+  const [coachShares,        setCoachShares]        = useState({});
+  const [coachFixedAmounts,  setCoachFixedAmounts]  = useState({});
+  const [monthlyFee,         setMonthlyFee]         = useState('0');
+  const [clubPercentage,     setClubPercentage]     = useState('100');
+  const [splitType,          setSplitType]          = useState('percentage');
+  const [selectedDays,       setSelectedDays]       = useState([]);
+  const [daySettings,        setDaySettings]        = useState({});
+  const [diffCoachesPerDay,  setDiffCoachesPerDay]  = useState(false);
+  const [dayCoachIds,        setDayCoachIds]        = useState({});
+  const [members,            setMembers]            = useState([makeMember(), makeMember(), makeMember()]);
+
+  // ── Detail modal ─────────────────────────────────────────────
+  const [detailGroup,   setDetailGroup]   = useState(null);
+  const [detailVisible, setDetailVisible] = useState(false);
+  const [detailTab,     setDetailTab]     = useState('members');
+
+  // Add/edit member
+  const [addMemberVisible, setAddMemberVisible] = useState(false);
+  const [newMember,        setNewMember]        = useState({ name:'', phone:'', contact:'', fee:'' });
+  const [addingMember,     setAddingMember]     = useState(false);
+  const [editMemberVisible,setEditMemberVisible]= useState(false);
+  const [editingMember,    setEditingMember]    = useState(null);
+  const [editMemberForm,   setEditMemberForm]   = useState({ name:'', phone:'', contact:'', fee:'' });
+
+  // Edit schedule modal
+  const [editSchedVisible,       setEditSchedVisible]       = useState(false);
+  const [editSchedName,          setEditSchedName]          = useState('');
+  const [editSchedDesc,          setEditSchedDesc]          = useState('');
+  const [editSchedDays,          setEditSchedDays]          = useState([]);
+  const [editSchedDaySettings,   setEditSchedDaySettings]   = useState({});
+  const [editSchedCoachIds,      setEditSchedCoachIds]      = useState([]);
+  const [editDiffCoachesPerDay,  setEditDiffCoachesPerDay]  = useState(false);
+  const [editDayCoachIds,        setEditDayCoachIds]        = useState({});
+  const [savingSched,            setSavingSched]            = useState(false);
+
+  // Edit fee modal
+  const [editFeeVisible,  setEditFeeVisible]  = useState(false);
+  const [editFee,         setEditFee]         = useState('0');
+  const [editPct,         setEditPct]         = useState('100');
+  const [editSplitType,   setEditSplitType]   = useState('percentage');
+  const [editCoachFixed,  setEditCoachFixed]  = useState({});
+  const [savingFee,       setSavingFee]       = useState(false);
+
+  // ── Payment / Dues ────────────────────────────────────────────
+  const [paymentVisible,  setPaymentVisible]  = useState(false);
+  const [paymentGroup,    setPaymentGroup]    = useState(null);
+  const [payYear,         setPayYear]         = useState(new Date().getFullYear());
+  const [payMonth,        setPayMonth]        = useState(new Date().getMonth() + 1);
+  const [dues,            setDues]            = useState([]);
+  const [duesPost,        setDuesPost]        = useState(null);
+  const [loadingDues,     setLoadingDues]     = useState(false);
+  const [postingFinance,  setPostingFinance]  = useState(false);
+
+  // ── Init ─────────────────────────────────────────────────────
+  useEffect(() => { if (clubId) init(); }, [clubId]);
+  useEffect(() => { if (clubId) { setCurrentPage(0); loadGroups(0, searchQuery); } }, [searchQuery]);
+
+  const init = async () => {
+    setLoading(true);
+    await Promise.all([loadGroups(0, ''), loadCoaches(), loadCourts()]);
+    setLoading(false);
+  };
+
+  const loadGroups = async (page = currentPage, search = searchQuery) => {
+    const from = page * PAGE_SIZE;
+    const to   = from + PAGE_SIZE - 1;
+    let q = sb.from('club_groups')
+      .select('*, coach:club_coaches(id,full_name), group_coaches:club_group_coaches(share_percentage,fixed_amount,club_coaches(id,full_name)), members:club_group_members(*)', { count:'exact' })
+      .eq('club_id', clubId)
+      .order('created_at', { ascending: false })
+      .range(from, to);
+    if (search.trim()) q = q.ilike('name', `%${search.trim()}%`);
+    const { data, count } = await q;
+    setGroups((data || []).map(g => ({
+      ...g,
+      member_count: g.members?.length ?? 0,
+      coaches: ((g.group_coaches || []).map(gc => ({
+        id: gc.club_coaches?.id,
+        full_name: gc.club_coaches?.full_name,
+        share_percentage: gc.share_percentage ?? 100,
+        fixed_amount: gc.fixed_amount ?? null,
+      })).filter(c => c.id)),
+    })));
+    setTotalGroups(count ?? 0);
+  };
+
+  const loadCoaches = async () => {
+    const { data } = await sb.from('club_coaches').select('id,full_name,hourly_rate').eq('club_id', clubId).eq('is_active', true);
+    setCoaches(data || []);
+  };
+
+  const loadCourts = async () => {
+    const { data } = await sb.from('courts').select('id,court_number,court_type').eq('club_id', clubId).eq('is_active', true).order('court_number');
+    setCourts(data || []);
+  };
+
+  const loadGroupDetail = async (groupId) => {
+    const { data, error } = await sb.from('club_groups')
+      .select('*, coach:club_coaches(id,full_name), group_coaches:club_group_coaches(share_percentage,fixed_amount,club_coaches(id,full_name)), members:club_group_members(*)')
+      .eq('id', groupId).single();
+    if (error) throw error;
+    return {
+      ...data,
+      member_count: data.members?.length ?? 0,
+      coaches: ((data.group_coaches || []).map(gc => ({
+        id: gc.club_coaches?.id,
+        full_name: gc.club_coaches?.full_name,
+        share_percentage: gc.share_percentage ?? 100,
+        fixed_amount: gc.fixed_amount ?? null,
+      })).filter(c => c.id)),
+    };
+  };
+
+  // ── Conflict check ────────────────────────────────────────────
+  const checkConflicts = async (daySettingsMap, coachIds, excludeGroupId, perDayCoachIdsMap) => {
+    const days = Object.keys(daySettingsMap).map(Number);
+    if (days.length === 0) return [];
+    const msgs = [];
+
+    for (const day of days) {
+      const { courts: courtIds, start, end } = daySettingsMap[day];
+
+      // Kort çakışması
+      if (courtIds.length > 0) {
+        const { data: courtRows } = await sb.from('court_closures')
+          .select('court_id,day_of_week,start_hour,start_minute,end_hour,end_minute,reason,group_id,courts(court_number)')
+          .in('court_id', courtIds).eq('day_of_week', day).eq('is_active', true)
+          .lt('start_hour', Math.ceil(end)).gt('end_hour', Math.floor(start));
+        for (const row of (courtRows || [])) {
+          if (excludeGroupId && row.group_id === excludeGroupId) continue;
+          const rs = combineHour(row.start_hour, row.start_minute || 0);
+          const re = combineHour(row.end_hour,   row.end_minute   || 0);
+          if (start >= re || end <= rs) continue;
+          const label = row.reason ? ` (${row.reason})` : '';
+          msgs.push(`Kort ${row.courts?.court_number ?? '?'} · ${DAY_NAMES[day]} ${formatHour(rs)}–${formatHour(re)} dolu${label}`);
+        }
+      }
+
+      // Hoca çakışması
+      const effectiveCoachIds = (perDayCoachIdsMap?.[day] ?? coachIds);
+      for (const coachId of effectiveCoachIds) {
+        const coach = coaches.find(c => c.id === coachId);
+        const coachName = coach?.full_name ?? 'Hoca';
+
+        const { data: closureRows } = await sb.from('court_closures')
+          .select('*, courts(court_number)').eq('coach_id', coachId).eq('is_active', true);
+        for (const cl of (closureRows || [])) {
+          if (excludeGroupId && cl.group_id === excludeGroupId) continue;
+          const cs = combineHour(cl.start_hour, cl.start_minute || 0);
+          const ce = combineHour(cl.end_hour,   cl.end_minute   || 0);
+          if (!(start < ce && end > cs)) continue;
+          if (cl.closure_type === 'recurring_weekly' && cl.day_of_week === day) {
+            msgs.push(`${coachName} · Kort ${cl.courts?.court_number ?? ''}: ${DAY_NAMES[day]} ${formatHour(cs)}–${formatHour(ce)}`);
+          }
+        }
+
+        // Manuel ders çakışması
+        const { data: manualLessons } = await sb.from('club_manual_lessons')
+          .select('id,date,start_time,end_time,student_name').eq('coach_id', coachId).gte('date', todayISO());
+        const seen = new Set();
+        for (const ml of (manualLessons || [])) {
+          const lessonDate = new Date(ml.date + 'T12:00:00');
+          if (lessonDate.getDay() !== day) continue;
+          const [lsh, lsm] = (ml.start_time || '0:0').split(':').map(Number);
+          const [leh, lem] = (ml.end_time   || '0:0').split(':').map(Number);
+          const lStart = lsh + lsm / 60;
+          const lEnd   = leh + lem / 60;
+          if (start < lEnd && end > lStart) {
+            const key = `${coachId}-${day}`;
+            if (!seen.has(key)) {
+              seen.add(key);
+              msgs.push(`${coachName} · Manuel Ders: her ${DAY_NAMES[day]} ${formatHour(lStart)}–${formatHour(lEnd)}`);
+            }
+          }
+        }
+      }
+    }
+    return msgs;
+  };
+
+  // ── Create group ──────────────────────────────────────────────
+  const openCreate = () => {
+    setGroupName(''); setGroupDesc(''); setSelectedCoachIds([]); setCoachShares({});
+    setCoachFixedAmounts({}); setMonthlyFee('0'); setClubPercentage('100');
+    setSplitType('percentage'); setSelectedDays([]); setDaySettings({});
+    setDiffCoachesPerDay(false); setDayCoachIds({});
+    setMembers([makeMember(), makeMember(), makeMember()]);
+    setCreateVisible(true);
+  };
+
+  const handleSaveGroup = async () => {
+    if (!groupName.trim()) { alert('Grup adı boş olamaz'); return; }
+    const validMembers = members.filter(m => m.name.trim());
+    if (validMembers.length < 3) { alert('En az 3 üye eklemeniz gerekiyor'); return; }
+    for (const day of selectedDays) {
+      const { start, end } = daySettings[day] ?? { start:9, end:11 };
+      if (start >= end) { alert(`${DAY_NAMES[day]}: Bitiş saati başlangıç saatinden büyük olmalı`); return; }
+    }
+    if (!diffCoachesPerDay && selectedCoachIds.length > 1) {
+      const total = selectedCoachIds.reduce((s, id) => s + (parseFloat(coachShares[id]) || 0), 0);
+      if (Math.abs(total - 100) > 0.1) { alert(`Antrenör payları toplamı %100 olmalı (şu an: %${total.toFixed(1)})`); return; }
+    }
+    const allCoachIds = diffCoachesPerDay
+      ? [...new Set(selectedDays.flatMap(d => dayCoachIds[d] || []))]
+      : selectedCoachIds;
+    if (selectedDays.length > 0 && (selectedDays.some(d => (daySettings[d]?.courts?.length ?? 0) > 0) || allCoachIds.length > 0)) {
+      const active = {};
+      selectedDays.forEach(d => { active[d] = daySettings[d] ?? { courts:[], start:9, end:11 }; });
+      const conflicts = await checkConflicts(active, selectedCoachIds, undefined, diffCoachesPerDay ? dayCoachIds : undefined);
+      if (conflicts.length > 0) { alert('Çakışma Var!\n\nAşağıdaki saatler dolu:\n\n' + conflicts.join('\n')); return; }
+    }
+    setSaving(true);
+    try {
+      const fee = parseFloat(monthlyFee) || 0;
+      const pct = Math.min(100, Math.max(0, parseFloat(clubPercentage) || 100));
+      const primaryCoachId = allCoachIds[0] || null;
+      const { data: group, error: groupErr } = await sb.from('club_groups')
+        .insert([{ club_id:clubId, name:groupName.trim(), coach_id:primaryCoachId, description:groupDesc.trim()||null, monthly_fee:fee, club_percentage:pct, split_type:splitType }])
+        .select().single();
+      if (groupErr) throw groupErr;
+      const { error: membErr } = await sb.from('club_group_members').insert(
+        validMembers.map(m => ({
+          group_id: group.id,
+          member_name: m.name.trim(),
+          contact_number: m.phone.trim() || null,
+          contact_person: m.contact.trim() || null,
+          custom_fee: m.fee.trim() && !isNaN(parseFloat(m.fee)) ? parseFloat(m.fee) : null,
+        }))
+      );
+      if (membErr) throw membErr;
+      if (allCoachIds.length > 0) {
+        const eq = parseFloat((100 / allCoachIds.length).toFixed(2));
+        await sb.from('club_group_coaches').insert(
+          allCoachIds.map((coachId, i) => ({
+            group_id: group.id,
+            coach_id: coachId,
+            share_percentage: diffCoachesPerDay
+              ? (i === allCoachIds.length-1 ? parseFloat((100-eq*(allCoachIds.length-1)).toFixed(2)) : eq)
+              : (allCoachIds.length === 1 ? 100 : parseFloat(coachShares[coachId]) || eq),
+            fixed_amount: splitType === 'fixed_amount' ? (parseFloat(coachFixedAmounts[coachId] ?? '') || null) : null,
+          }))
+        );
+      }
+      if (selectedDays.length > 0) {
+        const rows = [];
+        for (const day of selectedDays) {
+          const { courts: dayCourts, start: startH, end: endH } = daySettings[day] ?? { courts:[], start:9, end:11 };
+          const ss = splitHour(startH), es = splitHour(endH);
+          const effCoachIds = diffCoachesPerDay ? (dayCoachIds[day] || []) : selectedCoachIds;
+          for (const courtId of dayCourts) {
+            const base = { court_id:courtId, closure_type:'recurring_weekly', day_of_week:day, start_hour:ss.hour, start_minute:ss.minute, end_hour:es.hour, end_minute:es.minute, reason:groupName.trim(), group_id:group.id, is_active:true };
+            if (effCoachIds.length === 0) rows.push(base);
+            else effCoachIds.forEach(cid => rows.push({ ...base, coach_id:cid }));
+          }
+        }
+        if (rows.length > 0) { const { error } = await sb.from('court_closures').insert(rows); if (error) throw error; }
+      }
+      setCreateVisible(false);
+      setCurrentPage(0);
+      await loadGroups(0, searchQuery);
+    } catch (e) { alert(e.message); }
+    finally { setSaving(false); }
+  };
+
+  // ── Detail ────────────────────────────────────────────────────
+  const openDetail = async (group) => {
+    try {
+      const fresh = await loadGroupDetail(group.id);
+      setDetailGroup(fresh);
+      setDetailTab('members');
+      setDetailVisible(true);
+    } catch (e) { alert(e.message); }
+  };
+
+  const handleToggleGroup = async (groupId) => {
+    try {
+      const { data: cur } = await sb.from('club_groups').select('is_active').eq('id', groupId).single();
+      if (cur.is_active) await sb.from('court_closures').delete().eq('group_id', groupId);
+      await sb.from('club_groups').update({ is_active: !cur.is_active }).eq('id', groupId);
+      await loadGroups(currentPage, searchQuery);
+      if (detailGroup?.id === groupId) setDetailGroup(await loadGroupDetail(groupId));
+    } catch (e) { alert(e.message); }
+  };
+
+  const handleDeleteGroup = async (group) => {
+    if (!confirm(`"${group.name}" grubunu silmek istiyor musunuz? Bu işlem geri alınamaz.`)) return;
+    try {
+      await sb.from('court_closures').delete().eq('group_id', group.id);
+      const { data: posts } = await sb.from('club_group_dues_posts').select('id,finance_record_id').eq('group_id', group.id);
+      const fids = (posts || []).map(p => p.finance_record_id).filter(Boolean);
+      if (fids.length > 0) await sb.from('club_finances').delete().in('id', fids);
+      await sb.from('club_group_dues_posts').delete().eq('group_id', group.id);
+      await sb.from('club_group_dues').delete().eq('group_id', group.id);
+      await sb.from('club_group_members').delete().eq('group_id', group.id);
+      await sb.from('club_group_coaches').delete().eq('group_id', group.id);
+      await sb.from('club_groups').delete().eq('id', group.id);
+      setDetailVisible(false);
+      setCurrentPage(0);
+      await loadGroups(0, searchQuery);
+    } catch (e) { alert(e.message); }
+  };
+
+  // ── Member operations ─────────────────────────────────────────
+  const handleRemoveMember = async (member) => {
+    if ((detailGroup?.members?.length ?? 0) <= 3) { alert('Grupta en az 3 üye bulunmalıdır'); return; }
+    if (!confirm(`"${member.member_name}" grubdan çıkarılsın mı?`)) return;
+    try {
+      await sb.from('club_group_members').delete().eq('id', member.id);
+      setDetailGroup(await loadGroupDetail(detailGroup.id));
+      await loadGroups(currentPage, searchQuery);
+    } catch (e) { alert(e.message); }
+  };
+
+  const handleAddMember = async () => {
+    if (!newMember.name.trim()) { alert('Üye adı boş olamaz'); return; }
+    setAddingMember(true);
+    try {
+      const feeVal = newMember.fee.trim() && !isNaN(parseFloat(newMember.fee)) ? parseFloat(newMember.fee) : null;
+      await sb.from('club_group_members').insert([{ group_id:detailGroup.id, member_name:newMember.name.trim(), contact_number:newMember.phone.trim()||null, contact_person:newMember.contact.trim()||null, custom_fee:feeVal }]);
+      setNewMember({ name:'', phone:'', contact:'', fee:'' });
+      setAddMemberVisible(false);
+      setDetailGroup(await loadGroupDetail(detailGroup.id));
+      await loadGroups(currentPage, searchQuery);
+    } catch (e) { alert(e.message); }
+    finally { setAddingMember(false); }
+  };
+
+  const handleSaveEditMember = async () => {
+    if (!editingMember || !editMemberForm.name.trim()) { alert('Üye adı boş olamaz'); return; }
+    try {
+      const feeVal = editMemberForm.fee.trim() && !isNaN(parseFloat(editMemberForm.fee)) ? parseFloat(editMemberForm.fee) : null;
+      await sb.from('club_group_members').update({ member_name:editMemberForm.name.trim(), contact_number:editMemberForm.phone.trim()||null, contact_person:editMemberForm.contact.trim()||null, custom_fee:feeVal }).eq('id', editingMember.id);
+      setEditMemberVisible(false);
+      setDetailGroup(await loadGroupDetail(detailGroup.id));
+      await loadGroups(currentPage, searchQuery);
+    } catch (e) { alert(e.message); }
+  };
+
+  // ── Edit schedule ─────────────────────────────────────────────
+  const openEditSchedule = async (group) => {
+    try {
+      const [{ data: closures }, { data: groupCoaches }] = await Promise.all([
+        sb.from('court_closures').select('court_id,day_of_week,start_hour,start_minute,end_hour,end_minute,coach_id').eq('group_id', group.id),
+        sb.from('club_group_coaches').select('coach_id').eq('group_id', group.id),
+      ]);
+      const perDay = {};
+      const perDayCoachMap = {};
+      for (const c of (closures || [])) {
+        const d = c.day_of_week;
+        if (!perDay[d]) perDay[d] = { courts:[], start:combineHour(c.start_hour, c.start_minute||0), end:combineHour(c.end_hour, c.end_minute||0) };
+        if (c.court_id && !perDay[d].courts.includes(c.court_id)) perDay[d].courts.push(c.court_id);
+        if (c.coach_id) { if (!perDayCoachMap[d]) perDayCoachMap[d] = []; if (!perDayCoachMap[d].includes(c.coach_id)) perDayCoachMap[d].push(c.coach_id); }
+      }
+      const days = Object.keys(perDay).map(Number);
+      const daySets = Object.values(perDayCoachMap).map(ids => [...ids].sort().join(','));
+      const isDiffPerDay = daySets.length > 1 && !daySets.every(s => s === daySets[0]);
+      const coachIdsFromClosures = [...new Set((closures||[]).filter(c=>c.coach_id).map(c=>c.coach_id))];
+      const coachIdsFromGC = (groupCoaches||[]).map(gc=>gc.coach_id);
+      setEditSchedName(group.name); setEditSchedDesc(group.description||'');
+      setEditSchedDays(days); setEditSchedDaySettings(perDay);
+      setEditSchedCoachIds(coachIdsFromClosures.length > 0 ? coachIdsFromClosures : coachIdsFromGC);
+      setEditDiffCoachesPerDay(isDiffPerDay);
+      setEditDayCoachIds(isDiffPerDay ? perDayCoachMap : {});
+      setEditSchedVisible(true);
+    } catch (e) { alert(e.message); }
+  };
+
+  const handleSaveSchedule = async () => {
+    if (!detailGroup) return;
+    if (!editSchedName.trim()) { alert('Grup adı boş olamaz'); return; }
+    for (const day of editSchedDays) {
+      const { start, end } = editSchedDaySettings[day] ?? { start:9, end:11 };
+      if (start >= end) { alert(`${DAY_NAMES[day]}: Bitiş saati başlangıç saatinden büyük olmalı`); return; }
+    }
+    const editAllCoachIds = editDiffCoachesPerDay
+      ? [...new Set(editSchedDays.flatMap(d => editDayCoachIds[d] || []))]
+      : editSchedCoachIds;
+    const hasCourts = editSchedDays.some(d => (editSchedDaySettings[d]?.courts?.length ?? 0) > 0);
+    if (editSchedDays.length > 0 && (hasCourts || editAllCoachIds.length > 0)) {
+      const active = {};
+      editSchedDays.forEach(d => { active[d] = editSchedDaySettings[d] ?? { courts:[], start:9, end:11 }; });
+      const conflicts = await checkConflicts(active, editSchedCoachIds, detailGroup.id, editDiffCoachesPerDay ? editDayCoachIds : undefined);
+      if (conflicts.length > 0) { alert('Çakışma Var!\n\nAşağıdaki saatler dolu:\n\n' + conflicts.join('\n')); return; }
+    }
+    setSavingSched(true);
+    try {
+      const primaryCoachId = editAllCoachIds[0] || null;
+      await sb.from('club_groups').update({ name:editSchedName.trim(), description:editSchedDesc.trim()||null, coach_id:primaryCoachId }).eq('id', detailGroup.id);
+      await sb.from('club_group_coaches').delete().eq('group_id', detailGroup.id);
+      if (editAllCoachIds.length > 0) {
+        const eq = parseFloat((100 / editAllCoachIds.length).toFixed(2));
+        await sb.from('club_group_coaches').insert(
+          editAllCoachIds.map((cid, i) => ({ group_id:detailGroup.id, coach_id:cid, share_percentage: i===editAllCoachIds.length-1 ? parseFloat((100-eq*(editAllCoachIds.length-1)).toFixed(2)) : eq }))
+        );
+      }
+      await sb.from('court_closures').delete().eq('group_id', detailGroup.id);
+      if (editSchedDays.length > 0) {
+        const rows = [];
+        for (const day of editSchedDays) {
+          const { courts: dayCourts, start:startH, end:endH } = editSchedDaySettings[day] ?? { courts:[], start:9, end:11 };
+          const ss = splitHour(startH), es = splitHour(endH);
+          const effCoachIds = editDiffCoachesPerDay ? (editDayCoachIds[day] || []) : editSchedCoachIds;
+          for (const courtId of dayCourts) {
+            const base = { court_id:courtId, closure_type:'recurring_weekly', day_of_week:day, start_hour:ss.hour, start_minute:ss.minute, end_hour:es.hour, end_minute:es.minute, reason:editSchedName.trim(), group_id:detailGroup.id, is_active:true };
+            if (effCoachIds.length === 0) rows.push(base);
+            else effCoachIds.forEach(cid => rows.push({ ...base, coach_id:cid }));
+          }
+        }
+        if (rows.length > 0) { const { error } = await sb.from('court_closures').insert(rows); if (error) throw error; }
+      }
+      setEditSchedVisible(false);
+      setDetailGroup(await loadGroupDetail(detailGroup.id));
+      await loadGroups(currentPage, searchQuery);
+    } catch (e) { alert(e.message); }
+    finally { setSavingSched(false); }
+  };
+
+  // ── Edit fee ──────────────────────────────────────────────────
+  const openEditFee = () => {
+    setEditFee(String(detailGroup?.monthly_fee ?? 0));
+    setEditPct(String(detailGroup?.club_percentage ?? 100));
+    setEditSplitType(detailGroup?.split_type ?? 'percentage');
+    const fm = {};
+    (detailGroup?.coaches || []).forEach(c => { fm[c.id] = c.fixed_amount != null ? String(c.fixed_amount) : ''; });
+    setEditCoachFixed(fm);
+    setEditFeeVisible(true);
+  };
+
+  const handleSaveFee = async () => {
+    setSavingFee(true);
+    try {
+      const fee = parseFloat(editFee) || 0;
+      const pct = Math.min(100, Math.max(0, parseFloat(editPct) || 100));
+      await sb.from('club_groups').update({ monthly_fee:fee, club_percentage:pct, split_type:editSplitType }).eq('id', detailGroup.id);
+      for (const coach of (detailGroup?.coaches || [])) {
+        const faStr = editCoachFixed[coach.id] ?? '';
+        const fa = faStr.trim() && !isNaN(parseFloat(faStr)) ? parseFloat(faStr) : null;
+        await sb.from('club_group_coaches').update({ fixed_amount: editSplitType === 'fixed_amount' ? fa : null }).eq('group_id', detailGroup.id).eq('coach_id', coach.id);
+      }
+      setEditFeeVisible(false);
+      setDetailGroup(await loadGroupDetail(detailGroup.id));
+      await loadGroups(currentPage, searchQuery);
+    } catch (e) { alert(e.message); }
+    finally { setSavingFee(false); }
+  };
+
+  // ── Dues / Payment ────────────────────────────────────────────
+  const openPayment = async (group) => {
+    setPaymentGroup(group);
+    const now = new Date();
+    const yr = now.getFullYear(), mo = now.getMonth() + 1;
+    setPayYear(yr); setPayMonth(mo);
+    setDues([]); setDuesPost(null);
+    setPaymentVisible(true);
+    await loadDues(group, yr, mo);
+  };
+
+  const loadDues = async (group, year, month) => {
+    setLoadingDues(true);
+    try {
+      const { data: existing } = await sb.from('club_group_dues').select('*').eq('group_id', group.id).eq('year', year).eq('month', month).order('created_at');
+      if (existing?.length > 0) {
+        setDues(existing);
+      } else {
+        const { data: mbs } = await sb.from('club_group_members').select('id,member_name,custom_fee').eq('group_id', group.id);
+        if (mbs && mbs.length > 0) {
+          const { data: created } = await sb.from('club_group_dues').insert(
+            mbs.map(m => ({ group_id:group.id, club_id:clubId, year, month, member_id:m.id, member_name:m.member_name, amount: m.custom_fee != null ? m.custom_fee : group.monthly_fee, is_paid:false }))
+          ).select();
+          setDues(created || []);
+        } else { setDues([]); }
+      }
+      const { data: post } = await sb.from('club_group_dues_posts').select('*').eq('group_id', group.id).eq('year', year).eq('month', month).maybeSingle();
+      setDuesPost(post);
+    } catch (e) { alert(e.message); }
+    finally { setLoadingDues(false); }
+  };
+
+  const navigatePayMonth = async (dir) => {
+    if (!paymentGroup) return;
+    let newMonth = payMonth + dir, newYear = payYear;
+    if (newMonth > 12) { newMonth = 1; newYear++; }
+    if (newMonth < 1)  { newMonth = 12; newYear--; }
+    setPayMonth(newMonth); setPayYear(newYear);
+    setDues([]); setDuesPost(null);
+    await loadDues(paymentGroup, newYear, newMonth);
+  };
+
+  const handleToggleDuePaid = async (due) => {
+    if (duesPost) return;
+    try {
+      const np = !due.is_paid;
+      const { data } = await sb.from('club_group_dues').update({ is_paid:np, paid_at: np ? new Date().toISOString() : null }).eq('id', due.id).select().single();
+      setDues(prev => prev.map(d => d.id === data.id ? data : d));
+    } catch (e) { alert(e.message); }
+  };
+
+  const handlePostToFinance = async () => {
+    if (!paymentGroup) return;
+    if (!dues.every(d => d.is_paid)) { alert('Tüm üyeler ödemesini tamamlamadan finansa işleyemezsiniz'); return; }
+    if (!confirm('Aidat finansa işlensin mi?')) return;
+    setPostingFinance(true);
+    try {
+      const totalAmount = dues.reduce((s, d) => s + d.amount, 0);
+      const description = `${paymentGroup.name} - ${MONTHS_TR[payMonth-1]} ${payYear} aidatı`;
+      const today = todayISO();
+      const { data: groupCoaches } = await sb.from('club_group_coaches')
+        .select('coach_id,share_percentage,fixed_amount,club_coaches(full_name)').eq('group_id', paymentGroup.id);
+
+      let clubAmount, coachAmount;
+      if (groupCoaches && groupCoaches.length > 0) {
+        if (paymentGroup.split_type === 'fixed_amount') {
+          const totalCoachFixed = groupCoaches.reduce((s, gc) => s + (gc.fixed_amount || 0), 0);
+          coachAmount = Math.round(Math.min(totalCoachFixed, totalAmount) * 100) / 100;
+          clubAmount  = Math.round((totalAmount - coachAmount) * 100) / 100;
+          for (const gc of groupCoaches) {
+            const earning = Math.round(Math.min(gc.fixed_amount || 0, totalAmount) * 100) / 100;
+            if (earning <= 0) continue;
+            await sb.from('coach_earnings').insert({ club_id:clubId, coach_id:gc.coach_id, coach_name:gc.club_coaches?.full_name??'', student_name:null, lesson_id:null, booking_id:null, amount:earning, court_fee:0, date:today, description, payment_status:'unpaid' });
+          }
+        } else {
+          clubAmount  = Math.round(totalAmount * ((paymentGroup.club_percentage || 100) / 100) * 100) / 100;
+          coachAmount = Math.round((totalAmount - clubAmount) * 100) / 100;
+          for (const gc of groupCoaches) {
+            const earning = Math.round(coachAmount * (gc.share_percentage / 100) * 100) / 100;
+            if (earning <= 0) continue;
+            await sb.from('coach_earnings').insert({ club_id:clubId, coach_id:gc.coach_id, coach_name:gc.club_coaches?.full_name??'', student_name:null, lesson_id:null, booking_id:null, amount:earning, court_fee:0, date:today, description, payment_status:'unpaid' });
+          }
+        }
+      } else {
+        clubAmount  = Math.round(totalAmount * ((paymentGroup.club_percentage || 100) / 100) * 100) / 100;
+        coachAmount = Math.round((totalAmount - clubAmount) * 100) / 100;
+      }
+      const { data: finRec } = await sb.from('club_finances').insert({ club_id:clubId, type:'income', category:'Grup Aidatı', amount:clubAmount, description, date:today }).select('id').single();
+      await sb.from('club_group_dues_posts').insert({ group_id:paymentGroup.id, club_id:clubId, year:payYear, month:payMonth, total_amount:totalAmount, club_amount:clubAmount, coach_amount:coachAmount, finance_record_id:finRec?.id });
+      const { data: post } = await sb.from('club_group_dues_posts').select('*').eq('group_id', paymentGroup.id).eq('year', payYear).eq('month', payMonth).maybeSingle();
+      setDuesPost(post);
+      alert('Aidat kulüp finans kaydına eklendi');
+    } catch (e) { alert(e.message); }
+    finally { setPostingFinance(false); }
+  };
+
+  // ── Computed ──────────────────────────────────────────────────
+  const paidCount      = dues.filter(d => d.is_paid).length;
+  const totalDuesAmt   = dues.reduce((s, d) => s + d.amount, 0);
+  const allDuesPaid    = dues.length > 0 && paidCount === dues.length;
+
+  // ── Day settings helper ───────────────────────────────────────
+  const DaySettingsBlock = ({ days, settingsState, setSettingsState, coachIdsState, setCoachIdsState, diffPerDay }) => (
+    <div style={{ display:'flex', flexDirection:'column', gap:10 }}>
+      {[...days].sort((a,b)=>a-b).map(idx => {
+        const s = settingsState[idx] ?? { courts:[], start:9, end:11 };
+        return (
+          <div key={idx} style={{ background:'var(--bg)', border:'1px solid var(--border)', borderRadius:10, padding:'12px 14px' }}>
+            <div style={{ fontWeight:700, fontSize:13, marginBottom:10, color:'var(--text-1)' }}>{DAY_NAMES[idx]}</div>
+            <div style={{ fontSize:11, fontWeight:700, color:'var(--text-2)', marginBottom:6 }}>KORTLAR</div>
+            <div style={{ display:'flex', gap:6, flexWrap:'wrap', marginBottom:10 }}>
+              {courts.map(c => (
+                <button key={c.id} type="button"
+                  className={'btn btn-sm ' + (s.courts.includes(c.id) ? 'btn-pri' : 'btn-ghost')}
+                  onClick={() => setSettingsState(p => { const cur = p[idx] ?? { courts:[], start:9, end:11 }; const nc = cur.courts.includes(c.id) ? cur.courts.filter(id=>id!==c.id) : [...cur.courts,c.id]; return {...p,[idx]:{...cur,courts:nc}}; })}>
+                  Kort {c.court_number}
+                </button>
+              ))}
+            </div>
+            {diffPerDay && coaches.length > 0 && (
+              <>
+                <div style={{ fontSize:11, fontWeight:700, color:'var(--text-2)', marginBottom:6 }}>ANTRENÖRLER</div>
+                <div style={{ display:'flex', gap:6, flexWrap:'wrap', marginBottom:10 }}>
+                  {coaches.map(coach => {
+                    const dayIds = coachIdsState[idx] || [];
+                    return (
+                      <button key={coach.id} type="button"
+                        className={'btn btn-sm ' + (dayIds.includes(coach.id) ? 'btn-pri' : 'btn-ghost')}
+                        onClick={() => setCoachIdsState(p => { const cur = p[idx]||[]; return {...p,[idx]: cur.includes(coach.id)?cur.filter(id=>id!==coach.id):[...cur,coach.id]}; })}>
+                        {coach.full_name}
+                      </button>
+                    );
+                  })}
+                </div>
+              </>
+            )}
+            <div style={{ fontSize:11, fontWeight:700, color:'var(--text-2)', marginBottom:6 }}>SAAT ARALIĞI</div>
+            <div style={{ display:'flex', alignItems:'center', gap:10 }}>
+              {[['start', -0.5, +0.5], ['end', -0.5, +0.5]].map(([field], fi) => (
+                <React.Fragment key={field}>
+                  {fi === 1 && <span className="material-icons" style={{ color:'var(--text-2)', fontSize:16 }}>arrow_forward</span>}
+                  <div style={{ display:'flex', alignItems:'center', gap:6, background:'var(--surface)', border:'1px solid var(--border)', borderRadius:8, padding:'4px 8px' }}>
+                    <button type="button" className="btn btn-ghost btn-sm btn-icon"
+                      onClick={() => setSettingsState(p => {
+                        const cur = p[idx] ?? { courts:[], start:9, end:11 };
+                        const newVal = Math.max(field==='start'?0:0.5, parseFloat((cur[field]-0.5).toFixed(1)));
+                        return {...p,[idx]:{...cur,[field]:newVal}};
+                      })}><span className="material-icons" style={{fontSize:14}}>remove</span></button>
+                    <span style={{ fontWeight:700, fontSize:14, minWidth:40, textAlign:'center' }}>{formatHour(s[field])}</span>
+                    <button type="button" className="btn btn-ghost btn-sm btn-icon"
+                      onClick={() => setSettingsState(p => {
+                        const cur = p[idx] ?? { courts:[], start:9, end:11 };
+                        if (field === 'start') {
+                          const ns = Math.min(22.5, parseFloat((cur.start+0.5).toFixed(1)));
+                          const gap = cur.end - cur.start;
+                          const ne = Math.min(23.5, parseFloat((ns+gap).toFixed(1)));
+                          return {...p,[idx]:{...cur,start:ns,end:ne}};
+                        }
+                        return {...p,[idx]:{...cur,end:Math.min(23.5,parseFloat((cur.end+0.5).toFixed(1)))}};
+                      })}><span className="material-icons" style={{fontSize:14}}>add</span></button>
+                  </div>
+                </React.Fragment>
+              ))}
+            </div>
+          </div>
+        );
+      })}
+    </div>
+  );
+
+  if (loading) return <Spinner />;
+
+  return (
+    <div className="page fade-in">
+      <div className="page-head">
+        <div>
+          <h1>Gruplar</h1>
+          <div className="sub">{totalGroups} grup</div>
+        </div>
+        <button className="btn btn-pri" onClick={openCreate}>
+          <span className="material-icons">add</span>
+          Grup Ekle
+        </button>
+      </div>
+
+      {/* Arama */}
+      <div style={{ position:'relative', marginBottom:16 }}>
+        <span className="material-icons" style={{ position:'absolute', left:12, top:'50%', transform:'translateY(-50%)', color:'var(--text-2)', fontSize:18, pointerEvents:'none' }}>search</span>
+        <input style={{ width:'100%', paddingLeft:38, boxSizing:'border-box' }}
+          placeholder="Grup ara..." value={searchQuery}
+          onChange={e => setSearchQuery(e.target.value)} />
+      </div>
+
+      {/* Grup listesi */}
+      {groups.length === 0 ? (
+        <EmptyState icon="groups" title={searchQuery ? 'Sonuç bulunamadı' : 'Henüz grup yok'}
+          sub={searchQuery ? `"${searchQuery}" ile eşleşen grup yok` : 'Düzenli dersler için grup oluşturun ve kortlara atayın'} />
+      ) : (
+        <div style={{ display:'flex', flexDirection:'column', gap:12 }}>
+          {groups.map(group => (
+            <div key={group.id} className="card tight" style={{ cursor:'pointer' }} onClick={() => openDetail(group)}>
+              <div style={{ display:'flex', alignItems:'stretch', gap:0 }}>
+                <div style={{ width:4, borderRadius:'4px 0 0 4px', background: group.is_active ? '#0D9488' : 'var(--border)', flexShrink:0 }} />
+                <div style={{ flex:1, padding:'14px 16px' }}>
+                  <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', marginBottom:4 }}>
+                    <div style={{ fontWeight:700, fontSize:15 }}>{group.name}</div>
+                    <Badge cls={group.is_active ? 'b-green' : ''}>{group.is_active ? 'Aktif' : 'Pasif'}</Badge>
+                  </div>
+                  {group.description && <div style={{ fontSize:12, color:'var(--text-2)', marginBottom:6 }}>{group.description}</div>}
+                  <div style={{ display:'flex', flexWrap:'wrap', gap:6 }}>
+                    <span style={{ display:'flex', alignItems:'center', gap:4, fontSize:12, color:'var(--text-2)' }}>
+                      <span className="material-icons" style={{fontSize:14}}>person_outline</span>{group.member_count ?? 0} üye
+                    </span>
+                    {(group.coaches?.length > 0 ? group.coaches : group.coach ? [group.coach] : []).map(c => (
+                      <span key={c.id} style={{ display:'flex', alignItems:'center', gap:4, fontSize:12, color:'#8B5CF6' }}>
+                        <span className="material-icons" style={{fontSize:14}}>sports</span>{c.full_name}
+                      </span>
+                    ))}
+                    {group.monthly_fee > 0 && (
+                      <span style={{ display:'flex', alignItems:'center', gap:4, fontSize:12, color:'#0D9488' }}>
+                        <span className="material-icons" style={{fontSize:14}}>payments</span>{group.monthly_fee} ₺/ay
+                      </span>
+                    )}
+                  </div>
+                  <button className="btn btn-pri btn-sm" style={{ marginTop:10, fontSize:12 }}
+                    onClick={e => { e.stopPropagation(); openPayment(group); }}>
+                    <span className="material-icons" style={{fontSize:14}}>account_balance_wallet</span>
+                    Ödeme Al
+                  </button>
+                </div>
+                <div style={{ display:'flex', alignItems:'center', paddingRight:8 }}>
+                  <span className="material-icons" style={{ color:'var(--border)' }}>chevron_right</span>
+                </div>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {/* Sayfalama */}
+      {totalGroups > PAGE_SIZE && (
+        <div style={{ display:'flex', alignItems:'center', justifyContent:'center', gap:12, marginTop:16 }}>
+          <button className="btn btn-ghost btn-sm" disabled={currentPage===0}
+            onClick={() => { const p=Math.max(0,currentPage-1); setCurrentPage(p); loadGroups(p, searchQuery); }}>
+            <span className="material-icons">chevron_left</span> Önceki
+          </button>
+          <span style={{ fontSize:13, color:'var(--text-2)' }}>
+            {currentPage*PAGE_SIZE+1}–{Math.min((currentPage+1)*PAGE_SIZE,totalGroups)} / {totalGroups}
+          </span>
+          <button className="btn btn-ghost btn-sm" disabled={(currentPage+1)*PAGE_SIZE>=totalGroups}
+            onClick={() => { const p=currentPage+1; setCurrentPage(p); loadGroups(p, searchQuery); }}>
+            Sonraki <span className="material-icons">chevron_right</span>
+          </button>
+        </div>
+      )}
+
+      {/* ══ Yeni Grup Modalı ══════════════════════════════════════ */}
+      {createVisible && (
+        <Modal title="Yeni Grup" wide onClose={() => setCreateVisible(false)}
+          footer={<><button className="btn btn-ghost btn-sm" onClick={() => setCreateVisible(false)}>Vazgeç</button><button className="btn btn-pri btn-sm" onClick={handleSaveGroup} disabled={saving}>{saving?'Kaydediliyor…':'Kaydet'}</button></>}>
+          <div className="fields" style={{ gap:14 }}>
+            <div className="fields-2">
+              <Field label="GRUP ADI *"><input placeholder="Pazartesi Sabah Grubu" value={groupName} onChange={e=>setGroupName(e.target.value)} /></Field>
+              <Field label="AÇIKLAMA"><input placeholder="İsteğe bağlı not" value={groupDesc} onChange={e=>setGroupDesc(e.target.value)} /></Field>
+            </div>
+            <div className="fields-2">
+              <Field label="AYLIK AİDAT (₺)"><input type="number" min="0" placeholder="0" value={monthlyFee} onChange={e=>setMonthlyFee(e.target.value)} /></Field>
+              {selectedCoachIds.length > 0 && (
+                <Field label="PAY MODELİ">
+                  <div style={{ display:'flex', borderRadius:8, overflow:'hidden', border:'1px solid var(--border)' }}>
+                    {[{v:'percentage',l:'% Yüzde'},{v:'fixed_amount',l:'₺ Tutar'}].map(opt => (
+                      <button key={opt.v} type="button"
+                        style={{ flex:1, padding:'8px', fontSize:13, fontWeight:600, border:'none', cursor:'pointer', background:splitType===opt.v?'var(--brand-navy)':'transparent', color:splitType===opt.v?'#fff':'var(--text-1)' }}
+                        onClick={() => setSplitType(opt.v)}>{opt.l}</button>
+                    ))}
+                  </div>
+                </Field>
+              )}
+            </div>
+            {selectedCoachIds.length > 0 && splitType === 'percentage' && (
+              <Field label="KULÜP PAYI (%)">
+                <input type="number" min="0" max="100" placeholder="100" value={clubPercentage} onChange={e=>setClubPercentage(e.target.value)} />
+                {parseFloat(clubPercentage) < 100 && <div style={{ fontSize:12, color:'var(--text-2)', marginTop:4 }}>Hoca payı: %{Math.round((100-parseFloat(clubPercentage))*100)/100}</div>}
+              </Field>
+            )}
+            {selectedCoachIds.length > 0 && splitType === 'fixed_amount' && (
+              <Field label="HOCA TUTARLARI (₺)">
+                {selectedCoachIds.map(id => { const c=coaches.find(c=>c.id===id); return (
+                  <div key={id} style={{ display:'flex', alignItems:'center', gap:8, marginBottom:6 }}>
+                    <span style={{ flex:1, fontSize:13 }}>{c?.full_name??'Hoca'}</span>
+                    <input type="number" min="0" style={{ width:100 }} placeholder="0 ₺" value={coachFixedAmounts[id]??''} onChange={e=>setCoachFixedAmounts(p=>({...p,[id]:e.target.value}))} />
+                  </div>
+                ); })}
+              </Field>
+            )}
+            {selectedCoachIds.length === 0 && <div style={{ fontSize:12, color:'var(--text-2)' }}>Hoca seçilmediğinde tüm aidat kulübe gider</div>}
+            <Field label="ANTRENÖRLER (çoklu seçim, isteğe bağlı)">
+              {coaches.length === 0 ? <div style={{ fontSize:13, color:'var(--text-2)' }}>Aktif antrenör bulunamadı</div> : (
+                <div style={{ display:'flex', flexWrap:'wrap', gap:8 }}>
+                  {coaches.map(c => (
+                    <button key={c.id} type="button"
+                      className={'btn btn-sm ' + (selectedCoachIds.includes(c.id) ? 'btn-pri' : 'btn-ghost')}
+                      onClick={() => {
+                        const next = selectedCoachIds.includes(c.id) ? selectedCoachIds.filter(id=>id!==c.id) : [...selectedCoachIds,c.id];
+                        setSelectedCoachIds(next);
+                        if (next.length > 0) {
+                          const eq = parseFloat((100/next.length).toFixed(2));
+                          const sh = {}; next.forEach((id,i)=>{ sh[id]=i===next.length-1?(100-eq*(next.length-1)).toFixed(2):eq.toFixed(2); }); setCoachShares(sh);
+                        } else setCoachShares({});
+                      }}>{c.full_name}</button>
+                  ))}
+                </div>
+              )}
+              {selectedCoachIds.length > 1 && (
+                <div style={{ marginTop:10 }}>
+                  <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:6 }}>
+                    <span style={{ fontSize:12, fontWeight:700, color:'var(--text-2)' }}>PAYLAR (toplam %100)</span>
+                    <button type="button" style={{ fontSize:12, color:'var(--brand-navy)', background:'none', border:'none', cursor:'pointer', fontWeight:600 }}
+                      onClick={() => { const eq=parseFloat((100/selectedCoachIds.length).toFixed(2)); const sh={}; selectedCoachIds.forEach((id,i)=>{ sh[id]=i===selectedCoachIds.length-1?(100-eq*(selectedCoachIds.length-1)).toFixed(2):eq.toFixed(2); }); setCoachShares(sh); }}>= Eşit Böl</button>
+                  </div>
+                  {selectedCoachIds.map(id => { const c=coaches.find(c=>c.id===id); return (
+                    <div key={id} style={{ display:'flex', alignItems:'center', gap:8, marginBottom:4 }}>
+                      <span style={{ flex:1, fontSize:13 }}>{c?.full_name}</span>
+                      <input type="number" min="0" max="100" style={{ width:70, textAlign:'center' }} value={coachShares[id]??''} onChange={e=>setCoachShares(p=>({...p,[id]:e.target.value}))} />
+                      <span style={{ fontSize:13, color:'var(--text-2)' }}>%</span>
+                    </div>
+                  ); })}
+                  {(() => { const total=selectedCoachIds.reduce((s,id)=>s+(parseFloat(coachShares[id])||0),0); const ok=Math.abs(total-100)<0.1; return <div style={{ fontSize:12, fontWeight:600, color:ok?'#22C55E':'#EF4444', marginTop:2 }}>Toplam: %{total.toFixed(1)} {ok?'✓':'✗ (100 olmalı)'}</div>; })()}
+                </div>
+              )}
+            </Field>
+            {coaches.length > 0 && (
+              <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', padding:'10px 14px', background:'var(--surface)', border:'1px solid var(--border)', borderRadius:10 }}>
+                <div>
+                  <div style={{ fontWeight:600, fontSize:13 }}>Farklı günlere farklı hocalar</div>
+                  <div style={{ fontSize:12, color:'var(--text-2)' }}>Her gün için ayrı antrenör seçin</div>
+                </div>
+                <Switch on={diffCoachesPerDay} onChange={v => {
+                  setDiffCoachesPerDay(v);
+                  if (v) { const init={}; selectedDays.forEach(d=>{init[d]=[...selectedCoachIds];}); setDayCoachIds(init); }
+                }} />
+              </div>
+            )}
+            {courts.length > 0 && (
+              <Field label="PROGRAM (isteğe bağlı)">
+                <div style={{ fontSize:12, color:'var(--text-2)', marginBottom:8 }}>Her gün için farklı kortlar seçebilirsiniz. Seçilen kortlar otomatik kapatılır, hocanın takvimine eklenir.</div>
+                <div style={{ fontSize:12, fontWeight:700, color:'var(--text-2)', marginBottom:6 }}>GÜNLER</div>
+                <div style={{ display:'flex', gap:6, flexWrap:'wrap', marginBottom:14 }}>
+                  {DAYS.map(([label,idx]) => (
+                    <button key={idx} type="button"
+                      className={'btn btn-sm ' + (selectedDays.includes(idx)?'btn-pri':'btn-ghost')}
+                      onClick={() => {
+                        if (selectedDays.includes(idx)) {
+                          setSelectedDays(p=>p.filter(d=>d!==idx));
+                          setDaySettings(p=>{const n={...p};delete n[idx];return n;});
+                          setDayCoachIds(p=>{const n={...p};delete n[idx];return n;});
+                        } else {
+                          setSelectedDays(p=>[...p,idx]);
+                          setDaySettings(p=>({...p,[idx]:p[idx]??{courts:[],start:9,end:11}}));
+                          if (diffCoachesPerDay) setDayCoachIds(p=>({...p,[idx]:p[idx]??[...selectedCoachIds]}));
+                        }
+                      }}>{label}</button>
+                  ))}
+                </div>
+                {selectedDays.length > 0 && (
+                  <DaySettingsBlock
+                    days={selectedDays} settingsState={daySettings} setSettingsState={setDaySettings}
+                    coachIdsState={dayCoachIds} setCoachIdsState={setDayCoachIds} diffPerDay={diffCoachesPerDay}
+                  />
+                )}
+              </Field>
+            )}
+            <Field label={`ÜYELER (${members.filter(m=>m.name.trim()).length}/${members.length}, en az 3 gerekli)`}>
+              <div style={{ display:'flex', flexDirection:'column', gap:8 }}>
+                {members.map((m, i) => (
+                  <div key={m.key} style={{ display:'flex', gap:8, alignItems:'flex-start', background:'var(--bg)', border:'1px solid var(--border)', borderRadius:10, padding:'10px 12px' }}>
+                    <div style={{ width:22, height:22, borderRadius:11, background:'var(--brand-navy-soft,#EEF2FF)', display:'grid', placeItems:'center', flexShrink:0, marginTop:8 }}>
+                      <span style={{ fontSize:11, fontWeight:800, color:'var(--brand-navy)' }}>{i+1}</span>
+                    </div>
+                    <div style={{ flex:1, display:'flex', flexDirection:'column', gap:6 }}>
+                      <input placeholder="Ad Soyad *" value={m.name} onChange={e=>setMembers(p=>p.map(r=>r.key===m.key?{...r,name:e.target.value}:r))} />
+                      <div style={{ display:'flex', gap:6 }}>
+                        <input style={{ flex:1 }} placeholder="İletişim no" value={m.phone} onChange={e=>setMembers(p=>p.map(r=>r.key===m.key?{...r,phone:e.target.value}:r))} />
+                        <input style={{ flex:1 }} placeholder="Kişi (veli vb.)" value={m.contact} onChange={e=>setMembers(p=>p.map(r=>r.key===m.key?{...r,contact:e.target.value}:r))} />
+                      </div>
+                      <input type="number" min="0" placeholder={`Özel Ücret ₺ (boş: ${monthlyFee||'0'} ₺)`} value={m.fee} onChange={e=>setMembers(p=>p.map(r=>r.key===m.key?{...r,fee:e.target.value}:r))} />
+                    </div>
+                    {members.length > 3 && (
+                      <button type="button" style={{ background:'none', border:'none', cursor:'pointer', color:'#EF4444', marginTop:6, padding:2 }}
+                        onClick={() => setMembers(p=>p.filter(r=>r.key!==m.key))}>
+                        <span className="material-icons" style={{fontSize:18}}>close</span>
+                      </button>
+                    )}
+                  </div>
+                ))}
+                <button type="button" className="btn btn-ghost btn-sm"
+                  onClick={() => setMembers(p=>[...p,makeMember()])}>
+                  <span className="material-icons" style={{fontSize:15}}>add</span> Üye Ekle
+                </button>
+              </div>
+            </Field>
+          </div>
+        </Modal>
+      )}
+
+      {/* ══ Detay Modalı ══════════════════════════════════════════ */}
+      {detailVisible && detailGroup && (
+        <Modal title={detailGroup.name} wide onClose={() => setDetailVisible(false)}
+          footer={
+            <div style={{ display:'flex', justifyContent:'space-between', width:'100%' }}>
+              <div style={{ display:'flex', gap:8 }}>
+                <button className="btn btn-danger btn-sm" onClick={() => handleDeleteGroup(detailGroup)}>Sil</button>
+                <button className="btn btn-ghost btn-sm" onClick={() => handleToggleGroup(detailGroup.id)}>
+                  {detailGroup.is_active ? 'Pasife Al' : 'Aktifleştir'}
+                </button>
+              </div>
+              <button className="btn btn-ghost btn-sm" onClick={() => setDetailVisible(false)}>Kapat</button>
+            </div>
+          }>
+          <div className="tabs" style={{ marginBottom:16 }}>
+            {[{k:'members',l:'Üyeler'},{k:'schedule',l:'Program'},{k:'settings',l:'Ücret & Ayarlar'}].map(t => (
+              <button key={t.k} className={detailTab===t.k?'active':''} onClick={()=>setDetailTab(t.k)}>{t.l}</button>
+            ))}
+          </div>
+
+          {detailTab === 'members' && (
+            <div>
+              <div style={{ display:'flex', justifyContent:'flex-end', marginBottom:12 }}>
+                <button className="btn btn-pri btn-sm" onClick={() => { setNewMember({name:'',phone:'',contact:'',fee:''}); setAddMemberVisible(true); }}>
+                  <span className="material-icons" style={{fontSize:15}}>person_add</span> Üye Ekle
+                </button>
+              </div>
+              {(detailGroup.members||[]).length === 0 ? <EmptyState icon="person" title="Üye yok" /> : (
+                (detailGroup.members||[]).map(member => (
+                  <div key={member.id} style={{ display:'flex', alignItems:'center', gap:10, padding:'10px 0', borderBottom:'1px solid var(--border)' }}>
+                    <div style={{ width:34, height:34, borderRadius:17, background:'#EEF2FF', display:'grid', placeItems:'center', flexShrink:0 }}>
+                      <span style={{ fontSize:13, fontWeight:700, color:'var(--brand-navy)' }}>{member.member_name?.charAt(0)?.toUpperCase()}</span>
+                    </div>
+                    <div style={{ flex:1 }}>
+                      <div style={{ fontWeight:600, fontSize:13 }}>{member.member_name}</div>
+                      <div style={{ fontSize:11, color:'var(--text-2)' }}>
+                        {[member.contact_number, member.contact_person].filter(Boolean).join(' · ')}
+                      </div>
+                      {member.custom_fee != null && <div style={{ fontSize:11, color:'#0D9488' }}>Özel: ₺{member.custom_fee}/ay</div>}
+                    </div>
+                    <button className="btn btn-ghost btn-sm btn-icon" title="Düzenle"
+                      onClick={() => { setEditingMember(member); setEditMemberForm({name:member.member_name,phone:member.contact_number||'',contact:member.contact_person||'',fee:member.custom_fee!=null?String(member.custom_fee):''}); setEditMemberVisible(true); }}>
+                      <span className="material-icons" style={{fontSize:15}}>edit</span>
+                    </button>
+                    <button className="btn btn-danger btn-sm btn-icon" title="Çıkar" onClick={() => handleRemoveMember(member)}>
+                      <span className="material-icons" style={{fontSize:15}}>person_remove</span>
+                    </button>
+                  </div>
+                ))
+              )}
+            </div>
+          )}
+
+          {detailTab === 'schedule' && (
+            <div>
+              <div style={{ display:'flex', justifyContent:'flex-end', marginBottom:12 }}>
+                <button className="btn btn-pri btn-sm" onClick={() => openEditSchedule(detailGroup)}>
+                  <span className="material-icons" style={{fontSize:15}}>edit</span> Programı Düzenle
+                </button>
+              </div>
+              <ScheduleDisplay groupId={detailGroup.id} courts={courts} coaches={coaches} />
+            </div>
+          )}
+
+          {detailTab === 'settings' && (
+            <div>
+              <div style={{ display:'flex', justifyContent:'flex-end', marginBottom:12 }}>
+                <button className="btn btn-pri btn-sm" onClick={openEditFee}>
+                  <span className="material-icons" style={{fontSize:15}}>edit</span> Düzenle
+                </button>
+              </div>
+              <div style={{ display:'flex', flexDirection:'column', gap:8 }}>
+                <div className="kv"><span className="k">Aylık Aidat</span><span className="v">₺{detailGroup.monthly_fee ?? 0}/ay</span></div>
+                <div className="kv"><span className="k">Kulüp Payı</span><span className="v">%{detailGroup.club_percentage ?? 100}</span></div>
+                <div className="kv"><span className="k">Pay Modeli</span><span className="v">{detailGroup.split_type === 'fixed_amount' ? '₺ Sabit Tutar' : '% Yüzde'}</span></div>
+                {(detailGroup.coaches||[]).length > 0 && (
+                  <div>
+                    <div style={{ fontWeight:600, fontSize:13, marginBottom:6 }}>Antrenörler</div>
+                    {(detailGroup.coaches||[]).map(c => (
+                      <div key={c.id} style={{ display:'flex', justifyContent:'space-between', fontSize:13, padding:'6px 0', borderBottom:'1px solid var(--border)' }}>
+                        <span>{c.full_name}</span>
+                        <span style={{ color:'var(--text-2)' }}>{detailGroup.split_type==='fixed_amount'?`₺${c.fixed_amount??0}`:`%${c.share_percentage}`}</span>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            </div>
+          )}
+        </Modal>
+      )}
+
+      {/* Üye Ekle Modalı */}
+      {addMemberVisible && (
+        <Modal title="Üye Ekle" onClose={() => setAddMemberVisible(false)}
+          footer={<><button className="btn btn-ghost btn-sm" onClick={() => setAddMemberVisible(false)}>Vazgeç</button><button className="btn btn-pri btn-sm" onClick={handleAddMember} disabled={addingMember}>{addingMember?'Ekleniyor…':'Ekle'}</button></>}>
+          <div className="fields" style={{ gap:10 }}>
+            <Field label="AD SOYAD *"><input placeholder="Ad Soyad" value={newMember.name} onChange={e=>setNewMember({...newMember,name:e.target.value})} /></Field>
+            <div className="fields-2">
+              <Field label="TELEFON"><input placeholder="İletişim no" value={newMember.phone} onChange={e=>setNewMember({...newMember,phone:e.target.value})} /></Field>
+              <Field label="KİŞİ"><input placeholder="Veli adı vb." value={newMember.contact} onChange={e=>setNewMember({...newMember,contact:e.target.value})} /></Field>
+            </div>
+            <Field label="ÖZEL ÜCRET (₺)"><input type="number" min="0" placeholder={`Boş: ${detailGroup?.monthly_fee??0} ₺`} value={newMember.fee} onChange={e=>setNewMember({...newMember,fee:e.target.value})} /></Field>
+          </div>
+        </Modal>
+      )}
+
+      {/* Üye Düzenle Modalı */}
+      {editMemberVisible && editingMember && (
+        <Modal title="Üyeyi Düzenle" onClose={() => setEditMemberVisible(false)}
+          footer={<><button className="btn btn-ghost btn-sm" onClick={() => setEditMemberVisible(false)}>Vazgeç</button><button className="btn btn-pri btn-sm" onClick={handleSaveEditMember}>Kaydet</button></>}>
+          <div className="fields" style={{ gap:10 }}>
+            <Field label="AD SOYAD *"><input placeholder="Ad Soyad" value={editMemberForm.name} onChange={e=>setEditMemberForm({...editMemberForm,name:e.target.value})} /></Field>
+            <div className="fields-2">
+              <Field label="TELEFON"><input placeholder="İletişim no" value={editMemberForm.phone} onChange={e=>setEditMemberForm({...editMemberForm,phone:e.target.value})} /></Field>
+              <Field label="KİŞİ"><input placeholder="Veli adı vb." value={editMemberForm.contact} onChange={e=>setEditMemberForm({...editMemberForm,contact:e.target.value})} /></Field>
+            </div>
+            <Field label="ÖZEL ÜCRET (₺)"><input type="number" min="0" placeholder="Boş: grup aidatı" value={editMemberForm.fee} onChange={e=>setEditMemberForm({...editMemberForm,fee:e.target.value})} /></Field>
+          </div>
+        </Modal>
+      )}
+
+      {/* ══ Program Düzenle Modalı ════════════════════════════════ */}
+      {editSchedVisible && (
+        <Modal title="Programı Düzenle" wide onClose={() => setEditSchedVisible(false)}
+          footer={<><button className="btn btn-ghost btn-sm" onClick={() => setEditSchedVisible(false)}>Vazgeç</button><button className="btn btn-pri btn-sm" onClick={handleSaveSchedule} disabled={savingSched}>{savingSched?'Kaydediliyor…':'Kaydet'}</button></>}>
+          <div className="fields" style={{ gap:14 }}>
+            <div className="fields-2">
+              <Field label="GRUP ADI"><input value={editSchedName} onChange={e=>setEditSchedName(e.target.value)} /></Field>
+              <Field label="AÇIKLAMA"><input placeholder="İsteğe bağlı" value={editSchedDesc} onChange={e=>setEditSchedDesc(e.target.value)} /></Field>
+            </div>
+            {coaches.length > 0 && (
+              <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', padding:'10px 14px', background:'var(--surface)', border:'1px solid var(--border)', borderRadius:10 }}>
+                <div>
+                  <div style={{ fontWeight:600, fontSize:13 }}>Farklı günlere farklı hocalar</div>
+                </div>
+                <Switch on={editDiffCoachesPerDay} onChange={v => { setEditDiffCoachesPerDay(v); if (!v) setEditDayCoachIds({}); }} />
+              </div>
+            )}
+            {!editDiffCoachesPerDay && (
+              <Field label="ANTRENÖRLER">
+                <div style={{ display:'flex', flexWrap:'wrap', gap:8 }}>
+                  {coaches.map(c => (
+                    <button key={c.id} type="button"
+                      className={'btn btn-sm ' + (editSchedCoachIds.includes(c.id)?'btn-pri':'btn-ghost')}
+                      onClick={() => setEditSchedCoachIds(p=>p.includes(c.id)?p.filter(id=>id!==c.id):[...p,c.id])}>
+                      {c.full_name}
+                    </button>
+                  ))}
+                </div>
+              </Field>
+            )}
+            {courts.length > 0 && (
+              <Field label="GÜNLER">
+                <div style={{ display:'flex', gap:6, flexWrap:'wrap', marginBottom:14 }}>
+                  {DAYS.map(([label,idx]) => (
+                    <button key={idx} type="button"
+                      className={'btn btn-sm ' + (editSchedDays.includes(idx)?'btn-pri':'btn-ghost')}
+                      onClick={() => {
+                        if (editSchedDays.includes(idx)) {
+                          setEditSchedDays(p=>p.filter(d=>d!==idx));
+                          setEditSchedDaySettings(p=>{const n={...p};delete n[idx];return n;});
+                          setEditDayCoachIds(p=>{const n={...p};delete n[idx];return n;});
+                        } else {
+                          setEditSchedDays(p=>[...p,idx]);
+                          setEditSchedDaySettings(p=>({...p,[idx]:p[idx]??{courts:[],start:9,end:11}}));
+                          if (editDiffCoachesPerDay) setEditDayCoachIds(p=>({...p,[idx]:p[idx]??[...editSchedCoachIds]}));
+                        }
+                      }}>{label}</button>
+                  ))}
+                </div>
+                {editSchedDays.length > 0 && (
+                  <DaySettingsBlock
+                    days={editSchedDays} settingsState={editSchedDaySettings} setSettingsState={setEditSchedDaySettings}
+                    coachIdsState={editDayCoachIds} setCoachIdsState={setEditDayCoachIds} diffPerDay={editDiffCoachesPerDay}
+                  />
+                )}
+              </Field>
+            )}
+          </div>
+        </Modal>
+      )}
+
+      {/* ══ Ücret & Pay Ayarları Modalı ══════════════════════════ */}
+      {editFeeVisible && detailGroup && (
+        <Modal title="Ücret & Pay Ayarları" onClose={() => setEditFeeVisible(false)}
+          footer={<><button className="btn btn-ghost btn-sm" onClick={() => setEditFeeVisible(false)}>Vazgeç</button><button className="btn btn-pri btn-sm" onClick={handleSaveFee} disabled={savingFee}>{savingFee?'Kaydediliyor…':'Kaydet'}</button></>}>
+          <div className="fields" style={{ gap:12 }}>
+            <Field label="AYLIK AİDAT (₺)"><input type="number" min="0" value={editFee} onChange={e=>setEditFee(e.target.value)} /></Field>
+            {(detailGroup.coaches||[]).length > 0 && (
+              <Field label="PAY MODELİ">
+                <div style={{ display:'flex', borderRadius:8, overflow:'hidden', border:'1px solid var(--border)' }}>
+                  {[{v:'percentage',l:'% Yüzde'},{v:'fixed_amount',l:'₺ Tutar'}].map(opt => (
+                    <button key={opt.v} type="button"
+                      style={{ flex:1, padding:'8px', fontSize:13, fontWeight:600, border:'none', cursor:'pointer', background:editSplitType===opt.v?'var(--brand-navy)':'transparent', color:editSplitType===opt.v?'#fff':'var(--text-1)' }}
+                      onClick={() => setEditSplitType(opt.v)}>{opt.l}</button>
+                  ))}
+                </div>
+              </Field>
+            )}
+            {(detailGroup.coaches||[]).length > 0 && editSplitType === 'percentage' && (
+              <Field label="KULÜP PAYI (%)">
+                <input type="number" min="0" max="100" value={editPct} onChange={e=>setEditPct(e.target.value)} />
+                {parseFloat(editPct) < 100 && <div style={{ fontSize:12, color:'var(--text-2)', marginTop:4 }}>Hoca payı: %{Math.round((100-parseFloat(editPct))*100)/100}</div>}
+              </Field>
+            )}
+            {(detailGroup.coaches||[]).length > 0 && editSplitType === 'fixed_amount' && (
+              <Field label="HOCA TUTARLARI (₺)">
+                {(detailGroup.coaches||[]).map(c => (
+                  <div key={c.id} style={{ display:'flex', alignItems:'center', gap:8, marginBottom:6 }}>
+                    <span style={{ flex:1, fontSize:13 }}>{c.full_name}</span>
+                    <input type="number" min="0" style={{ width:100 }} placeholder="0 ₺" value={editCoachFixed[c.id]??''} onChange={e=>setEditCoachFixed(p=>({...p,[c.id]:e.target.value}))} />
+                  </div>
+                ))}
+              </Field>
+            )}
+          </div>
+        </Modal>
+      )}
+
+      {/* ══ Aidat Takip Modalı ════════════════════════════════════ */}
+      {paymentVisible && paymentGroup && (
+        <Modal title={`${paymentGroup.name} — Aidat Takibi`} wide onClose={() => setPaymentVisible(false)}
+          footer={<button className="btn btn-ghost btn-sm" onClick={() => setPaymentVisible(false)}>Kapat</button>}>
+          <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', marginBottom:16, padding:'10px 14px', background:'var(--bg)', borderRadius:10 }}>
+            <button className="btn btn-ghost btn-sm btn-icon" onClick={() => navigatePayMonth(-1)}>
+              <span className="material-icons">chevron_left</span>
+            </button>
+            <span style={{ fontWeight:700, fontSize:15 }}>{MONTHS_TR[payMonth-1]} {payYear}</span>
+            <button className="btn btn-ghost btn-sm btn-icon" onClick={() => navigatePayMonth(1)}>
+              <span className="material-icons">chevron_right</span>
+            </button>
+          </div>
+          {loadingDues ? <Spinner size={28} /> : (
+            <div>
+              <div style={{ display:'flex', gap:10, marginBottom:16 }}>
+                <div style={{ flex:1, padding:'10px 14px', background:'var(--bg)', borderRadius:10, textAlign:'center' }}>
+                  <div style={{ fontWeight:800, fontSize:20, color:'#22C55E' }}>{paidCount}/{dues.length}</div>
+                  <div style={{ fontSize:11, color:'var(--text-2)', marginTop:2 }}>Ödedi</div>
+                </div>
+                <div style={{ flex:1, padding:'10px 14px', background:'var(--bg)', borderRadius:10, textAlign:'center' }}>
+                  <div style={{ fontWeight:800, fontSize:20, color:'var(--brand-navy)' }}>₺{totalDuesAmt.toLocaleString('tr-TR')}</div>
+                  <div style={{ fontSize:11, color:'var(--text-2)', marginTop:2 }}>Toplam Aidat</div>
+                </div>
+              </div>
+              <div style={{ display:'flex', flexDirection:'column', gap:8, marginBottom:16 }}>
+                {dues.map(due => (
+                  <div key={due.id} style={{ display:'flex', alignItems:'center', gap:10, padding:'10px 12px', background:'var(--bg)', borderRadius:10, border:`1px solid ${due.is_paid?'#BBF7D0':'var(--border)'}` }}>
+                    <div style={{ width:34, height:34, borderRadius:17, background:due.is_paid?'#DCFCE7':'#EEF2FF', display:'grid', placeItems:'center', flexShrink:0 }}>
+                      <span style={{ fontSize:13, fontWeight:700, color:due.is_paid?'#22C55E':'var(--brand-navy)' }}>{due.member_name?.charAt(0)?.toUpperCase()}</span>
+                    </div>
+                    <div style={{ flex:1 }}>
+                      <div style={{ fontWeight:600, fontSize:13 }}>{due.member_name}</div>
+                      <div style={{ fontSize:12, color:'var(--text-2)' }}>₺{due.amount} / ay</div>
+                    </div>
+                    {duesPost ? (
+                      <Badge cls={due.is_paid?'b-green':''}>{due.is_paid?'Ödendi':'Bekliyor'}</Badge>
+                    ) : (
+                      <button
+                        style={{ display:'flex', alignItems:'center', gap:5, padding:'6px 12px', borderRadius:8, border:'none', cursor:'pointer', background:due.is_paid?'#DCFCE7':'#EEF2FF', color:due.is_paid?'#22C55E':'var(--brand-navy)', fontWeight:600, fontSize:12 }}
+                        onClick={() => handleToggleDuePaid(due)}>
+                        <span className="material-icons" style={{fontSize:14}}>{due.is_paid?'check_circle':'radio_button_unchecked'}</span>
+                        {due.is_paid ? 'Ödendi' : 'İşaretle'}
+                      </button>
+                    )}
+                  </div>
+                ))}
+              </div>
+              {!duesPost ? (
+                <button
+                  style={{ width:'100%', padding:'13px', borderRadius:12, border:'none', cursor:allDuesPaid?'pointer':'not-allowed', background:allDuesPaid?'#22C55E':'var(--border)', color:allDuesPaid?'#fff':'var(--text-2)', fontWeight:700, fontSize:14, opacity:postingFinance?0.6:1, display:'flex', alignItems:'center', justifyContent:'center', gap:6 }}
+                  onClick={handlePostToFinance} disabled={!allDuesPaid||postingFinance}>
+                  <span className="material-icons" style={{fontSize:16}}>account_balance_wallet</span>
+                  {postingFinance ? 'İşleniyor...' : allDuesPaid ? 'Finansa İşle' : `${dues.length-paidCount} üye ödeme bekliyor`}
+                </button>
+              ) : (
+                <div style={{ padding:'13px', borderRadius:12, background:'#DCFCE7', textAlign:'center' }}>
+                  <span className="material-icons" style={{ color:'#22C55E', fontSize:20, verticalAlign:'middle', marginRight:6 }}>check_circle</span>
+                  <span style={{ color:'#22C55E', fontWeight:700, fontSize:14 }}>Finansa işlendi</span>
+                  <div style={{ fontSize:12, color:'#16A34A', marginTop:4 }}>Kulüp: ₺{duesPost.club_amount?.toLocaleString('tr-TR')} · Hoca: ₺{duesPost.coach_amount?.toLocaleString('tr-TR')}</div>
+                </div>
+              )}
+            </div>
+          )}
+        </Modal>
+      )}
+    </div>
+  );
+}

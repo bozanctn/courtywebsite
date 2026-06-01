@@ -248,6 +248,10 @@ function ReservationsScreen({ clubId, setScreen }) {
   const [lessonPlayerSearch,   setLessonPlayerSearch]   = useState('');
   const [lessonPlayerResults,  setLessonPlayerResults]  = useState([]);
   const [lessonSelectedPlayer, setLessonSelectedPlayer] = useState(null);
+  const [lessonPackages,          setLessonPackages]          = useState([]);
+  const [lessonUsePackage,        setLessonUsePackage]        = useState(false);
+  const [lessonSelectedPackageId, setLessonSelectedPackageId] = useState(null);
+  const [lessonLoadingPackages,   setLessonLoadingPackages]   = useState(false);
 
   useEffect(() => { if (clubId) { loadCourts(); loadDotDates(); } }, [clubId]);
   useEffect(() => { if (clubId) loadDay(); }, [clubId, selDate]);
@@ -573,8 +577,54 @@ function ReservationsScreen({ clubId, setScreen }) {
       setLessonSelectedPlayer(null);
       setLessonPlayerSearch('');
       setLessonPlayerResults([]);
+      setLessonPackages([]);
+      setLessonUsePackage(false);
+      setLessonSelectedPackageId(null);
     }
   }, [lessonModal]);
+
+  // Öğrenci veya antrenör değişince paketleri yükle
+  useEffect(() => {
+    const playerId = lessonSelectedPlayer?.id;
+    const coachClubId = lessonForm.coach_id;
+    if (!playerId || !coachClubId || lessonForm.use_manual_coach) {
+      setLessonPackages([]);
+      setLessonUsePackage(false);
+      setLessonSelectedPackageId(null);
+      return;
+    }
+    (async () => {
+      setLessonLoadingPackages(true);
+      try {
+        // club_coaches.individual_coach_id = koçun kendi auth user ID'si
+        const coachRec = coaches.find(c => c.id === coachClubId);
+        const individualCoachId = coachRec?.individual_coach_id;
+        if (!individualCoachId) { setLessonPackages([]); return; }
+        const now = new Date().toISOString();
+        const { data } = await sb.from('player_lesson_packages')
+          .select('*, lesson_packages(name, total_lessons, price, validity_days, coach_percentage)')
+          .eq('player_id', playerId)
+          .eq('coach_id', individualCoachId)
+          .eq('payment_status', 'paid')
+          .eq('status', 'active')
+          .or(`expiry_date.is.null,expiry_date.gt.${now}`)
+          .order('created_at', { ascending: false });
+        const pkgs = (data || []).map(r => ({
+          ...r,
+          package_name: r.lesson_packages?.name ?? '',
+          remaining: (r.total_lessons || 0) - (r.used_lessons || 0),
+        }));
+        setLessonPackages(pkgs);
+        if (pkgs.length > 0) {
+          setLessonSelectedPackageId(pkgs[0].id);
+        } else {
+          setLessonUsePackage(false);
+          setLessonSelectedPackageId(null);
+        }
+      } catch (e) { console.error('package load:', e); }
+      finally { setLessonLoadingPackages(false); }
+    })();
+  }, [lessonSelectedPlayer?.id, lessonForm.coach_id, lessonForm.use_manual_coach]);
 
   // ── Özel ders fonksiyonları ──────────────────────────────────
   const searchPlayers = async (q) => {
@@ -595,7 +645,7 @@ function ReservationsScreen({ clubId, setScreen }) {
 
       // Kulübün koçlarını al
       const [coachRes, courtRes] = await Promise.all([
-        sb.from('club_coaches').select('id, full_name, hourly_rate').eq('club_id', clubId),
+        sb.from('club_coaches').select('id, full_name, hourly_rate, individual_coach_id').eq('club_id', clubId),
         sb.from('courts').select('id, court_number, hourly_rate').eq('club_id', clubId).eq('is_active', true),
       ]);
       const allClubCoaches = coachRes.data || [];
@@ -614,6 +664,9 @@ function ReservationsScreen({ clubId, setScreen }) {
 
       const combined = [];
 
+      // club_coaches.id → individual_coach_id haritası (paket eşleştirmesi için)
+      const coachToIndividual = new Map(allClubCoaches.map(c => [c.id, c.individual_coach_id]));
+
       // 1) club_manual_lessons tablosu — kulüp yöneticisinin eklediği manuel dersler
       const { data: manual } = await sb.from('club_manual_lessons')
         .select('*, club_coaches(full_name)')
@@ -621,21 +674,38 @@ function ReservationsScreen({ clubId, setScreen }) {
         .eq('date', d)
         .order('start_time', { ascending: true });
 
+      // Manuel dersler için paket seans bilgisi — lesson_id IS NULL + session_date eşleşmesiyle
+      const individualIds = allClubCoaches.map(c => c.individual_coach_id).filter(Boolean);
+      let manualPkgMap = new Map(); // individual_coach_id → { session_id, player_package_id }
+      if (individualIds.length > 0) {
+        const { data: manualSessions } = await sb.from('lesson_package_sessions')
+          .select('id, player_package_id, coach_id')
+          .eq('session_date', d)
+          .is('lesson_id', null)
+          .in('coach_id', individualIds);
+        (manualSessions || []).forEach(s => manualPkgMap.set(s.coach_id, { session_id: s.id, player_package_id: s.player_package_id }));
+      }
+
       (manual || []).forEach(m => {
+        const individualId = coachToIndividual.get(m.coach_id);
+        const pkgInfo = individualId ? manualPkgMap.get(individualId) : null;
         combined.push({
-          id:             m.id,
-          date:           m.date,
-          start_time:     (m.start_time || '').slice(0, 5),
-          end_time:       (m.end_time   || '').slice(0, 5),
-          student_name:   m.student_name || null,
-          coach_name:     m.coach_name || m.club_coaches?.full_name || 'Antrenör',
-          coach_id:       m.coach_id || null,
-          court_id:       m.court_id || null,
-          court_fee:      m.court_fee || 0,
-          location:       m.location || '—',
-          source:         'manual',
-          payment_status: m.payment_status || 'unpaid',
-          amount:         m.amount || 0,
+          id:               m.id,
+          date:             m.date,
+          start_time:       (m.start_time || '').slice(0, 5),
+          end_time:         (m.end_time   || '').slice(0, 5),
+          student_name:     m.student_name || null,
+          coach_name:       m.coach_name || m.club_coaches?.full_name || 'Antrenör',
+          coach_id:         m.coach_id || null,
+          court_id:         m.court_id || null,
+          court_fee:        m.court_fee || 0,
+          location:         m.location || '—',
+          source:           'manual',
+          payment_status:   m.payment_status || 'unpaid',
+          amount:           m.amount || 0,
+          is_package_lesson: !!pkgInfo,
+          pkg_session_id:   pkgInfo?.session_id || null,
+          player_package_id: pkgInfo?.player_package_id || null,
         });
       });
 
@@ -649,17 +719,18 @@ function ReservationsScreen({ clubId, setScreen }) {
           .lte('start_time', dbEnd);
 
         const lessonIds = (directLessons || []).map(l => l.id);
-        let pkgLessonIds = new Set();
+        let pkgSessionMap = new Map(); // lesson_id → { session_id, player_package_id }
         if (lessonIds.length > 0) {
           const { data: pkgSessions } = await sb.from('lesson_package_sessions')
-            .select('lesson_id').in('lesson_id', lessonIds);
-          pkgLessonIds = new Set((pkgSessions || []).map(s => s.lesson_id));
+            .select('id, lesson_id, player_package_id').in('lesson_id', lessonIds);
+          (pkgSessions || []).forEach(s => pkgSessionMap.set(s.lesson_id, { session_id: s.id, player_package_id: s.player_package_id }));
         }
 
         (directLessons || []).forEach(l => {
           const start = new Date(l.start_time);
           const end   = new Date(l.end_time);
           const court = Array.isArray(l.courts) ? l.courts[0] : l.courts;
+          const pkgInfo = pkgSessionMap.get(l.id);
           combined.push({
             id:               l.id,
             date:             start.toISOString().split('T')[0],
@@ -672,7 +743,9 @@ function ReservationsScreen({ clubId, setScreen }) {
             source:           'lesson',
             payment_status:   l.payment_status === 'paid' ? 'paid' : 'unpaid',
             amount:           l.amount || null,
-            is_package_lesson: pkgLessonIds.has(l.id),
+            is_package_lesson: !!pkgInfo,
+            pkg_session_id:   pkgInfo?.session_id || null,
+            player_package_id: pkgInfo?.player_package_id || null,
           });
         });
       }
@@ -820,7 +893,11 @@ function ReservationsScreen({ clubId, setScreen }) {
       const courtRow  = lessonCourts.find(c => c.id === lessonForm.court_id);
       const coachId   = !lessonForm.use_manual_coach ? (lessonForm.coach_id || null) : null;
       const coachName = lessonForm.use_manual_coach ? (lessonForm.manual_coach_name || null) : null;
-      const amountVal = lessonForm.amount ? parseFloat(String(lessonForm.amount).replace(',', '.')) : null;
+
+      // Paketten kullan → ücret 0, ödeme durumu ödendi
+      const usingPkg = !!(lessonUsePackage && lessonSelectedPackageId);
+      const amountVal = usingPkg ? 0 : (lessonForm.amount ? parseFloat(String(lessonForm.amount).replace(',', '.')) : null);
+      const payStatus = usingPkg ? 'paid' : (lessonForm.payment_status || 'unpaid');
 
       const payload = {
         club_id:        clubId,
@@ -833,7 +910,7 @@ function ReservationsScreen({ clubId, setScreen }) {
         court_id:       lessonForm.court_id,
         location:       courtRow ? `Kort ${courtRow.court_number}` : '',
         notes:          lessonForm.notes?.trim() || null,
-        payment_status: lessonForm.payment_status || 'unpaid',
+        payment_status: payStatus,
         amount:         amountVal,
       };
 
@@ -865,6 +942,76 @@ function ReservationsScreen({ clubId, setScreen }) {
             });
             if (bErr) console.warn('Kort takvim bloğu eklenemedi:', bErr.message);
           }
+
+          // Paketten seans düş (mobil ile aynı mantık)
+          if (usingPkg) {
+            try {
+              const pkg = lessonPackages.find(p => p.id === lessonSelectedPackageId);
+              if (pkg) {
+                const remaining = (pkg.total_lessons || 0) - (pkg.used_lessons || 0);
+                if (remaining <= 0) throw new Error('Bu pakette kalan ders yok');
+
+                const newUsed = (pkg.used_lessons || 0) + 1;
+                const isCompleted = newUsed >= (pkg.total_lessons || 0);
+
+                // 1. Session kaydı oluştur (lesson_id null — web manual_lessons tablosuna yazıyor)
+                const { error: sessErr } = await sb.from('lesson_package_sessions').insert({
+                  player_package_id: lessonSelectedPackageId,
+                  lesson_id:         null,
+                  coach_id:          coaches.find(c => c.id === coachId)?.individual_coach_id || null,
+                  session_date:      lessonForm.date,
+                  notes:             lessonForm.notes?.trim() || null,
+                });
+                if (sessErr) throw sessErr;
+
+                // 2. used_lessons güncelle
+                const { error: updErr } = await sb.from('player_lesson_packages').update({
+                  used_lessons: newUsed,
+                  status:       isCompleted ? 'completed' : 'active',
+                  updated_at:   new Date().toISOString(),
+                }).eq('id', lessonSelectedPackageId);
+                if (updErr) throw updErr;
+
+                // 3. Earnings / finans kayıtları (paket fiyatından per-session hesapla)
+                const pkgDef = pkg.lesson_packages || {};
+                const perSessionTotal = ((pkgDef.price || 0) / (pkgDef.total_lessons || 1));
+                const coachPct = pkgDef.coach_percentage ?? 70;
+                const coachEarning = perSessionTotal * (coachPct / 100);
+                const clubEarning  = perSessionTotal - coachEarning;
+
+                const coachRec = coaches.find(c => c.id === coachId);
+                const earningPromises = [];
+                if (coachRec && coachEarning > 0) {
+                  earningPromises.push(sb.from('coach_earnings').insert({
+                    club_id:        clubId,
+                    coach_id:       coachId,
+                    coach_name:     coachRec.full_name,
+                    student_name:   lessonForm.student_name || null,
+                    lesson_id:      inserted.id,
+                    booking_id:     null,
+                    amount:         Math.round(coachEarning * 100) / 100,
+                    court_fee:      0,
+                    date:           lessonForm.date,
+                    description:    'Ders Paketi Oturumu',
+                    payment_status: 'unpaid',
+                  }));
+                }
+                if (clubEarning > 0) {
+                  earningPromises.push(sb.from('club_finances').insert({
+                    club_id:     clubId,
+                    type:        'income',
+                    category:    'Ders Paketi Geliri',
+                    amount:      Math.round(clubEarning * 100) / 100,
+                    description: `${coachRec?.full_name || 'Antrenör'} - ${lessonForm.student_name || 'Öğrenci'} - Ders Paketi Oturumu`,
+                    date:        lessonForm.date,
+                  }));
+                }
+                await Promise.all(earningPromises);
+              }
+            } catch (pkgErr) {
+              alert(`Ders kaydedildi ancak paketten düşülemedi: ${pkgErr.message}`);
+            }
+          }
         }
       }
 
@@ -882,23 +1029,28 @@ function ReservationsScreen({ clubId, setScreen }) {
 
   const cancelLesson = async (lesson) => {
     if (lesson.source === 'booking') { alert('Rezervasyon kaynaklı dersler buradan iptal edilemez.'); return; }
-    if (!confirm('Bu dersi iptal etmek istediğinize emin misiniz?')) return;
+    const msg = lesson.is_package_lesson
+      ? 'Bu dersi silmek istediğinizden emin misiniz? Paketten düşülmüşse kredi geri yüklenir.'
+      : 'Bu dersi iptal etmek istediğinize emin misiniz?';
+    if (!confirm(msg)) return;
     try {
-      if (lesson.source === 'lesson') {
-        if (lesson.package_session_id) {
-          const { data: pkgSession } = await sb.from('lesson_package_sessions')
-            .select('package_id').eq('id', lesson.package_session_id).single();
-          if (pkgSession?.package_id) {
-            const { data: pkg } = await sb.from('player_lesson_packages')
-              .select('remaining_sessions').eq('id', pkgSession.package_id).single();
-            if (pkg) {
-              await sb.from('player_lesson_packages')
-                .update({ remaining_sessions: (pkg.remaining_sessions || 0) + 1 })
-                .eq('id', pkgSession.package_id);
-            }
-            await sb.from('lesson_package_sessions').delete().eq('id', lesson.package_session_id);
-          }
+      // Paket seans geri yükle — mobil LessonPackageService.restoreSession ile aynı mantık
+      if (lesson.pkg_session_id && lesson.player_package_id) {
+        const { data: plp } = await sb.from('player_lesson_packages')
+          .select('used_lessons').eq('id', lesson.player_package_id).single();
+        if (plp) {
+          await Promise.all([
+            sb.from('player_lesson_packages').update({
+              used_lessons: Math.max(0, (plp.used_lessons || 0) - 1),
+              status:       'active',
+              updated_at:   new Date().toISOString(),
+            }).eq('id', lesson.player_package_id),
+            sb.from('lesson_package_sessions').delete().eq('id', lesson.pkg_session_id),
+          ]);
         }
+      }
+
+      if (lesson.source === 'lesson') {
         await sb.from('lessons').update({ status: 'cancelled' }).eq('id', lesson.id);
       } else {
         await sb.from('club_manual_lessons').delete().eq('id', lesson.id);
@@ -1363,6 +1515,66 @@ function ReservationsScreen({ clubId, setScreen }) {
                 </div>
               )}
 
+              {/* ── Paket Kullanımı ──────────────────────────── */}
+              {lessonSelectedPlayer && !lessonForm.use_manual_coach && lessonForm.coach_id && (
+                <div style={{ marginBottom:16 }}>
+                  {lessonLoadingPackages ? (
+                    <div style={{ fontSize:13, color:'var(--text-2)', padding:'8px 0' }}>Paketler yükleniyor...</div>
+                  ) : lessonPackages.length > 0 ? (
+                    <div style={{ border:'1.5px solid var(--border)', borderRadius:12, overflow:'hidden' }}>
+                      {/* Toggle satırı */}
+                      <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', padding:'12px 14px', background: lessonUsePackage ? '#EEF2FF' : 'var(--bg)', borderBottom: lessonUsePackage ? '1.5px solid var(--border)' : 'none' }}>
+                        <div style={{ display:'flex', alignItems:'center', gap:8 }}>
+                          <span className="material-icons" style={{ fontSize:18, color: lessonUsePackage ? 'var(--brand-navy)' : 'var(--text-2)' }}>inventory_2</span>
+                          <div>
+                            <div style={{ fontSize:13, fontWeight:700, color: lessonUsePackage ? 'var(--brand-navy)' : 'var(--text-1)' }}>Paketten Kullan</div>
+                            <div style={{ fontSize:11, color:'var(--text-2)' }}>{lessonPackages.length} aktif paket mevcut</div>
+                          </div>
+                        </div>
+                        <div style={{ width:44, height:24, borderRadius:12, background: lessonUsePackage ? 'var(--brand-navy)' : '#CBD5E1', cursor:'pointer', position:'relative', transition:'background 0.2s', flexShrink:0 }}
+                          onClick={() => {
+                            const next = !lessonUsePackage;
+                            setLessonUsePackage(next);
+                            if (next) {
+                              setLessonForm(prev => ({ ...prev, amount: '0', payment_status: 'paid' }));
+                            } else {
+                              setLessonForm(prev => ({ ...prev, amount: '', payment_status: 'unpaid' }));
+                            }
+                          }}>
+                          <div style={{ width:18, height:18, borderRadius:9, background:'#fff', position:'absolute', top:3, left: lessonUsePackage ? 23 : 3, transition:'left 0.2s', boxShadow:'0 1px 3px rgba(0,0,0,0.3)' }} />
+                        </div>
+                      </div>
+                      {/* Paket seçimi */}
+                      {lessonUsePackage && (
+                        <div style={{ padding:'12px 14px', background:'var(--surface)', display:'flex', flexDirection:'column', gap:8 }}>
+                          {lessonPackages.map(pkg => {
+                            const remaining = (pkg.total_lessons || 0) - (pkg.used_lessons || 0);
+                            const isSelected = lessonSelectedPackageId === pkg.id;
+                            const expiry = pkg.expiry_date ? new Date(pkg.expiry_date).toLocaleDateString('tr-TR') : null;
+                            return (
+                              <div key={pkg.id}
+                                onClick={() => setLessonSelectedPackageId(pkg.id)}
+                                style={{ display:'flex', alignItems:'center', justifyContent:'space-between', padding:'10px 12px', borderRadius:10, border: isSelected ? '1.5px solid var(--brand-navy)' : '1.5px solid var(--border)', background: isSelected ? '#EEF2FF' : 'var(--bg)', cursor:'pointer' }}>
+                                <div>
+                                  <div style={{ fontSize:13, fontWeight:700, color: isSelected ? 'var(--brand-navy)' : 'var(--text-1)' }}>{pkg.package_name || 'Ders Paketi'}</div>
+                                  <div style={{ fontSize:11, color:'var(--text-2)' }}>
+                                    {remaining} ders kaldı{expiry ? ` · Son: ${expiry}` : ''}
+                                  </div>
+                                </div>
+                                {isSelected && <span className="material-icons" style={{ fontSize:18, color:'var(--brand-navy)' }}>check_circle</span>}
+                              </div>
+                            );
+                          })}
+                          <div style={{ fontSize:11, color:'#059669', fontWeight:600, paddingTop:4 }}>
+                            Ders ücreti 0 ₺ olarak kaydedilecek, ödemesi paket satışında alındı.
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  ) : null}
+                </div>
+              )}
+
               {/* ── Kort ─────────────────────────────────────── */}
               <div style={{ fontSize:12, fontWeight:700, color:'var(--text-2)', marginBottom:8, letterSpacing:0.4 }}>KORT</div>
               {lessonCourts.length === 0 ? (
@@ -1390,16 +1602,18 @@ function ReservationsScreen({ clubId, setScreen }) {
 
               {/* ── Ders Ücreti ──────────────────────────────── */}
               <div style={{ fontSize:12, fontWeight:700, color:'var(--text-2)', marginBottom:8, letterSpacing:0.4 }}>DERS ÜCRETİ (opsiyonel)</div>
-              <div style={{ display:'flex', alignItems:'center', border:'1.5px solid var(--border)', borderRadius:12, background:'var(--bg)', paddingLeft:12, marginBottom:16 }}>
+              <div style={{ display:'flex', alignItems:'center', border:`1.5px solid ${lessonUsePackage ? '#86EFAC' : 'var(--border)'}`, borderRadius:12, background: lessonUsePackage ? '#F0FDF4' : 'var(--bg)', paddingLeft:12, marginBottom:16, opacity: lessonUsePackage ? 0.7 : 1 }}>
                 <span style={{ fontSize:16, fontWeight:700, color:'var(--text-2)', marginRight:4 }}>₺</span>
                 <input type="number" min="0" step="0.01" style={{ flex:1, border:'none', background:'transparent', padding:'11px 12px 11px 0', fontSize:15, color:'var(--text-1)', outline:'none' }}
                   placeholder="0,00" value={lessonForm.amount || ''}
+                  disabled={lessonUsePackage}
                   onChange={e => setLessonForm({...lessonForm, amount: e.target.value})} />
+                {lessonUsePackage && <span className="material-icons" style={{ fontSize:16, color:'#059669', marginRight:10 }}>inventory_2</span>}
               </div>
 
               {/* ── Ödeme Durumu ─────────────────────────────── */}
               <div style={{ fontSize:12, fontWeight:700, color:'var(--text-2)', marginBottom:8, letterSpacing:0.4 }}>ÖDEME DURUMU</div>
-              <div style={{ display:'flex', gap:10, marginBottom:20 }}>
+              <div style={{ display:'flex', gap:10, marginBottom:20, opacity: lessonUsePackage ? 0.6 : 1, pointerEvents: lessonUsePackage ? 'none' : 'auto' }}>
                 <button
                   style={{ flex:1, display:'flex', alignItems:'center', justifyContent:'center', gap:6, padding:'11px', borderRadius:12, border: (lessonForm.payment_status||'unpaid') === 'unpaid' ? '1.5px solid #F59E0B' : '1.5px solid var(--border)', background: (lessonForm.payment_status||'unpaid') === 'unpaid' ? '#FEF3C7' : 'var(--bg)', cursor:'pointer' }}
                   onClick={() => setLessonForm({...lessonForm, payment_status:'unpaid'})}
