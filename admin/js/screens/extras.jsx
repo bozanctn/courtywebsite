@@ -2123,7 +2123,7 @@ function GroupsScreen({ clubId, setScreen }) {
   };
   const combineHour = (h, m) => h + (m || 0) / 60;
   const splitHour  = (h) => ({ hour: Math.floor(h), minute: Math.round((h % 1) * 60) });
-  const makeMember = () => ({ key: Date.now() + Math.random(), name:'', phone:'', contact:'', fee:'' });
+  const makeMember = () => ({ key: Date.now() + Math.random(), name:'', phone:'', contact:'', fee:'', days:[] });
 
   // ── List ─────────────────────────────────────────────────────
   const [groups,       setGroups]       = useState([]);
@@ -2152,17 +2152,18 @@ function GroupsScreen({ clubId, setScreen }) {
   const [members,            setMembers]            = useState([makeMember(), makeMember(), makeMember()]);
 
   // ── Detail modal ─────────────────────────────────────────────
-  const [detailGroup,   setDetailGroup]   = useState(null);
-  const [detailVisible, setDetailVisible] = useState(false);
+  const [detailGroup,    setDetailGroup]    = useState(null);
+  const [detailVisible,  setDetailVisible]  = useState(false);
+  const [detailGroupDays,setDetailGroupDays]= useState([]);
   const [detailTab,     setDetailTab]     = useState('members');
 
   // Add/edit member
   const [addMemberVisible, setAddMemberVisible] = useState(false);
-  const [newMember,        setNewMember]        = useState({ name:'', phone:'', contact:'', fee:'' });
+  const [newMember,        setNewMember]        = useState({ name:'', phone:'', contact:'', fee:'', days:[] });
   const [addingMember,     setAddingMember]     = useState(false);
   const [editMemberVisible,setEditMemberVisible]= useState(false);
   const [editingMember,    setEditingMember]    = useState(null);
-  const [editMemberForm,   setEditMemberForm]   = useState({ name:'', phone:'', contact:'', fee:'' });
+  const [editMemberForm,   setEditMemberForm]   = useState({ name:'', phone:'', contact:'', fee:'', days:[] });
 
   // Edit schedule modal
   const [editSchedVisible,       setEditSchedVisible]       = useState(false);
@@ -2369,6 +2370,7 @@ function GroupsScreen({ clubId, setScreen }) {
           contact_number: m.phone.trim() || null,
           contact_person: m.contact.trim() || null,
           custom_fee: m.fee.trim() && !isNaN(parseFloat(m.fee)) ? parseFloat(m.fee) : null,
+          schedule_days: m.days || [],
         }))
       );
       if (membErr) throw membErr;
@@ -2409,8 +2411,12 @@ function GroupsScreen({ clubId, setScreen }) {
   // ── Detail ────────────────────────────────────────────────────
   const openDetail = async (group) => {
     try {
-      const fresh = await loadGroupDetail(group.id);
+      const [fresh, { data: closures }] = await Promise.all([
+        loadGroupDetail(group.id),
+        sb.from('court_closures').select('day_of_week').eq('group_id', group.id).eq('is_active', true),
+      ]);
       setDetailGroup(fresh);
+      setDetailGroupDays([...new Set((closures || []).map(c => c.day_of_week).filter(d => d != null))]);
       setDetailTab('members');
       setDetailVisible(true);
     } catch (e) { alert(e.message); }
@@ -2460,8 +2466,8 @@ function GroupsScreen({ clubId, setScreen }) {
     setAddingMember(true);
     try {
       const feeVal = newMember.fee.trim() && !isNaN(parseFloat(newMember.fee)) ? parseFloat(newMember.fee) : null;
-      await sb.from('club_group_members').insert([{ group_id:detailGroup.id, member_name:newMember.name.trim(), contact_number:newMember.phone.trim()||null, contact_person:newMember.contact.trim()||null, custom_fee:feeVal }]);
-      setNewMember({ name:'', phone:'', contact:'', fee:'' });
+      await sb.from('club_group_members').insert([{ group_id:detailGroup.id, member_name:newMember.name.trim(), contact_number:newMember.phone.trim()||null, contact_person:newMember.contact.trim()||null, custom_fee:feeVal, schedule_days:newMember.days }]);
+      setNewMember({ name:'', phone:'', contact:'', fee:'', days:[] });
       setAddMemberVisible(false);
       setDetailGroup(await loadGroupDetail(detailGroup.id));
       await loadGroups(currentPage, searchQuery);
@@ -2473,7 +2479,7 @@ function GroupsScreen({ clubId, setScreen }) {
     if (!editingMember || !editMemberForm.name.trim()) { alert('Üye adı boş olamaz'); return; }
     try {
       const feeVal = editMemberForm.fee.trim() && !isNaN(parseFloat(editMemberForm.fee)) ? parseFloat(editMemberForm.fee) : null;
-      await sb.from('club_group_members').update({ member_name:editMemberForm.name.trim(), contact_number:editMemberForm.phone.trim()||null, contact_person:editMemberForm.contact.trim()||null, custom_fee:feeVal }).eq('id', editingMember.id);
+      await sb.from('club_group_members').update({ member_name:editMemberForm.name.trim(), contact_number:editMemberForm.phone.trim()||null, contact_person:editMemberForm.contact.trim()||null, custom_fee:feeVal, schedule_days:editMemberForm.days }).eq('id', editingMember.id);
       setEditMemberVisible(false);
       setDetailGroup(await loadGroupDetail(detailGroup.id));
       await loadGroups(currentPage, searchQuery);
@@ -2986,6 +2992,24 @@ function GroupsScreen({ clubId, setScreen }) {
                         <input style={{ flex:1 }} placeholder="Kişi (veli vb.)" value={m.contact} onChange={e=>setMembers(p=>p.map(r=>r.key===m.key?{...r,contact:e.target.value}:r))} />
                       </div>
                       <input type="number" min="0" placeholder={`Özel Ücret ₺ (boş: ${monthlyFee||'0'} ₺)`} value={m.fee} onChange={e=>setMembers(p=>p.map(r=>r.key===m.key?{...r,fee:e.target.value}:r))} />
+                      {selectedDays.length > 0 && (
+                        <div style={{ display:'flex', gap:4, flexWrap:'wrap', marginTop:2 }}>
+                          {DAYS.filter(([,idx]) => selectedDays.includes(idx)).map(([label,idx]) => {
+                            const active = (m.days||[]).includes(idx);
+                            return (
+                              <button key={idx} type="button"
+                                style={{ padding:'2px 7px', fontSize:10, fontWeight:700, borderRadius:5, border:'1px solid', cursor:'pointer',
+                                  borderColor: active ? '#0D9488' : 'var(--border)',
+                                  background: active ? '#0D948818' : 'var(--surface)',
+                                  color: active ? '#0D9488' : 'var(--text-2)' }}
+                                onClick={() => {
+                                  const next = active ? (m.days||[]).filter(d=>d!==idx) : [...(m.days||[]),idx];
+                                  setMembers(p=>p.map(r=>r.key===m.key?{...r,days:next}:r));
+                                }}>{label}</button>
+                            );
+                          })}
+                        </div>
+                      )}
                     </div>
                     {members.length > 3 && (
                       <button type="button" style={{ background:'none', border:'none', cursor:'pointer', color:'#EF4444', marginTop:6, padding:2 }}
@@ -3044,9 +3068,14 @@ function GroupsScreen({ clubId, setScreen }) {
                         {[member.contact_number, member.contact_person].filter(Boolean).join(' · ')}
                       </div>
                       {member.custom_fee != null && <div style={{ fontSize:11, color:'#0D9488' }}>Özel: ₺{member.custom_fee}/ay</div>}
+                      {(member.schedule_days||[]).length > 0 && (
+                        <div style={{ fontSize:11, color:'#0D9488', fontWeight:600, marginTop:1 }}>
+                          {(member.schedule_days||[]).slice().sort((a,b)=>(a===0?7:a)-(b===0?7:b)).map(d=>(['Paz','Pzt','Sal','Çar','Per','Cum','Cmt'])[d]).join(' · ')}
+                        </div>
+                      )}
                     </div>
                     <button className="btn btn-ghost btn-sm btn-icon" title="Düzenle"
-                      onClick={() => { setEditingMember(member); setEditMemberForm({name:member.member_name,phone:member.contact_number||'',contact:member.contact_person||'',fee:member.custom_fee!=null?String(member.custom_fee):''}); setEditMemberVisible(true); }}>
+                      onClick={() => { setEditingMember(member); setEditMemberForm({name:member.member_name,phone:member.contact_number||'',contact:member.contact_person||'',fee:member.custom_fee!=null?String(member.custom_fee):'',days:member.schedule_days||[]}); setEditMemberVisible(true); }}>
                       <span className="material-icons" style={{fontSize:15}}>edit</span>
                     </button>
                     <button className="btn btn-danger btn-sm btn-icon" title="Çıkar" onClick={() => handleRemoveMember(member)}>
@@ -3108,6 +3137,25 @@ function GroupsScreen({ clubId, setScreen }) {
               <Field label="KİŞİ"><input placeholder="Veli adı vb." value={newMember.contact} onChange={e=>setNewMember({...newMember,contact:e.target.value})} /></Field>
             </div>
             <Field label="ÖZEL ÜCRET (₺)"><input type="number" min="0" placeholder={`Boş: ${detailGroup?.monthly_fee??0} ₺`} value={newMember.fee} onChange={e=>setNewMember({...newMember,fee:e.target.value})} /></Field>
+            {detailGroupDays.length > 0 && (
+              <Field label="GÜNLER">
+                <div style={{ display:'flex', gap:4, flexWrap:'wrap' }}>
+                  {DAYS.filter(([,idx]) => detailGroupDays.includes(idx)).map(([label,idx]) => {
+                    const active = newMember.days.includes(idx);
+                    return (
+                      <button key={idx} type="button"
+                        style={{ padding:'3px 9px', fontSize:11, fontWeight:700, borderRadius:6, border:'1px solid', cursor:'pointer',
+                          borderColor: active ? '#0D9488' : 'var(--border)',
+                          background: active ? '#0D948818' : 'var(--surface)',
+                          color: active ? '#0D9488' : 'var(--text-2)' }}
+                        onClick={() => setNewMember(p => ({ ...p, days: active ? p.days.filter(d=>d!==idx) : [...p.days,idx] }))}>
+                        {label}
+                      </button>
+                    );
+                  })}
+                </div>
+              </Field>
+            )}
           </div>
         </Modal>
       )}
@@ -3123,6 +3171,25 @@ function GroupsScreen({ clubId, setScreen }) {
               <Field label="KİŞİ"><input placeholder="Veli adı vb." value={editMemberForm.contact} onChange={e=>setEditMemberForm({...editMemberForm,contact:e.target.value})} /></Field>
             </div>
             <Field label="ÖZEL ÜCRET (₺)"><input type="number" min="0" placeholder="Boş: grup aidatı" value={editMemberForm.fee} onChange={e=>setEditMemberForm({...editMemberForm,fee:e.target.value})} /></Field>
+            {detailGroupDays.length > 0 && (
+              <Field label="GÜNLER">
+                <div style={{ display:'flex', gap:4, flexWrap:'wrap' }}>
+                  {DAYS.filter(([,idx]) => detailGroupDays.includes(idx)).map(([label,idx]) => {
+                    const active = (editMemberForm.days||[]).includes(idx);
+                    return (
+                      <button key={idx} type="button"
+                        style={{ padding:'3px 9px', fontSize:11, fontWeight:700, borderRadius:6, border:'1px solid', cursor:'pointer',
+                          borderColor: active ? '#0D9488' : 'var(--border)',
+                          background: active ? '#0D948818' : 'var(--surface)',
+                          color: active ? '#0D9488' : 'var(--text-2)' }}
+                        onClick={() => setEditMemberForm(p => ({ ...p, days: active ? (p.days||[]).filter(d=>d!==idx) : [...(p.days||[]),idx] }))}>
+                        {label}
+                      </button>
+                    );
+                  })}
+                </div>
+              </Field>
+            )}
           </div>
         </Modal>
       )}
