@@ -2118,8 +2118,8 @@ function GroupsScreen({ clubId, setScreen }) {
 
   const formatHour = (h) => {
     const w = Math.floor(h);
-    const m = (h % 1) >= 0.5 ? '30' : '00';
-    return `${String(w).padStart(2,'0')}:${m}`;
+    const m = Math.round((h % 1) * 60);
+    return `${String(w).padStart(2,'0')}:${String(m).padStart(2,'0')}`;
   };
   const combineHour = (h, m) => h + (m || 0) / 60;
   const splitHour  = (h) => ({ hour: Math.floor(h), minute: Math.round((h % 1) * 60) });
@@ -2174,6 +2174,8 @@ function GroupsScreen({ clubId, setScreen }) {
   const [editDiffCoachesPerDay,  setEditDiffCoachesPerDay]  = useState(false);
   const [editDayCoachIds,        setEditDayCoachIds]        = useState({});
   const [savingSched,            setSavingSched]            = useState(false);
+  const [use15Min,               setUse15Min]               = useState(false);
+  const [editSchedUse15Min,      setEditSchedUse15Min]      = useState(false);
 
   // Edit fee modal
   const [editFeeVisible,  setEditFeeVisible]  = useState(false);
@@ -2325,7 +2327,7 @@ function GroupsScreen({ clubId, setScreen }) {
     setGroupName(''); setGroupDesc(''); setSelectedCoachIds([]); setCoachShares({});
     setCoachFixedAmounts({}); setMonthlyFee('0'); setClubPercentage('100');
     setSplitType('percentage'); setSelectedDays([]); setDaySettings({});
-    setDiffCoachesPerDay(false); setDayCoachIds({});
+    setDiffCoachesPerDay(false); setDayCoachIds({}); setUse15Min(false);
     setMembers([makeMember(), makeMember(), makeMember()]);
     setCreateVisible(true);
   };
@@ -2503,6 +2505,7 @@ function GroupsScreen({ clubId, setScreen }) {
       setEditSchedCoachIds(coachIdsFromClosures.length > 0 ? coachIdsFromClosures : coachIdsFromGC);
       setEditDiffCoachesPerDay(isDiffPerDay);
       setEditDayCoachIds(isDiffPerDay ? perDayCoachMap : {});
+      setEditSchedUse15Min(false);
       setEditSchedVisible(true);
     } catch (e) { alert(e.message); }
   };
@@ -2688,10 +2691,20 @@ function GroupsScreen({ clubId, setScreen }) {
   const allDuesPaid    = dues.length > 0 && paidCount === dues.length;
 
   // ── Day settings helper ───────────────────────────────────────
-  const DaySettingsBlock = ({ days, settingsState, setSettingsState, coachIdsState, setCoachIdsState, diffPerDay }) => (
+  const DaySettingsBlock = ({ days, settingsState, setSettingsState, coachIdsState, setCoachIdsState, diffPerDay, use15MinStep, setUse15MinStep }) => (
     <div style={{ display:'flex', flexDirection:'column', gap:10 }}>
+      <div style={{ display:'flex', alignItems:'center', gap:10, marginBottom:2 }}>
+        <span style={{ fontSize:12, color:'var(--text-2)', fontWeight:600 }}>15 Dakikalık Artış</span>
+        <button type="button"
+          className={'btn btn-sm ' + (use15MinStep ? 'btn-pri' : 'btn-ghost')}
+          onClick={() => setUse15MinStep(v => !v)}>
+          {use15MinStep ? 'Açık' : 'Kapalı'}
+        </button>
+        {use15MinStep && <span style={{ fontSize:11, color:'var(--text-2)' }}>22:15 gibi saatler seçilebilir</span>}
+      </div>
       {[...days].sort((a,b)=>a-b).map(idx => {
         const s = settingsState[idx] ?? { courts:[], start:9, end:11 };
+        const step = use15MinStep ? 0.25 : 0.5;
         return (
           <div key={idx} style={{ background:'var(--bg)', border:'1px solid var(--border)', borderRadius:10, padding:'12px 14px' }}>
             <div style={{ fontWeight:700, fontSize:13, marginBottom:10, color:'var(--text-1)' }}>{DAY_NAMES[idx]}</div>
@@ -2724,14 +2737,14 @@ function GroupsScreen({ clubId, setScreen }) {
             )}
             <div style={{ fontSize:11, fontWeight:700, color:'var(--text-2)', marginBottom:6 }}>SAAT ARALIĞI</div>
             <div style={{ display:'flex', alignItems:'center', gap:10 }}>
-              {[['start', -0.5, +0.5], ['end', -0.5, +0.5]].map(([field], fi) => (
+              {['start', 'end'].map((field, fi) => (
                 <React.Fragment key={field}>
                   {fi === 1 && <span className="material-icons" style={{ color:'var(--text-2)', fontSize:16 }}>arrow_forward</span>}
                   <div style={{ display:'flex', alignItems:'center', gap:6, background:'var(--surface)', border:'1px solid var(--border)', borderRadius:8, padding:'4px 8px' }}>
                     <button type="button" className="btn btn-ghost btn-sm btn-icon"
                       onClick={() => setSettingsState(p => {
                         const cur = p[idx] ?? { courts:[], start:9, end:11 };
-                        const newVal = Math.max(field==='start'?0:0.5, parseFloat((cur[field]-0.5).toFixed(1)));
+                        const newVal = Math.max(field==='start'?0:step, parseFloat((cur[field]-step).toFixed(2)));
                         return {...p,[idx]:{...cur,[field]:newVal}};
                       })}><span className="material-icons" style={{fontSize:14}}>remove</span></button>
                     <span style={{ fontWeight:700, fontSize:14, minWidth:40, textAlign:'center' }}>{formatHour(s[field])}</span>
@@ -2739,12 +2752,12 @@ function GroupsScreen({ clubId, setScreen }) {
                       onClick={() => setSettingsState(p => {
                         const cur = p[idx] ?? { courts:[], start:9, end:11 };
                         if (field === 'start') {
-                          const ns = Math.min(22.5, parseFloat((cur.start+0.5).toFixed(1)));
+                          const ns = Math.min(23-step, parseFloat((cur.start+step).toFixed(2)));
                           const gap = cur.end - cur.start;
-                          const ne = Math.min(23.5, parseFloat((ns+gap).toFixed(1)));
+                          const ne = Math.min(23.75, parseFloat((ns+gap).toFixed(2)));
                           return {...p,[idx]:{...cur,start:ns,end:ne}};
                         }
-                        return {...p,[idx]:{...cur,end:Math.min(23.5,parseFloat((cur.end+0.5).toFixed(1)))}};
+                        return {...p,[idx]:{...cur,end:Math.min(23.75,parseFloat((cur.end+step).toFixed(2)))}};
                       })}><span className="material-icons" style={{fontSize:14}}>add</span></button>
                   </div>
                 </React.Fragment>
@@ -2954,6 +2967,7 @@ function GroupsScreen({ clubId, setScreen }) {
                   <DaySettingsBlock
                     days={selectedDays} settingsState={daySettings} setSettingsState={setDaySettings}
                     coachIdsState={dayCoachIds} setCoachIdsState={setDayCoachIds} diffPerDay={diffCoachesPerDay}
+                    use15MinStep={use15Min} setUse15MinStep={setUse15Min}
                   />
                 )}
               </Field>
@@ -3166,6 +3180,7 @@ function GroupsScreen({ clubId, setScreen }) {
                   <DaySettingsBlock
                     days={editSchedDays} settingsState={editSchedDaySettings} setSettingsState={setEditSchedDaySettings}
                     coachIdsState={editDayCoachIds} setCoachIdsState={setEditDayCoachIds} diffPerDay={editDiffCoachesPerDay}
+                    use15MinStep={editSchedUse15Min} setUse15MinStep={setEditSchedUse15Min}
                   />
                 )}
               </Field>
