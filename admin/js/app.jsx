@@ -15,6 +15,7 @@ const ALL_NAV_ITEMS = [
   { key: 'student_notes',  icon: 'sticky_note_2',          label: 'Öğrenci Notları',    section: null,         employeeOk: true  },
   { key: 'tournaments',    icon: 'emoji_events',           label: 'Turnuvalar',         section: 'ETKİNLİKLER',employeeOk: true  },
   { key: 'groups',         icon: 'groups',                 label: 'Gruplar',            section: null,         employeeOk: true  },
+  { key: 'group_players',  icon: 'sports_tennis',          label: 'Grup Oyuncuları',    section: null,         employeeOk: true  },
   { key: 'program',        icon: 'calendar_today',         label: 'Program',            section: null,         employeeOk: true  },
   { key: 'cafe',           icon: 'local_cafe',             label: 'Kafe / Market',      section: null,         employeeOk: true  },
   { key: 'finance',        icon: 'account_balance_wallet', label: 'Finans',             section: 'ANALİZ',     employeeOk: false },
@@ -149,6 +150,7 @@ function ScreenRouter({ screen, setScreen, clubId, clubProfile, userType }) {
     case 'student_notes':   return <StudentNotesScreen         {...ctx} />;
     case 'tournaments':     return <TournamentsScreen          {...ctx} />;
     case 'groups':          return <GroupsScreen               {...ctx} />;
+    case 'group_players':   return <GroupPlayersScreen          {...ctx} />;
     case 'program':         return <MyProgramScreen            {...ctx} />;
     case 'cafe':            return <CafeScreen                 {...ctx} />;
     case 'finance':         return <FinanceScreen              {...ctx} />;

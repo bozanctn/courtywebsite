@@ -139,6 +139,7 @@ function DashboardScreen({ clubId, clubProfile, setScreen }) {
     { icon: 'person',          label: 'Koçlar',           screen: 'coaches',      color: '#0D9488' },
     { icon: 'emoji_events',    label: 'Turnuvalar',       screen: 'tournaments',  color: '#F97316' },
     { icon: 'groups',          label: 'Gruplar',          screen: 'groups',       color: '#0EA5E9' },
+    { icon: 'sports_tennis',   label: 'Grup Oyuncuları',  screen: 'group_players', color: '#0F766E' },
     { icon: 'group',           label: 'Üyeler',           screen: 'members',      color: '#22C55E' },
   ];
 
@@ -1665,6 +1666,8 @@ function CourtsScreen({ clubId, setScreen }) {
   const [courtClosures,  setCourtClosures]  = useState([]);
   const [slotClickInfo,  setSlotClickInfo]  = useState(null); // { courtId, hour }
   const [slotTypeModal,  setSlotTypeModal]  = useState(false);
+  const [use15Min,       setUse15Min]       = useState(false);
+  const [conflictWarning, setConflictWarning] = useState('');
 
   useEffect(() => { if (clubId) loadCourts(); }, [clubId]);
 
@@ -1696,7 +1699,7 @@ function CourtsScreen({ clubId, setScreen }) {
   };
 
   const openAdd = () => {
-    setForm({ court_number: '', court_type: 'clay', surface: 'clay', hourly_rate: '', is_active: true, is_indoor: false, campaign_enabled: false, campaign_price: '', campaign_start_hour: 9, campaign_end_hour: 12 });
+    setForm({ court_number: '', court_type: 'clay', surface: 'clay', hourly_rate: '', is_active: true, is_indoor: false, campaign_enabled: false, campaign_price: '', campaign_start_hour: 9, campaign_end_hour: 12, price_2_players: '', price_3_players: '', price_4_players: '' });
     setModal({ type: 'add' });
   };
 
@@ -1707,6 +1710,9 @@ function CourtsScreen({ clubId, setScreen }) {
       campaign_price:      court.campaign_price != null ? String(court.campaign_price) : '',
       campaign_start_hour: court.campaign_start_hour ?? 9,
       campaign_end_hour:   court.campaign_end_hour   ?? 12,
+      price_2_players:     court.price_2_players != null ? String(court.price_2_players) : '',
+      price_3_players:     court.price_3_players != null ? String(court.price_3_players) : '',
+      price_4_players:     court.price_4_players != null ? String(court.price_4_players) : '',
     });
     setModal({ type: 'edit', court });
   };
@@ -1725,6 +1731,9 @@ function CourtsScreen({ clubId, setScreen }) {
         campaign_price:       form.campaign_enabled && form.campaign_price ? Number(form.campaign_price) : null,
         campaign_start_hour:  form.campaign_enabled ? (form.campaign_start_hour ?? 9)  : null,
         campaign_end_hour:    form.campaign_enabled ? (form.campaign_end_hour   ?? 12) : null,
+        price_2_players:      form.price_2_players ? Number(form.price_2_players) : null,
+        price_3_players:      form.price_3_players ? Number(form.price_3_players) : null,
+        price_4_players:      form.price_4_players ? Number(form.price_4_players) : null,
       };
       if (modal.type === 'add') {
         await sb.from('courts').insert(payload);
@@ -1783,8 +1792,15 @@ function CourtsScreen({ clubId, setScreen }) {
 
   const saveClosure = async () => {
     setSaving(true);
+    setConflictWarning('');
     try {
-      if ((closureForm.start_hour ?? 9) >= (closureForm.end_hour ?? 10)) {
+      const startH = closureForm.start_hour ?? 9;
+      const startM = closureForm.start_minute ?? 0;
+      const endH   = closureForm.end_hour ?? 10;
+      const endM   = closureForm.end_minute ?? 0;
+      const startTime = startH + startM / 60;
+      const endTime   = endH   + endM   / 60;
+      if (startTime >= endTime) {
         alert('Bitiş saati başlangıç saatinden büyük olmalı');
         setSaving(false);
         return;
@@ -1794,15 +1810,43 @@ function CourtsScreen({ clubId, setScreen }) {
       const selectedGroup = closureForm.group_id ? closureGroups.find(g => g.id === closureForm.group_id) : null;
       if (selectedGroup?.coach_id && !effectiveCoachId) effectiveCoachId = selectedGroup.coach_id;
 
+      // Coach conflict check
+      if (effectiveCoachId) {
+        const closureType = closureForm.closure_type || 'recurring_weekly';
+        let conflictQuery = sb.from('court_closures')
+          .select('id, start_hour, start_minute, end_hour, end_minute, reason, court_id')
+          .eq('coach_id', effectiveCoachId)
+          .eq('is_active', true);
+        if (closureType === 'recurring_weekly') {
+          conflictQuery = conflictQuery.eq('closure_type', 'recurring_weekly').eq('day_of_week', closureForm.day_of_week ?? 1);
+        } else {
+          conflictQuery = conflictQuery.eq('closure_type', 'one_time').lte('start_date', closureForm.end_date).gte('end_date', closureForm.start_date);
+        }
+        const { data: conflicts } = await conflictQuery;
+        const overlapping = (conflicts || []).filter(c => {
+          const cStart = c.start_hour + (c.start_minute ?? 0) / 60;
+          const cEnd   = c.end_hour   + (c.end_minute   ?? 0) / 60;
+          return startTime < cEnd && endTime > cStart;
+        });
+        if (overlapping.length > 0) {
+          const coachName = closureCoaches.find(c => c.id === effectiveCoachId)?.full_name || 'Antrenör';
+          setSaving(false);
+          setConflictWarning(`⚠️ ${coachName} bu saatte başka bir programa atanmış (${overlapping[0].reason || 'Ders'}). Yine de kaydetmek için tekrar tıklayın.`);
+          return;
+        }
+      }
+
       const payload = {
-        court_id:     closureModal.courtId,
-        closure_type: closureForm.closure_type || 'recurring_weekly',
-        start_hour:   closureForm.start_hour ?? 9,
-        end_hour:     closureForm.end_hour   ?? 10,
-        reason:       autoReason,
-        coach_id:     effectiveCoachId || null,
-        group_id:     closureForm.group_id || null,
-        is_active:    true,
+        court_id:       closureModal.courtId,
+        closure_type:   closureForm.closure_type || 'recurring_weekly',
+        start_hour:     startH,
+        start_minute:   startM,
+        end_hour:       endH,
+        end_minute:     endM,
+        reason:         autoReason,
+        coach_id:       effectiveCoachId || null,
+        group_id:       closureForm.group_id || null,
+        is_active:      true,
       };
       if ((closureForm.closure_type || 'recurring_weekly') === 'recurring_weekly') {
         payload.day_of_week = closureForm.day_of_week ?? 1;
@@ -1818,8 +1862,9 @@ function CourtsScreen({ clubId, setScreen }) {
         payload.end_date   = closureForm.end_date;
       }
       await sb.from('court_closures').insert(payload);
+      setConflictWarning('');
       loadCourtClosures(closureModal.courtId);
-      setClosureForm({ closure_type:'recurring_weekly', session_type:'training', day_of_week:1, start_hour:9, end_hour:10, start_date:'', end_date:'', reason:'', coach_id:'', group_id:'' });
+      setClosureForm({ closure_type:'recurring_weekly', session_type:'training', day_of_week:1, start_hour:9, start_minute:0, end_hour:10, end_minute:0, start_date:'', end_date:'', reason:'', coach_id:'', group_id:'' });
       if (expanded === closureModal.courtId) loadSlots(closureModal.courtId);
     } catch (e) { alert(e.message); }
     finally { setSaving(false); }
@@ -1839,13 +1884,14 @@ function CourtsScreen({ clubId, setScreen }) {
     setSlotClickInfo(null);
 
     if (type === 'closure') {
-      setClosureForm({ closure_type:'one_time', session_type:'maintenance', reason:'Kapalı', day_of_week:new Date(slotDate+'T12:00').getDay(), start_hour:hour, end_hour:hour+1, start_date:slotDate, end_date:slotDate, coach_id:'', group_id:'' });
+      setClosureForm({ closure_type:'one_time', session_type:'maintenance', reason:'Kapalı', day_of_week:new Date(slotDate+'T12:00').getDay(), start_hour:hour, start_minute:0, end_hour:hour+1, end_minute:0, start_date:slotDate, end_date:slotDate, coach_id:'', group_id:'' });
       loadClosureCoaches();
       loadClosureGroups();
       loadCourtClosures(courtId);
+      setConflictWarning('');
       setClosureModal({ courtId });
     } else if (type === 'group') {
-      setClosureForm({ closure_type:'one_time', session_type:'training', reason:'Grup Dersi', day_of_week:new Date(slotDate+'T12:00').getDay(), start_hour:hour, end_hour:hour+1, start_date:slotDate, end_date:slotDate, coach_id:'', group_id:'' });
+      setClosureForm({ closure_type:'one_time', session_type:'training', reason:'Grup Dersi', day_of_week:new Date(slotDate+'T12:00').getDay(), start_hour:hour, start_minute:0, end_hour:hour+1, end_minute:0, start_date:slotDate, end_date:slotDate, coach_id:'', group_id:'' });
       loadClosureCoaches();
       loadClosureGroups();
       loadCourtClosures(courtId);
@@ -1920,6 +1966,9 @@ function CourtsScreen({ clubId, setScreen }) {
                   <Badge cls={courtTypeClass(court.court_type)}>{courtTypeLabel(court.court_type)}</Badge>
                   {court.is_indoor && <Badge cls="b-purple">Kapalı</Badge>}
                   {court.hourly_rate && <span>{fmtMoney(court.hourly_rate)}/saat</span>}
+                  {court.price_2_players && <span>👥2: {fmtMoney(court.price_2_players)}</span>}
+                  {court.price_3_players && <span>👥3: {fmtMoney(court.price_3_players)}</span>}
+                  {court.price_4_players && <span>👥4: {fmtMoney(court.price_4_players)}</span>}
                 </div>
               </div>
               <Switch on={court.is_active} onChange={() => toggleActive(court)} label={court.is_active ? 'Aktif' : 'Pasif'} />
@@ -1928,10 +1977,11 @@ function CourtsScreen({ clubId, setScreen }) {
               </button>
               <button className="btn btn-ghost btn-sm btn-icon" title="Sabit Program"
                 onClick={() => {
-                  setClosureForm({ closure_type:'recurring_weekly', session_type:'training', day_of_week:1, start_hour:9, end_hour:10, start_date:'', end_date:'', reason:'', coach_id:'', group_id:'' });
+                  setClosureForm({ closure_type:'recurring_weekly', session_type:'training', day_of_week:1, start_hour:9, start_minute:0, end_hour:10, end_minute:0, start_date:'', end_date:'', reason:'', coach_id:'', group_id:'' });
                   loadClosureCoaches();
                   loadClosureGroups();
                   loadCourtClosures(court.id);
+                  setConflictWarning('');
                   setClosureModal({ courtId: court.id });
                 }}>
                 <span className="material-icons" style={{fontSize:16}}>block</span>
@@ -2031,6 +2081,22 @@ function CourtsScreen({ clubId, setScreen }) {
             </div>
             <div style={{ display:'flex', alignItems:'center', gap:10 }}>
               <Switch on={form.is_active !== false} onChange={v => setForm({...form, is_active: v})} label="Aktif" />
+            </div>
+            {/* Oyuncu sayısına göre fiyatlar */}
+            <div style={{ fontWeight:700, fontSize:12, color:'var(--text-2)', letterSpacing:0.5, textTransform:'uppercase', marginTop:4 }}>Oyuncu Sayısına Göre Ücret (₺)</div>
+            <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr 1fr', gap:12 }}>
+              <Field label="2 Oyuncu (₺)">
+                <input type="number" min={0} value={form.price_2_players || ''} placeholder="0"
+                  onChange={e => setForm({...form, price_2_players: e.target.value})} />
+              </Field>
+              <Field label="3 Oyuncu (₺)">
+                <input type="number" min={0} value={form.price_3_players || ''} placeholder="0"
+                  onChange={e => setForm({...form, price_3_players: e.target.value})} />
+              </Field>
+              <Field label="4 Oyuncu (₺)">
+                <input type="number" min={0} value={form.price_4_players || ''} placeholder="0"
+                  onChange={e => setForm({...form, price_4_players: e.target.value})} />
+              </Field>
             </div>
             <Switch on={!!form.campaign_enabled}
               onChange={v => setForm({...form, campaign_enabled: v, campaign_price: v ? form.campaign_price : '', campaign_start_hour: form.campaign_start_hour ?? 9, campaign_end_hour: form.campaign_end_hour ?? 12 })}
@@ -2146,7 +2212,7 @@ function CourtsScreen({ clubId, setScreen }) {
                             ? `Her ${['Pazar','Pazartesi','Salı','Çarşamba','Perşembe','Cuma','Cumartesi'][cl.day_of_week ?? 0]}`
                             : `${cl.start_date} – ${cl.end_date}`}
                           {' · '}
-                          {String(cl.start_hour).padStart(2,'0')}:00 – {String(cl.end_hour).padStart(2,'0')}:00
+                          {String(cl.start_hour).padStart(2,'0')}:{String(cl.start_minute ?? 0).padStart(2,'0')} – {String(cl.end_hour).padStart(2,'0')}:{String(cl.end_minute ?? 0).padStart(2,'0')}
                         </div>
                         {cl.group?.name    && <div style={{ fontSize:11, color:'var(--text-2)' }}>👥 {cl.group.name}</div>}
                         {cl.coach?.full_name && <div style={{ fontSize:11, color:'var(--text-2)' }}>👤 {cl.coach.full_name}</div>}
@@ -2300,36 +2366,96 @@ function CourtsScreen({ clubId, setScreen }) {
 
             {/* SAAT ARALIĞI – stepper */}
             <Field label="SAAT ARALIĞI">
+              <div style={{ marginBottom:8 }}>
+                <Switch on={use15Min} onChange={setUse15Min} label="15 dakika hassasiyeti" />
+              </div>
               <div style={{ display:'flex', alignItems:'center', gap:12 }}>
                 <div style={{ display:'flex', alignItems:'center', gap:8, background:'var(--surface)', border:'1px solid var(--border)', borderRadius:8, padding:'6px 10px' }}>
                   <button type="button" className="btn btn-ghost btn-sm btn-icon"
-                    onClick={() => setClosureForm(f => ({ ...f, start_hour: Math.max(0, (f.start_hour ?? 9) - 1) }))}>
+                    onClick={() => setClosureForm(f => {
+                      const h = f.start_hour ?? 9, m = f.start_minute ?? 0;
+                      if (use15Min) { return m > 0 ? { ...f, start_minute: m - 15 } : { ...f, start_hour: Math.max(0, h - 1), start_minute: 45 }; }
+                      return { ...f, start_hour: Math.max(0, h - 1) };
+                    })}>
                     <span className="material-icons" style={{ fontSize:16 }}>remove</span>
                   </button>
-                  <span style={{ fontWeight:700, fontSize:15, minWidth:40, textAlign:'center' }}>
-                    {String(closureForm.start_hour ?? 9).padStart(2,'0')}:00
+                  <span style={{ fontWeight:700, fontSize:15, minWidth:44, textAlign:'center' }}>
+                    {String(closureForm.start_hour ?? 9).padStart(2,'0')}:{String(closureForm.start_minute ?? 0).padStart(2,'0')}
                   </span>
                   <button type="button" className="btn btn-ghost btn-sm btn-icon"
-                    onClick={() => setClosureForm(f => ({ ...f, start_hour: Math.min(22, (f.start_hour ?? 9) + 1) }))}>
+                    onClick={() => setClosureForm(f => {
+                      const h = f.start_hour ?? 9, m = f.start_minute ?? 0;
+                      if (use15Min) { return m < 45 ? { ...f, start_minute: m + 15 } : { ...f, start_hour: Math.min(22, h + 1), start_minute: 0 }; }
+                      return { ...f, start_hour: Math.min(22, h + 1) };
+                    })}>
                     <span className="material-icons" style={{ fontSize:16 }}>add</span>
                   </button>
                 </div>
                 <span className="material-icons" style={{ color:'var(--text-2)' }}>arrow_forward</span>
                 <div style={{ display:'flex', alignItems:'center', gap:8, background:'var(--surface)', border:'1px solid var(--border)', borderRadius:8, padding:'6px 10px' }}>
                   <button type="button" className="btn btn-ghost btn-sm btn-icon"
-                    onClick={() => setClosureForm(f => ({ ...f, end_hour: Math.max(1, (f.end_hour ?? 10) - 1) }))}>
+                    onClick={() => setClosureForm(f => {
+                      const h = f.end_hour ?? 10, m = f.end_minute ?? 0;
+                      if (use15Min) { return m > 0 ? { ...f, end_minute: m - 15 } : { ...f, end_hour: Math.max(1, h - 1), end_minute: 45 }; }
+                      return { ...f, end_hour: Math.max(1, h - 1) };
+                    })}>
                     <span className="material-icons" style={{ fontSize:16 }}>remove</span>
                   </button>
-                  <span style={{ fontWeight:700, fontSize:15, minWidth:40, textAlign:'center' }}>
-                    {String(closureForm.end_hour ?? 10).padStart(2,'0')}:00
+                  <span style={{ fontWeight:700, fontSize:15, minWidth:44, textAlign:'center' }}>
+                    {String(closureForm.end_hour ?? 10).padStart(2,'0')}:{String(closureForm.end_minute ?? 0).padStart(2,'0')}
                   </span>
                   <button type="button" className="btn btn-ghost btn-sm btn-icon"
-                    onClick={() => setClosureForm(f => ({ ...f, end_hour: Math.min(23, (f.end_hour ?? 10) + 1) }))}>
+                    onClick={() => setClosureForm(f => {
+                      const h = f.end_hour ?? 10, m = f.end_minute ?? 0;
+                      if (use15Min) { return m < 45 ? { ...f, end_minute: m + 15 } : { ...f, end_hour: Math.min(23, h + 1), end_minute: 0 }; }
+                      return { ...f, end_hour: Math.min(23, h + 1) };
+                    })}>
                     <span className="material-icons" style={{ fontSize:16 }}>add</span>
                   </button>
                 </div>
               </div>
             </Field>
+
+            {/* Çakışma uyarısı */}
+            {conflictWarning && (
+              <div style={{ background:'#FEF3C7', border:'1px solid #FCD34D', borderRadius:10, padding:'10px 14px', display:'flex', alignItems:'flex-start', gap:8 }}>
+                <span className="material-icons" style={{ color:'#D97706', fontSize:18, marginTop:1 }}>warning</span>
+                <div>
+                  <div style={{ fontSize:13, fontWeight:700, color:'#92400E' }}>{conflictWarning}</div>
+                  <button type="button" className="btn btn-sm" style={{ marginTop:8, background:'#D97706', color:'#fff', border:'none' }}
+                    onClick={async () => {
+                      setConflictWarning('');
+                      const startH = closureForm.start_hour ?? 9, startM = closureForm.start_minute ?? 0;
+                      const endH = closureForm.end_hour ?? 10, endM = closureForm.end_minute ?? 0;
+                      const autoReason = (closureForm.reason || '').trim() || SESSION_TYPE_LABELS[closureForm.session_type || 'other'];
+                      let effectiveCoachId = closureForm.coach_id || null;
+                      const selectedGroup = closureForm.group_id ? closureGroups.find(g => g.id === closureForm.group_id) : null;
+                      if (selectedGroup?.coach_id && !effectiveCoachId) effectiveCoachId = selectedGroup.coach_id;
+                      const payload = {
+                        court_id: closureModal.courtId, closure_type: closureForm.closure_type || 'recurring_weekly',
+                        start_hour: startH, start_minute: startM, end_hour: endH, end_minute: endM,
+                        reason: autoReason, coach_id: effectiveCoachId || null, group_id: closureForm.group_id || null, is_active: true,
+                      };
+                      if ((closureForm.closure_type || 'recurring_weekly') === 'recurring_weekly') {
+                        payload.day_of_week = closureForm.day_of_week ?? 1;
+                        if (closureForm.start_date) payload.start_date = closureForm.start_date;
+                        if (closureForm.end_date)   payload.end_date   = closureForm.end_date;
+                      } else {
+                        payload.start_date = closureForm.start_date;
+                        payload.end_date   = closureForm.end_date;
+                      }
+                      try {
+                        await sb.from('court_closures').insert(payload);
+                        loadCourtClosures(closureModal.courtId);
+                        setClosureForm({ closure_type:'recurring_weekly', session_type:'training', day_of_week:1, start_hour:9, start_minute:0, end_hour:10, end_minute:0, start_date:'', end_date:'', reason:'', coach_id:'', group_id:'' });
+                        if (expanded === closureModal.courtId) loadSlots(closureModal.courtId);
+                      } catch (e) { alert(e.message); }
+                    }}>
+                    Yine de Ekle
+                  </button>
+                </div>
+              </div>
+            )}
           </div>
         </Modal>
       )}

@@ -2370,7 +2370,7 @@ function GroupsScreen({ clubId, setScreen }) {
           contact_number: m.phone.trim() || null,
           contact_person: m.contact.trim() || null,
           custom_fee: m.fee.trim() && !isNaN(parseFloat(m.fee)) ? parseFloat(m.fee) : null,
-          schedule_days: m.days || [],
+          schedule_days: (m.days||[]).length === 0 ? selectedDays : m.days,
         }))
       );
       if (membErr) throw membErr;
@@ -2995,7 +2995,8 @@ function GroupsScreen({ clubId, setScreen }) {
                       {selectedDays.length > 0 && (
                         <div style={{ display:'flex', gap:4, flexWrap:'wrap', marginTop:2 }}>
                           {DAYS.filter(([,idx]) => selectedDays.includes(idx)).map(([label,idx]) => {
-                            const active = (m.days||[]).includes(idx);
+                            const effectiveDays = (m.days||[]).length === 0 ? selectedDays : m.days;
+                            const active = effectiveDays.includes(idx);
                             return (
                               <button key={idx} type="button"
                                 style={{ padding:'2px 7px', fontSize:10, fontWeight:700, borderRadius:5, border:'1px solid', cursor:'pointer',
@@ -3003,7 +3004,8 @@ function GroupsScreen({ clubId, setScreen }) {
                                   background: active ? '#0D948818' : 'var(--surface)',
                                   color: active ? '#0D9488' : 'var(--text-2)' }}
                                 onClick={() => {
-                                  const next = active ? (m.days||[]).filter(d=>d!==idx) : [...(m.days||[]),idx];
+                                  const base = (m.days||[]).length === 0 ? [...selectedDays] : m.days;
+                                  const next = active ? base.filter(d=>d!==idx) : [...base,idx];
                                   setMembers(p=>p.map(r=>r.key===m.key?{...r,days:next}:r));
                                 }}>{label}</button>
                             );
@@ -3052,7 +3054,7 @@ function GroupsScreen({ clubId, setScreen }) {
           {detailTab === 'members' && (
             <div>
               <div style={{ display:'flex', justifyContent:'flex-end', marginBottom:12 }}>
-                <button className="btn btn-pri btn-sm" onClick={() => { setNewMember({name:'',phone:'',contact:'',fee:''}); setAddMemberVisible(true); }}>
+                <button className="btn btn-pri btn-sm" onClick={() => { setNewMember({name:'',phone:'',contact:'',fee:'',days:[...detailGroupDays]}); setAddMemberVisible(true); }}>
                   <span className="material-icons" style={{fontSize:15}}>person_add</span> Üye Ekle
                 </button>
               </div>
@@ -3075,7 +3077,7 @@ function GroupsScreen({ clubId, setScreen }) {
                       )}
                     </div>
                     <button className="btn btn-ghost btn-sm btn-icon" title="Düzenle"
-                      onClick={() => { setEditingMember(member); setEditMemberForm({name:member.member_name,phone:member.contact_number||'',contact:member.contact_person||'',fee:member.custom_fee!=null?String(member.custom_fee):'',days:member.schedule_days||[]}); setEditMemberVisible(true); }}>
+                      onClick={() => { setEditingMember(member); setEditMemberForm({name:member.member_name,phone:member.contact_number||'',contact:member.contact_person||'',fee:member.custom_fee!=null?String(member.custom_fee):'',days:(member.schedule_days||[]).length?member.schedule_days:[...detailGroupDays]}); setEditMemberVisible(true); }}>
                       <span className="material-icons" style={{fontSize:15}}>edit</span>
                     </button>
                     <button className="btn btn-danger btn-sm btn-icon" title="Çıkar" onClick={() => handleRemoveMember(member)}>
@@ -3358,6 +3360,772 @@ function GroupsScreen({ clubId, setScreen }) {
             </div>
           )}
         </Modal>
+      )}
+    </div>
+  );
+}
+
+// ═══════════════════════════════════════════════════════════════
+// GRUP OYUNCUSU PROFİLİ (sub-screen)
+// ═══════════════════════════════════════════════════════════════
+function MemberProfileView({ member, onBack, clubId }) {
+  const { useState, useEffect, useCallback } = React;
+  const DAY_NAMES   = ['Pazar','Pazartesi','Salı','Çarşamba','Perşembe','Cuma','Cumartesi'];
+  const DAY_LABELS  = ['Paz','Pzt','Sal','Çar','Per','Cum','Cmt'];
+  const MONTHS_TR   = ['Ocak','Şubat','Mart','Nisan','Mayıs','Haziran','Temmuz','Ağustos','Eylül','Ekim','Kasım','Aralık'];
+  const NOTE_TABS   = [
+    { type:'weekly_training', label:'Antrenman',  icon:'fitness_center',   color:'#003399', bg:'#EEF2FF' },
+    { type:'match_summary',   label:'Maç',        icon:'emoji_events',     color:'#F59E0B', bg:'#FEF3C7' },
+    { type:'private_lesson',  label:'Özel Ders',  icon:'person',           color:'#0D9488', bg:'#CCFBF1' },
+    { type:'general',         label:'Genel',      icon:'notes',            color:'#F97316', bg:'#FFEDD5' },
+  ];
+
+  const [attendance,        setAttendance]        = useState([]);
+  const [notes,             setNotes]             = useState([]);
+  const [activeTab,         setActiveTab]         = useState('weekly_training');
+  const [loading,           setLoading]           = useState(true);
+  const [coachId,           setCoachId]           = useState(null);
+
+  // Memberships
+  const [allMemberships,    setAllMemberships]    = useState([]);
+  const [membershipClosures,setMembershipClosures]= useState({});
+
+  // Edit membership modal
+  const [editMemModal,      setEditMemModal]      = useState(false);
+  const [editingMem,        setEditingMem]        = useState(null);
+  const [editMemForm,       setEditMemForm]       = useState({ custom_fee:'', schedule_days:[], groupDays:[] });
+  const [savingMem,         setSavingMem]         = useState(false);
+
+  // Add to group modal
+  const [addGroupModal,     setAddGroupModal]     = useState(false);
+  const [availableGroups,   setAvailableGroups]   = useState([]);
+  const [addForm,           setAddForm]           = useState({ groupId:'', groupName:'', custom_fee:'', schedule_days:[], groupDays:[] });
+  const [addGroupClosures,  setAddGroupClosures]  = useState([]);
+  const [conflictWarnings,  setConflictWarnings]  = useState([]);
+  const [savingAdd,         setSavingAdd]         = useState(false);
+
+  // Note form modal
+  const [noteModal,         setNoteModal]         = useState(false);
+  const [editingNote,       setEditingNote]       = useState(null);
+  const [saving,            setSaving]            = useState(false);
+  const [noteForm,          setNoteForm]          = useState({ note_type:'weekly_training', title:'', content:'', session_date: new Date().toISOString().slice(0,10) });
+
+  const avatarColor = (name) => {
+    const COLORS = ['#003399','#0D9488','#22C55E','#8B5CF6','#EC4899','#F59E0B','#EF4444'];
+    return COLORS[(name||'').charCodeAt(0) % COLORS.length];
+  };
+  const inits = (name) => (name||'').split(' ').map(w=>w[0]).slice(0,2).join('').toUpperCase();
+  const color = avatarColor(member.member_name || '');
+  const fmtH  = (h, m) => `${String(h).padStart(2,'0')}:${String(m??0).padStart(2,'0')}`;
+
+  const load = useCallback(async () => {
+    setLoading(true);
+    try {
+      const { data: { user } } = await sb.auth.getUser();
+      const [{ data: attendRows }, { data: noteRows }, { data: coachRow }, { data: membershipsData }] = await Promise.all([
+        sb.from('group_attendance').select('status, session_date')
+          .eq('group_id', member.groupId).eq('member_id', member.id)
+          .order('session_date', { ascending: false }),
+        sb.from('student_coach_notes').select('*')
+          .eq('member_id', member.id)
+          .order('session_date', { ascending: false, nullsFirst: false })
+          .order('created_at', { ascending: false }),
+        clubId ? sb.from('club_coaches').select('id').eq('club_id', clubId).limit(1).maybeSingle() : Promise.resolve({ data: null }),
+        sb.from('club_group_members')
+          .select('id, group_id, custom_fee, schedule_days, club_groups!inner(id, name, club_id, is_active)')
+          .eq('member_name', member.member_name)
+          .eq('club_groups.club_id', clubId)
+          .eq('club_groups.is_active', true),
+      ]);
+
+      setCoachId(coachRow?.id ?? null);
+      setNotes(noteRows || []);
+
+      const memberships = (membershipsData || []).map(r => ({
+        id: r.id,
+        groupId: r.group_id,
+        groupName: r.club_groups?.name ?? '',
+        custom_fee: r.custom_fee ?? null,
+        schedule_days: r.schedule_days ?? [],
+      }));
+      setAllMemberships(memberships);
+
+      if (memberships.length > 0) {
+        const gIds = memberships.map(m => m.groupId);
+        const { data: allClosures } = await sb.from('court_closures')
+          .select('group_id, day_of_week, start_hour, start_minute, end_hour, end_minute, coach:club_coaches(full_name), courts(court_number)')
+          .in('group_id', gIds)
+          .eq('is_active', true);
+        const closureMap = {};
+        for (const c of allClosures || []) {
+          if (!closureMap[c.group_id]) closureMap[c.group_id] = [];
+          closureMap[c.group_id].push({
+            day_of_week: c.day_of_week, start_hour: c.start_hour, start_minute: c.start_minute,
+            end_hour: c.end_hour, end_minute: c.end_minute,
+            coachName: c.coach?.full_name, courtNumber: c.courts?.court_number,
+          });
+        }
+        setMembershipClosures(closureMap);
+      }
+
+      const monthMap = {};
+      for (const row of (attendRows || [])) {
+        const d = new Date(row.session_date + 'T12:00:00');
+        const key = `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}`;
+        if (!monthMap[key]) monthMap[key] = { present:0, total:0, year:d.getFullYear(), month:d.getMonth() };
+        monthMap[key].total += 1;
+        if (row.status === 'present') monthMap[key].present += 1;
+      }
+      const list = Object.entries(monthMap)
+        .sort(([a],[b]) => b.localeCompare(a))
+        .map(([key, val]) => ({ key, label:`${MONTHS_TR[val.month]} ${val.year}`, present:val.present, total:val.total }));
+      setAttendance(list);
+    } catch(e) { console.error(e); }
+    finally { setLoading(false); }
+  }, [member.id, member.groupId, member.member_name, clubId]);
+
+  useEffect(() => { load(); }, [load]);
+
+  // ── Edit membership ───────────────────────────────────────────────────────
+  const openEditMem = async (mem) => {
+    const { data: gc } = await sb.from('court_closures').select('day_of_week').eq('group_id', mem.groupId).eq('is_active', true);
+    const groupDays = [...new Set((gc||[]).map(r => r.day_of_week))];
+    const currentDays = mem.schedule_days.length > 0 ? mem.schedule_days : groupDays;
+    setEditingMem(mem);
+    setEditMemForm({ custom_fee: mem.custom_fee != null ? String(mem.custom_fee) : '', schedule_days: currentDays, groupDays });
+    setEditMemModal(true);
+  };
+  const saveEditMem = async () => {
+    setSavingMem(true);
+    try {
+      const fee = editMemForm.custom_fee.trim() !== '' ? parseFloat(editMemForm.custom_fee) : null;
+      await sb.from('club_group_members').update({ custom_fee: fee, schedule_days: editMemForm.schedule_days }).eq('id', editingMem.id);
+      setEditMemModal(false);
+      await load();
+    } catch(e) { console.error(e); alert('Üyelik güncellenemedi.'); }
+    finally { setSavingMem(false); }
+  };
+
+  // ── Add to group ─────────────────────────────────────────────────────────
+  const checkConflicts = (newClosures, selectedDays, currentMemberships, currentClosureMap) => {
+    const warnings = [];
+    for (const day of selectedDays) {
+      const newForDay = newClosures.filter(c => c.day_of_week === day);
+      for (const nc of newForDay) {
+        const newStart = nc.start_hour + (nc.start_minute ?? 0) / 60;
+        const newEnd   = nc.end_hour   + (nc.end_minute   ?? 0) / 60;
+        for (const mem of currentMemberships) {
+          const existing = (currentClosureMap[mem.groupId] || []).filter(c => c.day_of_week === day);
+          for (const ec of existing) {
+            const exStart = ec.start_hour + (ec.start_minute ?? 0) / 60;
+            const exEnd   = ec.end_hour   + (ec.end_minute   ?? 0) / 60;
+            if (newStart < exEnd && newEnd > exStart) {
+              warnings.push(`${DAY_NAMES[day]} günü ${fmtH(nc.start_hour, nc.start_minute)}–${fmtH(nc.end_hour, nc.end_minute)} saatinde "${mem.groupName}" grubunda çakışma var`);
+            }
+          }
+        }
+      }
+    }
+    return warnings;
+  };
+  const openAddGroup = async () => {
+    const existingIds = allMemberships.map(m => m.groupId);
+    const { data } = await sb.from('club_groups').select('id, name').eq('club_id', clubId).eq('is_active', true).order('name');
+    setAvailableGroups((data||[]).filter(g => !existingIds.includes(g.id)));
+    setAddForm({ groupId:'', groupName:'', custom_fee:'', schedule_days:[], groupDays:[] });
+    setAddGroupClosures([]);
+    setConflictWarnings([]);
+    setAddGroupModal(true);
+  };
+  const selectGroup = async (g) => {
+    const { data: gc } = await sb.from('court_closures')
+      .select('day_of_week, start_hour, start_minute, end_hour, end_minute')
+      .eq('group_id', g.id).eq('is_active', true);
+    const closures = gc || [];
+    const groupDays = [...new Set(closures.map(r => r.day_of_week))];
+    setAddGroupClosures(closures);
+    setAddForm(prev => ({ ...prev, groupId: g.id, groupName: g.name, schedule_days: groupDays, groupDays }));
+    setConflictWarnings(checkConflicts(closures, groupDays, allMemberships, membershipClosures));
+  };
+  const toggleAddDay = (day) => {
+    const next = addForm.schedule_days.includes(day)
+      ? addForm.schedule_days.filter(d => d !== day)
+      : [...addForm.schedule_days, day];
+    setAddForm(prev => ({ ...prev, schedule_days: next }));
+    setConflictWarnings(checkConflicts(addGroupClosures, next, allMemberships, membershipClosures));
+  };
+  const doAddToGroup = async () => {
+    if (!addForm.groupId) return alert('Lütfen bir grup seçin.');
+    setSavingAdd(true);
+    try {
+      const fee = addForm.custom_fee.trim() !== '' ? parseFloat(addForm.custom_fee) : null;
+      await sb.from('club_group_members').insert({
+        group_id: addForm.groupId, member_name: member.member_name,
+        contact_number: member.contact_number || null,
+        contact_person: member.contact_person || null,
+        custom_fee: fee, schedule_days: addForm.schedule_days,
+      });
+      setAddGroupModal(false);
+      await load();
+    } catch(e) { console.error(e); alert('Gruba eklenemedi.'); }
+    finally { setSavingAdd(false); }
+  };
+
+  // ── Notes ─────────────────────────────────────────────────────────────────
+  const openNewNote = () => {
+    setEditingNote(null);
+    setNoteForm({ note_type: activeTab, title:'', content:'', session_date: new Date().toISOString().slice(0,10) });
+    setNoteModal(true);
+  };
+  const openEditNote = (note) => {
+    setEditingNote(note);
+    setNoteForm({ note_type: note.note_type, title: note.title||'', content: note.content, session_date: note.session_date || new Date().toISOString().slice(0,10) });
+    setNoteModal(true);
+  };
+  const saveNote = async () => {
+    if (!noteForm.content.trim()) return alert('Not içeriği boş olamaz.');
+    setSaving(true);
+    try {
+      if (editingNote) {
+        await sb.from('student_coach_notes').update({ note_type:noteForm.note_type, title:noteForm.title.trim()||null, content:noteForm.content.trim(), session_date:noteForm.session_date||null, updated_at: new Date().toISOString() }).eq('id', editingNote.id);
+      } else {
+        if (!coachId) return alert('Kulübe kayıtlı antrenör bulunamadı. Not ekleyebilmek için önce kulübe en az bir antrenör ekleyin.');
+        await sb.from('student_coach_notes').insert({ member_id:member.id, coach_id:coachId, note_type:noteForm.note_type, title:noteForm.title.trim()||null, content:noteForm.content.trim(), session_date:noteForm.session_date||null });
+      }
+      setNoteModal(false);
+      await load();
+    } catch(e) { console.error(e); alert('Not kaydedilemedi.'); }
+    finally { setSaving(false); }
+  };
+  const deleteNote = async (note) => {
+    if (!confirm('Bu notu silmek istediğinizden emin misiniz?')) return;
+    try {
+      await sb.from('student_coach_notes').delete().eq('id', note.id);
+      setNotes(prev => prev.filter(n => n.id !== note.id));
+    } catch(e) { console.error(e); alert('Not silinemedi.'); }
+  };
+
+  const filteredNotes = notes.filter(n => n.note_type === activeTab);
+  const activeTabMeta = NOTE_TABS.find(t => t.type === activeTab);
+
+  const formatDate = (str) => {
+    if (!str) return '';
+    const d = new Date(str + 'T12:00:00');
+    return `${d.getDate()} ${MONTHS_TR[d.getMonth()]} ${d.getFullYear()}`;
+  };
+
+  // Build per-group schedule sections
+  const scheduleSections = allMemberships.map(mem => {
+    const closures = membershipClosures[mem.groupId] || [];
+    const relevant = mem.schedule_days.length > 0 ? closures.filter(c => mem.schedule_days.includes(c.day_of_week)) : closures;
+    const byDay = relevant.reduce((acc, c) => {
+      const d = c.day_of_week;
+      if (!acc[d]) acc[d] = { ...c, coachNames:[], courtNums:[] };
+      if (c.coachName && !acc[d].coachNames.includes(c.coachName)) acc[d].coachNames.push(c.coachName);
+      if (c.courtNumber != null && !acc[d].courtNums.includes(c.courtNumber)) acc[d].courtNums.push(c.courtNumber);
+      return acc;
+    }, {});
+    const days = Object.values(byDay).sort((a,b) => (a.day_of_week===0?7:a.day_of_week)-(b.day_of_week===0?7:b.day_of_week));
+    return { mem, days };
+  }).filter(s => s.days.length > 0);
+
+  return (
+    <div className="page fade-in">
+      {/* Header */}
+      <div className="page-head" style={{ marginBottom:20 }}>
+        <button className="btn btn-ghost btn-sm" onClick={onBack} style={{ display:'flex', alignItems:'center', gap:4 }}>
+          <span className="material-icons" style={{fontSize:18}}>arrow_back</span> Geri
+        </button>
+        <div style={{ flex:1 }}>
+          <h1 style={{ margin:0 }}>{member.member_name}</h1>
+          <div className="sub">{member.groupName}</div>
+        </div>
+      </div>
+
+      {loading ? <Spinner /> : (
+        <>
+          {/* Profile card */}
+          <div className="card" style={{ display:'flex', alignItems:'flex-start', gap:18, marginBottom:18, flexWrap:'wrap' }}>
+            {/* Avatar + basic info */}
+            <div style={{ display:'flex', gap:14, flex:'0 0 auto', alignItems:'flex-start' }}>
+              <div style={{ width:64, height:64, borderRadius:32, background:color+'22', display:'grid', placeItems:'center', flexShrink:0 }}>
+                <span style={{ fontSize:22, fontWeight:800, color }}>{inits(member.member_name)}</span>
+              </div>
+              <div style={{ minWidth:160 }}>
+                <div style={{ fontSize:18, fontWeight:700, marginBottom:4 }}>{member.member_name}</div>
+                <div style={{ display:'flex', alignItems:'center', gap:6, marginBottom:4 }}>
+                  <span className="material-icons" style={{fontSize:14, color:'#0D9488'}}>groups</span>
+                  <span style={{ fontSize:13, color:'#0D9488', fontWeight:600 }}>{member.groupName}</span>
+                </div>
+                {member.contact_number && (
+                  <div style={{ display:'flex', alignItems:'center', gap:5, fontSize:12, color:'var(--text-2)', marginBottom:2 }}>
+                    <span className="material-icons" style={{fontSize:13}}>phone</span>{member.contact_number}
+                  </div>
+                )}
+                {member.contact_person && (
+                  <div style={{ display:'flex', alignItems:'center', gap:5, fontSize:12, color:'var(--text-2)', marginBottom:2 }}>
+                    <span className="material-icons" style={{fontSize:13}}>person_outline</span>{member.contact_person}
+                  </div>
+                )}
+              </div>
+            </div>
+
+            {/* GRUPLAR block */}
+            {allMemberships.length > 0 && (
+              <div style={{ flex:1, minWidth:200 }}>
+                <div style={{ fontSize:11, fontWeight:700, color:'var(--text-2)', marginBottom:8, letterSpacing:'0.05em' }}>GRUPLAR</div>
+                {allMemberships.map(mem => {
+                  const dayLabels = mem.schedule_days.length > 0 ? mem.schedule_days.map(d => DAY_LABELS[d]).join(', ') : 'Tüm günler';
+                  return (
+                    <div key={mem.id}
+                      onClick={() => openEditMem(mem)}
+                      style={{ display:'flex', alignItems:'center', gap:8, padding:'8px 0', borderBottom:'1px solid var(--border)', cursor:'pointer' }}>
+                      <span className="material-icons" style={{fontSize:14, color:'#0D9488'}}>groups</span>
+                      <div style={{ flex:1 }}>
+                        <div style={{ fontSize:13, fontWeight:600 }}>{mem.groupName}</div>
+                        <div style={{ fontSize:11, color:'var(--text-2)' }}>
+                          {dayLabels}{mem.custom_fee != null ? `  ·  ₺${mem.custom_fee}` : ''}
+                        </div>
+                      </div>
+                      <span className="material-icons" style={{fontSize:15, color:'var(--text-2)'}}>edit</span>
+                    </div>
+                  );
+                })}
+                <button onClick={openAddGroup}
+                  style={{ display:'flex', alignItems:'center', gap:5, marginTop:10, padding:'7px 14px', borderRadius:8, border:'1px solid #003399', background:'#00339912', color:'#003399', cursor:'pointer', fontWeight:600, fontSize:12 }}>
+                  <span className="material-icons" style={{fontSize:15}}>group_add</span>
+                  Gruba Ekle
+                </button>
+              </div>
+            )}
+
+            {/* PROGRAM block — all memberships */}
+            {scheduleSections.length > 0 && (
+              <div style={{ minWidth:200, flex:1 }}>
+                <div style={{ fontSize:11, fontWeight:700, color:'var(--text-2)', marginBottom:8, letterSpacing:'0.05em' }}>PROGRAM</div>
+                {scheduleSections.map(({ mem, days }, si) => (
+                  <div key={mem.id} style={{ marginBottom: si < scheduleSections.length-1 ? 12 : 0 }}>
+                    <div style={{ fontSize:11, fontWeight:700, color:'#0D9488', marginBottom:4, letterSpacing:'0.03em' }}>{mem.groupName}</div>
+                    {days.map((s, i) => (
+                      <div key={s.day_of_week} style={{ display:'flex', alignItems:'center', gap:8, padding:'7px 0', borderBottom: i < days.length-1 ? '1px solid var(--border)' : 'none' }}>
+                        <div style={{ width:3, alignSelf:'stretch', borderRadius:2, background:'#8B5CF6', flexShrink:0 }} />
+                        <div>
+                          <div style={{ fontSize:13, fontWeight:600 }}>
+                            {DAY_NAMES[s.day_of_week]}  ·  {fmtH(s.start_hour, s.start_minute)}–{fmtH(s.end_hour, s.end_minute)}
+                          </div>
+                          {(s.courtNums.length > 0 || s.coachNames.length > 0) && (
+                            <div style={{ fontSize:11, color:'var(--text-2)', marginTop:1 }}>
+                              {[s.courtNums.length > 0 && `Kort ${s.courtNums.join(', ')}`, ...s.coachNames].filter(Boolean).join(' · ')}
+                            </div>
+                          )}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                ))}
+              </div>
+            )}
+
+            {/* Attendance block */}
+            {attendance.length > 0 && (
+              <div style={{ minWidth:200, flex:1 }}>
+                <div style={{ fontSize:11, fontWeight:700, color:'var(--text-2)', marginBottom:8, letterSpacing:'0.05em' }}>DEVAM</div>
+                {attendance.map(m => {
+                  const pct = m.total > 0 ? Math.round((m.present/m.total)*100) : 0;
+                  const barColor = pct >= 75 ? '#22C55E' : pct >= 50 ? '#F59E0B' : '#EF4444';
+                  return (
+                    <div key={m.key} style={{ marginBottom:8 }}>
+                      <div style={{ display:'flex', justifyContent:'space-between', fontSize:12, marginBottom:3 }}>
+                        <span style={{ fontWeight:600 }}>{m.label}</span>
+                        <span style={{ color:barColor, fontWeight:700 }}>{m.present}/{m.total} antrenman</span>
+                      </div>
+                      <div style={{ height:6, background:'var(--border)', borderRadius:3, overflow:'hidden' }}>
+                        <div style={{ height:'100%', width:`${pct}%`, background:barColor, borderRadius:3, transition:'width 0.4s' }} />
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+
+          {/* Notes section */}
+          <div style={{ fontSize:11, fontWeight:700, color:'var(--text-2)', marginBottom:10, letterSpacing:'0.05em' }}>NOTLAR</div>
+
+          {/* Tab pills */}
+          <div style={{ display:'flex', gap:8, flexWrap:'wrap', marginBottom:12 }}>
+            {NOTE_TABS.map(tab => {
+              const active = tab.type === activeTab;
+              const count  = notes.filter(n => n.note_type === tab.type).length;
+              return (
+                <button key={tab.type}
+                  onClick={() => setActiveTab(tab.type)}
+                  style={{ display:'flex', alignItems:'center', gap:5, padding:'6px 12px', borderRadius:20, border:'1px solid', cursor:'pointer', fontWeight:600, fontSize:12, transition:'all 0.15s',
+                    borderColor: active ? tab.color : 'var(--border)',
+                    background:  active ? tab.color : 'var(--surface)',
+                    color:       active ? '#fff'    : 'var(--text-2)' }}>
+                  <span className="material-icons" style={{fontSize:13}}>{tab.icon}</span>
+                  {tab.label}
+                  {count > 0 && (
+                    <span style={{ fontSize:10, fontWeight:700, padding:'1px 6px', borderRadius:10,
+                      background: active ? 'rgba(255,255,255,0.25)' : tab.color+'22',
+                      color:      active ? '#fff' : tab.color }}>
+                      {count}
+                    </span>
+                  )}
+                </button>
+              );
+            })}
+          </div>
+
+          {/* Add note button */}
+          <button onClick={openNewNote}
+            style={{ display:'flex', alignItems:'center', gap:6, padding:'8px 16px', borderRadius:8, border:'none', cursor:'pointer', fontWeight:600, fontSize:13, marginBottom:14,
+              background: activeTabMeta.color, color:'#fff' }}>
+            <span className="material-icons" style={{fontSize:16}}>add</span>
+            {activeTabMeta.label} Notu Ekle
+          </button>
+
+          {/* Notes list */}
+          {filteredNotes.length === 0 ? (
+            <div style={{ textAlign:'center', padding:'32px 0', color:'var(--text-2)', fontSize:13 }}>
+              Henüz {activeTabMeta.label.toLowerCase()} notu yok
+            </div>
+          ) : (
+            filteredNotes.map(note => (
+              <div key={note.id} style={{ background:'var(--surface)', borderRadius:10, padding:'12px 14px', marginBottom:10, borderLeft:`3px solid ${activeTabMeta.color}` }}>
+                <div style={{ display:'flex', alignItems:'flex-start', justifyContent:'space-between', gap:8, marginBottom:6 }}>
+                  <div>
+                    {note.title && <div style={{ fontWeight:700, fontSize:13, marginBottom:2 }}>{note.title}</div>}
+                    <div style={{ fontSize:11, color:'var(--text-2)' }}>{formatDate(note.session_date || note.created_at)}</div>
+                  </div>
+                  <div style={{ display:'flex', gap:4, flexShrink:0 }}>
+                    <button onClick={() => openEditNote(note)}
+                      style={{ background:'none', border:'none', cursor:'pointer', padding:4, color:activeTabMeta.color, display:'flex', alignItems:'center' }}>
+                      <span className="material-icons" style={{fontSize:16}}>edit</span>
+                    </button>
+                    <button onClick={() => deleteNote(note)}
+                      style={{ background:'none', border:'none', cursor:'pointer', padding:4, color:'#EF4444', display:'flex', alignItems:'center' }}>
+                      <span className="material-icons" style={{fontSize:16}}>delete_outline</span>
+                    </button>
+                  </div>
+                </div>
+                <div style={{ fontSize:13, color:'var(--text-1)', lineHeight:1.6 }}>{note.content}</div>
+              </div>
+            ))
+          )}
+        </>
+      )}
+
+      {/* Edit membership modal */}
+      {editMemModal && editingMem && (
+        <Modal title={editingMem.groupName} onClose={() => setEditMemModal(false)}
+          footer={<><button className="btn btn-ghost btn-sm" onClick={() => setEditMemModal(false)}>Vazgeç</button><button className="btn btn-pri btn-sm" onClick={saveEditMem} disabled={savingMem}>{savingMem ? 'Kaydediliyor…' : 'Kaydet'}</button></>}>
+          <div className="fields" style={{ gap:12 }}>
+            <Field label="ÖZEL ÜCRET (₺)">
+              <input type="number" placeholder="Varsayılan ücret" value={editMemForm.custom_fee}
+                onChange={e => setEditMemForm(p=>({...p, custom_fee:e.target.value}))} />
+            </Field>
+            {editMemForm.groupDays.length > 0 && (
+              <Field label="DEVAM GÜNLERİ">
+                <div style={{ display:'flex', gap:6, flexWrap:'wrap' }}>
+                  {editMemForm.groupDays.map(d => {
+                    const sel = editMemForm.schedule_days.includes(d);
+                    return (
+                      <button key={d} type="button"
+                        onClick={() => setEditMemForm(p => ({ ...p, schedule_days: sel ? p.schedule_days.filter(x=>x!==d) : [...p.schedule_days, d] }))}
+                        style={{ padding:'4px 12px', borderRadius:8, border:'1px solid', cursor:'pointer', fontSize:12, fontWeight:600,
+                          borderColor: sel ? '#0D9488' : 'var(--border)',
+                          background:  sel ? '#0D9488' : 'var(--surface)',
+                          color:       sel ? '#fff'   : 'var(--text-2)' }}>
+                        {DAY_LABELS[d]}
+                      </button>
+                    );
+                  })}
+                </div>
+              </Field>
+            )}
+          </div>
+        </Modal>
+      )}
+
+      {/* Add to group modal */}
+      {addGroupModal && (
+        <Modal title="Gruba Ekle" onClose={() => setAddGroupModal(false)}
+          footer={<>
+            <button className="btn btn-ghost btn-sm" onClick={() => setAddGroupModal(false)}>Vazgeç</button>
+            <button className="btn btn-pri btn-sm" onClick={doAddToGroup} disabled={savingAdd || !addForm.groupId}
+              style={{ background: conflictWarnings.length > 0 ? '#F59E0B' : undefined }}>
+              {savingAdd ? 'Ekleniyor…' : conflictWarnings.length > 0 ? 'Yine de Ekle' : 'Ekle'}
+            </button>
+          </>}>
+          <div className="fields" style={{ gap:12 }}>
+            <Field label="GRUP SEÇ">
+              {availableGroups.length === 0
+                ? <span style={{ fontSize:13, color:'var(--text-2)' }}>Eklenebilecek başka grup yok.</span>
+                : (
+                  <div style={{ display:'flex', gap:6, flexWrap:'wrap' }}>
+                    {availableGroups.map(g => {
+                      const sel = addForm.groupId === g.id;
+                      return (
+                        <button key={g.id} type="button" onClick={() => selectGroup(g)}
+                          style={{ padding:'4px 12px', borderRadius:8, border:'1px solid', cursor:'pointer', fontSize:12, fontWeight:600,
+                            borderColor: sel ? '#003399' : 'var(--border)',
+                            background:  sel ? '#003399' : 'var(--surface)',
+                            color:       sel ? '#fff'   : 'var(--text-2)' }}>
+                          {g.name}
+                        </button>
+                      );
+                    })}
+                  </div>
+                )}
+            </Field>
+            {addForm.groupId && (
+              <>
+                {conflictWarnings.length > 0 && (
+                  <div style={{ background:'#FEF3C7', border:'1px solid #FCD34D', borderRadius:8, padding:'10px 12px' }}>
+                    <div style={{ display:'flex', alignItems:'center', gap:5, fontWeight:700, fontSize:12, color:'#92400E', marginBottom:4 }}>
+                      <span className="material-icons" style={{fontSize:14}}>warning</span>
+                      Program Çakışması
+                    </div>
+                    {conflictWarnings.map((w,i) => (
+                      <div key={i} style={{ fontSize:12, color:'#78350F', lineHeight:1.6 }}>• {w}</div>
+                    ))}
+                  </div>
+                )}
+                <Field label="ÖZEL ÜCRET (₺)">
+                  <input type="number" placeholder="Varsayılan ücret" value={addForm.custom_fee}
+                    onChange={e => setAddForm(p=>({...p, custom_fee:e.target.value}))} />
+                </Field>
+                {addForm.groupDays.length > 0 && (
+                  <Field label="DEVAM GÜNLERİ">
+                    <div style={{ display:'flex', gap:6, flexWrap:'wrap' }}>
+                      {addForm.groupDays.map(d => {
+                        const sel = addForm.schedule_days.includes(d);
+                        return (
+                          <button key={d} type="button" onClick={() => toggleAddDay(d)}
+                            style={{ padding:'4px 12px', borderRadius:8, border:'1px solid', cursor:'pointer', fontSize:12, fontWeight:600,
+                              borderColor: sel ? '#003399' : 'var(--border)',
+                              background:  sel ? '#003399' : 'var(--surface)',
+                              color:       sel ? '#fff'   : 'var(--text-2)' }}>
+                            {DAY_LABELS[d]}
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </Field>
+                )}
+              </>
+            )}
+          </div>
+        </Modal>
+      )}
+
+      {/* Note add/edit modal */}
+      {noteModal && (
+        <Modal title={editingNote ? 'Notu Düzenle' : `${activeTabMeta.label} Notu`} onClose={() => setNoteModal(false)}
+          footer={<><button className="btn btn-ghost btn-sm" onClick={() => setNoteModal(false)}>Vazgeç</button><button className="btn btn-pri btn-sm" onClick={saveNote} disabled={saving}>{saving ? 'Kaydediliyor…' : 'Kaydet'}</button></>}>
+          <div className="fields" style={{ gap:12 }}>
+            <Field label="NOT TÜRÜ">
+              <div style={{ display:'flex', gap:6, flexWrap:'wrap' }}>
+                {NOTE_TABS.map(tab => {
+                  const sel = tab.type === noteForm.note_type;
+                  return (
+                    <button key={tab.type} type="button" onClick={() => setNoteForm(p=>({...p, note_type:tab.type}))}
+                      style={{ padding:'4px 12px', borderRadius:8, border:'1px solid', cursor:'pointer', fontSize:12, fontWeight:600,
+                        borderColor: sel ? tab.color : 'var(--border)',
+                        background:  sel ? tab.color : 'var(--surface)',
+                        color:       sel ? '#fff'   : 'var(--text-2)' }}>
+                      {tab.label}
+                    </button>
+                  );
+                })}
+              </div>
+            </Field>
+            <Field label="TARİH">
+              <input type="date" value={noteForm.session_date} onChange={e => setNoteForm(p=>({...p, session_date:e.target.value}))} />
+            </Field>
+            <Field label="BAŞLIK (opsiyonel)">
+              <input placeholder="Not başlığı..." value={noteForm.title} onChange={e => setNoteForm(p=>({...p, title:e.target.value}))} />
+            </Field>
+            <Field label="NOT *">
+              <textarea rows={5} placeholder="Notunuzu yazın..." value={noteForm.content}
+                onChange={e => setNoteForm(p=>({...p, content:e.target.value}))}
+                style={{ width:'100%', resize:'vertical', padding:'8px 10px', borderRadius:8, border:'1px solid var(--border)', fontSize:13, fontFamily:'inherit' }} />
+            </Field>
+          </div>
+        </Modal>
+      )}
+    </div>
+  );
+}
+
+// ═══════════════════════════════════════════════════════════════
+// GRUP OYUNCULARI
+// ═══════════════════════════════════════════════════════════════
+function GroupPlayersScreen({ clubId }) {
+  const { useState, useEffect, useCallback, useRef } = React;
+  const PAGE_SIZE = 5;
+  const DAY_LABELS = ['Paz','Pzt','Sal','Çar','Per','Cum','Cmt'];
+
+  const [groups,         setGroups]         = useState([]);
+  const [totalGroups,    setTotalGroups]    = useState(0);
+  const [page,           setPage]           = useState(0);
+  const [searchQuery,    setSearchQuery]    = useState('');
+  const [loading,        setLoading]        = useState(true);
+  const [selectedMember, setSelectedMember] = useState(null); // { ...member, groupId, groupName }
+
+  const isFirst = useRef(true);
+
+  const fetchGroups = useCallback(async (p, search) => {
+    if (!clubId) return;
+    try {
+      let matchingGroupIds = [];
+      if (search.trim()) {
+        const { data: memberRows } = await sb
+          .from('club_group_members')
+          .select('group_id')
+          .ilike('member_name', `%${search.trim()}%`);
+        matchingGroupIds = [...new Set((memberRows || []).map(r => r.group_id))];
+      }
+
+      let query = sb
+        .from('club_groups')
+        .select('id, name, members:club_group_members(id, member_name, contact_number, contact_person, schedule_days)', { count: 'exact' })
+        .eq('club_id', clubId)
+        .eq('is_active', true)
+        .order('name')
+        .range(p * PAGE_SIZE, (p + 1) * PAGE_SIZE - 1);
+
+      if (search.trim()) {
+        let orFilter = `name.ilike.%${search.trim()}%`;
+        if (matchingGroupIds.length > 0) orFilter += `,id.in.(${matchingGroupIds.join(',')})`;
+        query = query.or(orFilter);
+      }
+
+      const { data, count } = await query;
+      setGroups((data || []).filter(g => (g.members || []).length > 0));
+      setTotalGroups(count ?? 0);
+    } catch (e) {
+      console.error('GroupPlayersScreen fetchGroups error:', e);
+    }
+  }, [clubId]);
+
+  useEffect(() => {
+    setLoading(true);
+    fetchGroups(0, '').finally(() => setLoading(false));
+  }, [fetchGroups]);
+
+  useEffect(() => {
+    if (isFirst.current) { isFirst.current = false; return; }
+    setPage(0);
+    fetchGroups(0, searchQuery);
+  }, [searchQuery]);
+
+  const avatarColor = (name) => {
+    const COLORS = ['#003399','#0D9488','#22C55E','#8B5CF6','#EC4899','#F59E0B','#EF4444'];
+    return COLORS[(name || '').charCodeAt(0) % COLORS.length];
+  };
+  const inits = (name) => (name || '').split(' ').map(w => w[0]).slice(0,2).join('').toUpperCase();
+
+  // Show member profile sub-screen
+  if (selectedMember) {
+    return <MemberProfileView member={selectedMember} clubId={clubId} onBack={() => setSelectedMember(null)} />;
+  }
+
+  const totalPlayers = groups.reduce((s, g) => s + (g.members || []).length, 0);
+
+  if (loading) return <Spinner />;
+
+  return (
+    <div className="page fade-in">
+      <div className="page-head">
+        <div>
+          <h1>Grup Oyuncuları</h1>
+          <div className="sub">{totalPlayers > 0 ? `${totalPlayers} oyuncu` : 'Aktif gruplardaki tüm üyeler'}</div>
+        </div>
+      </div>
+
+      <div style={{ position:'relative', marginBottom:14 }}>
+        <span className="material-icons" style={{ position:'absolute', left:10, top:'50%', transform:'translateY(-50%)', color:'var(--text-2)', fontSize:18 }}>search</span>
+        <input
+          value={searchQuery}
+          onChange={e => setSearchQuery(e.target.value)}
+          placeholder="Oyuncu veya grup ara…"
+          style={{ paddingLeft:36, paddingRight: searchQuery ? 32 : 10 }}
+        />
+        {searchQuery && (
+          <button onClick={() => setSearchQuery('')}
+            style={{ position:'absolute', right:8, top:'50%', transform:'translateY(-50%)', background:'none', border:'none', cursor:'pointer', color:'var(--text-2)', display:'flex', alignItems:'center', padding:0 }}>
+            <span className="material-icons" style={{ fontSize:16 }}>close</span>
+          </button>
+        )}
+      </div>
+
+      {groups.length === 0 ? (
+        <EmptyState icon={searchQuery ? 'search_off' : 'groups'}
+          title={searchQuery ? 'Sonuç bulunamadı' : 'Henüz grup oyuncusu yok'}
+          subtitle={searchQuery ? `"${searchQuery}" ile eşleşen oyuncu veya grup bulunamadı` : 'Aktif gruplara üye eklendikçe burada görünür.'} />
+      ) : (
+        <>
+          {groups.map(group => (
+            <div key={group.id} className="card tight" style={{ marginBottom:12 }}>
+              <div style={{ display:'flex', alignItems:'center', gap:8, padding:'10px 14px', borderBottom:'1px solid var(--border)', background:'#0D94880a', borderRadius:'10px 10px 0 0' }}>
+                <span className="material-icons" style={{ fontSize:15, color:'#0D9488' }}>groups</span>
+                <span style={{ flex:1, fontSize:13, fontWeight:700, color:'var(--text-1)' }}>{group.name}</span>
+                <span style={{ fontSize:11, fontWeight:600, color:'#0D9488', background:'#0D948820', padding:'2px 8px', borderRadius:999 }}>
+                  {(group.members||[]).length} oyuncu
+                </span>
+              </div>
+              {(group.members||[]).map((member, idx) => {
+                const color = avatarColor(member.member_name || '');
+                const days  = (member.schedule_days || []).slice().sort((a,b)=>(a===0?7:a)-(b===0?7:b));
+                return (
+                  <div key={member.id}
+                    style={{ display:'flex', alignItems:'center', gap:12, padding:'11px 14px', borderBottom: idx < group.members.length-1 ? '1px solid var(--border)' : 'none', cursor:'pointer', transition:'background 0.15s' }}
+                    onClick={() => setSelectedMember({ ...member, groupId: group.id, groupName: group.name })}
+                    onMouseEnter={e => e.currentTarget.style.background='var(--bg)'}
+                    onMouseLeave={e => e.currentTarget.style.background=''}
+                  >
+                    <div style={{ width:38, height:38, borderRadius:19, background:color+'22', display:'grid', placeItems:'center', flexShrink:0 }}>
+                      <span style={{ fontSize:13, fontWeight:800, color }}>{inits(member.member_name)}</span>
+                    </div>
+                    <div style={{ flex:1 }}>
+                      <div style={{ fontWeight:600, fontSize:13 }}>{member.member_name}</div>
+                      {(member.contact_number || member.contact_person) && (
+                        <div style={{ fontSize:11, color:'var(--text-2)', marginTop:1 }}>
+                          {[member.contact_number, member.contact_person].filter(Boolean).join(' · ')}
+                        </div>
+                      )}
+                      {days.length > 0 && (
+                        <div style={{ fontSize:11, color:'#0D9488', fontWeight:600, marginTop:1 }}>
+                          {days.map(d => DAY_LABELS[d]).join(' · ')}
+                        </div>
+                      )}
+                    </div>
+                    <span className="material-icons" style={{ fontSize:18, color:'var(--text-2)' }}>chevron_right</span>
+                  </div>
+                );
+              })}
+            </div>
+          ))}
+
+          {totalGroups > PAGE_SIZE && (
+            <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', marginTop:8, paddingTop:8 }}>
+              <button className="btn btn-ghost btn-sm" disabled={page === 0}
+                onClick={() => { const n = page-1; setPage(n); fetchGroups(n, searchQuery); }}>
+                <span className="material-icons" style={{fontSize:16}}>chevron_left</span> Önceki
+              </button>
+              <span style={{ fontSize:12, color:'var(--text-2)' }}>
+                {page*PAGE_SIZE+1}–{Math.min((page+1)*PAGE_SIZE, totalGroups)} / {totalGroups} grup
+              </span>
+              <button className="btn btn-ghost btn-sm" disabled={(page+1)*PAGE_SIZE >= totalGroups}
+                onClick={() => { const n = page+1; setPage(n); fetchGroups(n, searchQuery); }}>
+                Sonraki <span className="material-icons" style={{fontSize:16}}>chevron_right</span>
+              </button>
+            </div>
+          )}
+        </>
       )}
     </div>
   );
