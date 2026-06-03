@@ -460,21 +460,39 @@ function TournamentsScreen({ clubId, userType }) {
 const MONTH_NAMES_TR = ['Ocak','Şubat','Mart','Nisan','Mayıs','Haziran','Temmuz','Ağustos','Eylül','Ekim','Kasım','Aralık'];
 const DAY_LABELS = ['Paz','Pzt','Sal','Çar','Per','Cum','Cmt'];
 const DAY_NAMES_FULL = ['Pazar','Pazartesi','Salı','Çarşamba','Perşembe','Cuma','Cumartesi'];
-const formatH = h => String(Math.floor(h)).padStart(2,'0') + ':' + ((h % 1) >= 0.5 ? '30' : '00');
+const formatH = (h, use15) => {
+  const whole = Math.floor(h);
+  const frac  = h % 1;
+  let min;
+  if (use15) {
+    min = frac >= 0.875 ? '45' : frac >= 0.625 ? '30' : frac >= 0.375 ? '15' : frac >= 0.125 ? '00' : '00';
+    if (frac >= 0.875) min = '45';
+    else if (frac >= 0.625) min = '30';
+    else if (frac >= 0.375) min = '15';
+    else min = '00';
+  } else {
+    min = frac >= 0.5 ? '30' : '00';
+  }
+  return String(whole).padStart(2,'0') + ':' + min;
+};
 
-function HourStepper({ value, onChange, min = 0, max = 23.5 }) {
+function HourStepper({ value, onChange, min = 0, max = 23.5, step = 0.5 }) {
+  const fmt = formatH(value, step === 0.25);
   return (
     <div style={{ display:'flex', alignItems:'center', border:'1px solid var(--border)', borderRadius:10, overflow:'hidden' }}>
-      <button className="btn btn-ghost btn-sm btn-icon" onClick={() => onChange(Math.max(min, value - 0.5))}>
+      <button className="btn btn-ghost btn-sm btn-icon" onClick={() => onChange(Math.max(min, Math.round((value - step) * 100) / 100))}>
         <span className="material-icons" style={{fontSize:16}}>remove</span>
       </button>
-      <span style={{ minWidth:52, textAlign:'center', fontWeight:700, fontSize:14 }}>{formatH(value)}</span>
-      <button className="btn btn-ghost btn-sm btn-icon" onClick={() => onChange(Math.min(max, value + 0.5))}>
+      <span style={{ minWidth:52, textAlign:'center', fontWeight:700, fontSize:14 }}>{fmt}</span>
+      <button className="btn btn-ghost btn-sm btn-icon" onClick={() => onChange(Math.min(max, Math.round((value + step) * 100) / 100))}>
         <span className="material-icons" style={{fontSize:16}}>add</span>
       </button>
     </div>
   );
 }
+
+// daySettings format: { [dayIdx]: { courts: string[], start: number, end: number }[] }
+const makeSlot = () => ({ courts: [], start: 9, end: 11 });
 
 function PerDayScheduleSection({
   schedCourts, coaches,
@@ -483,34 +501,51 @@ function PerDayScheduleSection({
   schedSelCoaches, setSchedSelCoaches,
   diffCoachPerDay, setDiffCoachPerDay,
   dayCoachIds, setDayCoachIds,
-  schedConflicts, schedChecking, compact
+  schedConflicts, schedChecking, compact,
+  use15Min, setUse15Min,
 }) {
+  const step = use15Min ? 0.25 : 0.5;
+
   const toggleDay = (i) => {
-    setSchedSelDays(prev => {
-      if (prev.includes(i)) {
-        // Remove day and its settings
-        setDaySettings(ds => { const n = {...ds}; delete n[i]; return n; });
-        setDayCoachIds(dc => { const n = {...dc}; delete n[i]; return n; });
-        return prev.filter(x => x !== i);
-      }
-      return [...prev, i].sort((a, b) => a - b);
+    if (schedSelDays.includes(i)) {
+      setSchedSelDays(prev => prev.filter(x => x !== i));
+      setDaySettings(ds => { const n = {...ds}; delete n[i]; return n; });
+      setDayCoachIds(dc => { const n = {...dc}; delete n[i]; return n; });
+    } else {
+      setSchedSelDays(prev => [...prev, i].sort((a, b) => a - b));
+      setDaySettings(ds => ({ ...ds, [i]: ds[i] ?? [makeSlot()] }));
+    }
+  };
+
+  const updateSlot = (dayIdx, slotIdx, patch) => {
+    setDaySettings(prev => {
+      const slots = [...(prev[dayIdx] ?? [makeSlot()])];
+      slots[slotIdx] = { ...slots[slotIdx], ...patch };
+      return { ...prev, [dayIdx]: slots };
     });
   };
 
-  const setDayCourts = (dayIdx, courtId) => {
+  const toggleSlotCourt = (dayIdx, slotIdx, courtId) => {
     setDaySettings(prev => {
-      const ds = prev[dayIdx] || { courts: [], start: 9, end: 11 };
-      const courts = ds.courts.includes(courtId)
-        ? ds.courts.filter(x => x !== courtId)
-        : [...ds.courts, courtId];
-      return { ...prev, [dayIdx]: { ...ds, courts } };
+      const slots = [...(prev[dayIdx] ?? [makeSlot()])];
+      const cur = slots[slotIdx].courts ?? [];
+      slots[slotIdx] = { ...slots[slotIdx], courts: cur.includes(courtId) ? cur.filter(x => x !== courtId) : [...cur, courtId] };
+      return { ...prev, [dayIdx]: slots };
     });
   };
 
-  const setDayTime = (dayIdx, field, val) => {
+  const addSlot = (dayIdx) => {
     setDaySettings(prev => {
-      const ds = prev[dayIdx] || { courts: [], start: 9, end: 11 };
-      return { ...prev, [dayIdx]: { ...ds, [field]: val } };
+      const slots = prev[dayIdx] ?? [makeSlot()];
+      const last = slots[slots.length - 1];
+      return { ...prev, [dayIdx]: [...slots, { courts: [...last.courts], start: last.end, end: Math.min(23, last.end + 2) }] };
+    });
+  };
+
+  const removeSlot = (dayIdx, slotIdx) => {
+    setDaySettings(prev => {
+      const slots = (prev[dayIdx] ?? [makeSlot()]).filter((_, i) => i !== slotIdx);
+      return { ...prev, [dayIdx]: slots.length ? slots : [makeSlot()] };
     });
   };
 
@@ -531,6 +566,15 @@ function PerDayScheduleSection({
           <span className="material-icons" style={{fontSize:15}}>event_repeat</span>
           Haftalık Program (isteğe bağlı)
         </div>
+      )}
+
+      {/* 15 dakika toggle */}
+      {setUse15Min && (
+        <Switch
+          on={!!use15Min}
+          onChange={setUse15Min}
+          label="15 Dakikalık Artış (22:15 gibi saatler)"
+        />
       )}
 
       {/* Gün seçimi */}
@@ -574,47 +618,23 @@ function PerDayScheduleSection({
 
       {/* Per-day cards */}
       {sortedDays.map(dayIdx => {
-        const ds = daySettings[dayIdx] || { courts: [], start: 9, end: 11 };
-        const timeError = ds.start >= ds.end;
+        const slots = daySettings[dayIdx] ?? [makeSlot()];
         return (
           <div key={dayIdx} style={{
             background:'var(--bg)', border:'1px solid var(--border)', borderRadius:12,
-            padding:'12px 14px', display:'flex', flexDirection:'column', gap:10
+            padding:'12px 14px', display:'flex', flexDirection:'column', gap:12
           }}>
-            <div style={{ fontWeight:700, fontSize:13, color:'var(--brand-navy)', display:'flex', alignItems:'center', gap:6 }}>
-              <span className="material-icons" style={{fontSize:14}}>calendar_today</span>
-              {DAY_NAMES_FULL[dayIdx]}
-            </div>
-
-            {/* Kortlar */}
-            <div>
-              <div style={{ fontSize:11, fontWeight:700, color:'var(--text-2)', marginBottom:5, textTransform:'uppercase', letterSpacing:'0.05em' }}>Kort</div>
-              <div style={{ display:'flex', flexWrap:'wrap', gap:6 }}>
-                {schedCourts.map(c => (
-                  <button key={c.id} type="button"
-                    className={'btn btn-sm ' + (ds.courts.includes(c.id) ? 'btn-pri' : 'btn-ghost')}
-                    onClick={() => setDayCourts(dayIdx, c.id)}>
-                    Kort {c.court_number}
-                  </button>
-                ))}
-                {schedCourts.length === 0 && <span style={{ fontSize:12, color:'var(--text-2)' }}>Aktif kort yok</span>}
+            {/* Gün başlığı + seans ekle */}
+            <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center' }}>
+              <div style={{ fontWeight:700, fontSize:13, color:'var(--brand-navy)', display:'flex', alignItems:'center', gap:6 }}>
+                <span className="material-icons" style={{fontSize:14}}>calendar_today</span>
+                {DAY_NAMES_FULL[dayIdx]}
               </div>
-            </div>
-
-            {/* Saat */}
-            <div>
-              <div style={{ fontSize:11, fontWeight:700, color:'var(--text-2)', marginBottom:5, textTransform:'uppercase', letterSpacing:'0.05em' }}>Saat Aralığı</div>
-              <div style={{ display:'flex', alignItems:'center', gap:10 }}>
-                <HourStepper value={ds.start} onChange={v => setDayTime(dayIdx, 'start', v)} min={0} max={22.5} />
-                <span className="material-icons" style={{color:'var(--text-2)', fontSize:18}}>arrow_forward</span>
-                <HourStepper value={ds.end} onChange={v => setDayTime(dayIdx, 'end', v)} min={0.5} max={23} />
-              </div>
-              {timeError && (
-                <div style={{ marginTop:6, color:'#EF4444', fontSize:12, display:'flex', alignItems:'center', gap:4 }}>
-                  <span className="material-icons" style={{fontSize:13}}>error_outline</span>
-                  Bitiş saati başlangıçtan büyük olmalı
-                </div>
-              )}
+              <button type="button" className="btn btn-ghost btn-sm"
+                style={{ fontSize:12, color:'#0D9488' }}
+                onClick={() => addSlot(dayIdx)}>
+                <span className="material-icons" style={{fontSize:14}}>add</span> Seans Ekle
+              </button>
             </div>
 
             {/* Per-day antrenörler */}
@@ -635,6 +655,62 @@ function PerDayScheduleSection({
                 </div>
               </div>
             )}
+
+            {/* Slot listesi */}
+            {slots.map((sl, slotIdx) => {
+              const timeError = sl.start >= sl.end;
+              return (
+                <div key={slotIdx} style={{
+                  background: slotIdx === 0 ? 'transparent' : 'var(--surface, #fff)',
+                  border: slots.length > 1 ? '1px dashed var(--border)' : 'none',
+                  borderRadius: 10, padding: slots.length > 1 ? '10px 12px' : 0,
+                  display:'flex', flexDirection:'column', gap:10,
+                }}>
+                  {/* Seans başlığı (birden fazlaysa) */}
+                  {slots.length > 1 && (
+                    <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center' }}>
+                      <span style={{ fontSize:12, fontWeight:700, color:'var(--text-2)' }}>Seans {slotIdx + 1}</span>
+                      <button type="button" className="btn btn-danger btn-sm btn-icon"
+                        onClick={() => removeSlot(dayIdx, slotIdx)}
+                        title="Bu seansı kaldır">
+                        <span className="material-icons" style={{fontSize:14}}>close</span>
+                      </button>
+                    </div>
+                  )}
+
+                  {/* Kortlar */}
+                  <div>
+                    <div style={{ fontSize:11, fontWeight:700, color:'var(--text-2)', marginBottom:5, textTransform:'uppercase', letterSpacing:'0.05em' }}>Kort</div>
+                    <div style={{ display:'flex', flexWrap:'wrap', gap:6 }}>
+                      {schedCourts.map(c => (
+                        <button key={c.id} type="button"
+                          className={'btn btn-sm ' + ((sl.courts ?? []).includes(c.id) ? 'btn-pri' : 'btn-ghost')}
+                          onClick={() => toggleSlotCourt(dayIdx, slotIdx, c.id)}>
+                          Kort {c.court_number}
+                        </button>
+                      ))}
+                      {schedCourts.length === 0 && <span style={{ fontSize:12, color:'var(--text-2)' }}>Aktif kort yok</span>}
+                    </div>
+                  </div>
+
+                  {/* Saat */}
+                  <div>
+                    <div style={{ fontSize:11, fontWeight:700, color:'var(--text-2)', marginBottom:5, textTransform:'uppercase', letterSpacing:'0.05em' }}>Saat Aralığı</div>
+                    <div style={{ display:'flex', alignItems:'center', gap:10 }}>
+                      <HourStepper value={sl.start} onChange={v => updateSlot(dayIdx, slotIdx, { start: v })} min={0} max={22.5} step={step} />
+                      <span className="material-icons" style={{color:'var(--text-2)', fontSize:18}}>arrow_forward</span>
+                      <HourStepper value={sl.end} onChange={v => updateSlot(dayIdx, slotIdx, { end: v })} min={0.5} max={23} step={step} />
+                    </div>
+                    {timeError && (
+                      <div style={{ marginTop:6, color:'#EF4444', fontSize:12, display:'flex', alignItems:'center', gap:4 }}>
+                        <span className="material-icons" style={{fontSize:13}}>error_outline</span>
+                        Bitiş saati başlangıçtan büyük olmalı
+                      </div>
+                    )}
+                  </div>
+                </div>
+              );
+            })}
           </div>
         );
       })}
@@ -692,10 +768,15 @@ function GroupsScreen({ clubId }) {
   const [loading,  setLoading]  = useState(true);
 
   // ── Grup oluştur / düzenle modalı ────────────────────────────
-  const [groupModal,  setGroupModal]  = useState(null); // null | {type:'add'|'edit', group?}
-  const [form,        setForm]        = useState({});
-  const [newMembers,  setNewMembers]  = useState([]);   // sadece 'add' modunda
-  const [saving,      setSaving]      = useState(false);
+  const [groupModal,       setGroupModal]       = useState(null); // null | {type:'add'|'edit', group?}
+  const [form,             setForm]             = useState({});
+  const [newMembers,       setNewMembers]       = useState([]);   // sadece 'add' modunda
+  const [saving,           setSaving]           = useState(false);
+  const [selectedCoachIds, setSelectedCoachIds] = useState([]);
+  const [coachShares,      setCoachShares]      = useState({});   // {coachId: '50'}
+  const [splitType,        setSplitType]        = useState('percentage');
+  const [coachFixedAmounts,setCoachFixedAmounts]= useState({});   // {coachId: '500'}
+  const [use15Min,         setUse15Min]         = useState(false);
 
   // ── Üye yönetim modalı ───────────────────────────────────────
   const [membersModal,    setMembersModal]    = useState(null); // null | {group}
@@ -770,22 +851,32 @@ function GroupsScreen({ clubId }) {
   // ── Program atama ─────────────────────────────────────────────
   const buildPerDayState = (existing, fallbackCoachId) => {
     const days = [...new Set(existing.map(c => c.day_of_week))];
-    const newDaySettings = {};
+    const newDaySettings = {}; // { [day]: slot[] }
     const newDayCoachIds = {};
     for (const day of days) {
       const dc = existing.filter(c => c.day_of_week === day);
-      const courtIds = [...new Set(dc.map(c => c.court_id))];
-      const sh = dc[0]?.start_hour ?? 9;
-      const sm = dc[0]?.start_minute ?? 0;
-      const eh = dc[0]?.end_hour ?? 11;
-      const em = dc[0]?.end_minute ?? 0;
-      newDaySettings[day] = { courts: courtIds, start: sh + sm / 60, end: eh + em / 60 };
+      // Group by unique (start_hour, start_minute, end_hour, end_minute) → one slot per time range
+      const slotMap = {};
+      for (const c of dc) {
+        const key = `${c.start_hour}_${c.start_minute ?? 0}_${c.end_hour}_${c.end_minute ?? 0}`;
+        if (!slotMap[key]) {
+          slotMap[key] = {
+            courts: [],
+            start: c.start_hour + (c.start_minute ?? 0) / 60,
+            end:   c.end_hour   + (c.end_minute   ?? 0) / 60,
+          };
+        }
+        if (c.court_id && !slotMap[key].courts.includes(c.court_id)) {
+          slotMap[key].courts.push(c.court_id);
+        }
+      }
+      newDaySettings[day] = Object.values(slotMap);
+      if (newDaySettings[day].length === 0) newDaySettings[day] = [{ courts: [], start: 9, end: 11 }];
       const cIds = [...new Set(dc.filter(c => c.coach_id).map(c => c.coach_id))];
       if (cIds.length > 0) newDayCoachIds[day] = cIds;
     }
     const allCoachIds = [...new Set(existing.filter(c => c.coach_id).map(c => c.coach_id))];
     const globalCoachIds = allCoachIds.length > 0 ? allCoachIds : (fallbackCoachId ? [fallbackCoachId] : []);
-    // Detect per-day coach differences
     const hasDiff = days.length > 1 && Object.keys(newDayCoachIds).length > 0 && days.some(d => {
       const a = (newDayCoachIds[days[0]] || []).slice().sort().join(',');
       const b = (newDayCoachIds[d] || []).slice().sort().join(',');
@@ -808,6 +899,7 @@ function GroupsScreen({ clubId }) {
     setSchedSelCoaches(globalCoachIds);
     setDiffCoachPerDay(hasDiff);
     setSchedConflicts([]);
+    setUse15Min(false);
     setSchedModal({ group });
   };
 
@@ -833,9 +925,11 @@ function GroupsScreen({ clubId }) {
   const saveSchedule = async () => {
     if (!schedSelDays.length) { alert('En az bir gün seçin'); return; }
     for (const d of schedSelDays) {
-      const ds = daySettings[d] || {};
-      if (!ds.courts?.length) { alert(`${DAY_NAMES_FULL[d]} için kort seçin`); return; }
-      if ((ds.start ?? 9) >= (ds.end ?? 11)) { alert(`${DAY_NAMES_FULL[d]}: Bitiş saati başlangıçtan büyük olmalı`); return; }
+      const slots = daySettings[d] ?? [];
+      if (!slots.length || slots.every(sl => !sl.courts?.length)) { alert(`${DAY_NAMES_FULL[d]} için en az bir seansa kort seçin`); return; }
+      for (const sl of slots) {
+        if ((sl.start ?? 9) >= (sl.end ?? 11)) { alert(`${DAY_NAMES_FULL[d]}: Bitiş saati başlangıçtan büyük olmalı`); return; }
+      }
     }
     if (schedConflicts.length)  { alert('Çakışmalar giderilmeden kaydedilemez'); return; }
     setSchedSaving(true);
@@ -860,19 +954,20 @@ function GroupsScreen({ clubId }) {
 
   // ── Grup oluştur ─────────────────────────────────────────────
   const openCreate = async () => {
-    setForm({ name: '', description: '', monthly_fee: '', club_percentage: 100, coach_id: '', is_active: true });
+    setForm({ name: '', description: '', monthly_fee: '', club_percentage: 100, is_active: true });
     setNewMembers([
-      { member_name: '', contact_number: '', contact_person: '' },
-      { member_name: '', contact_number: '', contact_person: '' },
-      { member_name: '', contact_number: '', contact_person: '' },
+      { member_name: '', contact_number: '', contact_person: '', custom_fee: '' },
+      { member_name: '', contact_number: '', contact_person: '', custom_fee: '' },
     ]);
+    setSelectedCoachIds([]); setCoachShares({}); setSplitType('percentage'); setCoachFixedAmounts({});
+    setUse15Min(false);
     const { data: courtData } = await sb.from('courts')
       .select('id, court_number, court_type')
       .eq('club_id', clubId).eq('is_active', true).order('court_number');
     setSchedCourts(courtData ?? []);
     setSchedSelDays([]); setSchedSelCoaches([]);
     setDaySettings({}); setDiffCoachPerDay(false); setDayCoachIds({});
-    setSchedConflicts([]);
+    setSchedConflicts([]); setUse15Min(false);
     setGroupModal({ type: 'add' });
   };
 
@@ -880,8 +975,21 @@ function GroupsScreen({ clubId }) {
     setForm({
       id: g.id, name: g.name, description: g.description || '',
       monthly_fee: g.monthly_fee ?? '', club_percentage: g.club_percentage ?? 100,
-      coach_id: g.coach_id || '', is_active: g.is_active,
+      is_active: g.is_active, split_type: g.split_type || 'percentage',
     });
+    // Load coaches from club_group_coaches
+    const groupCoaches = g.coaches && g.coaches.length > 0 ? g.coaches : [];
+    const ids = groupCoaches.map(c => c.id);
+    setSelectedCoachIds(ids);
+    setSplitType(g.split_type || 'percentage');
+    const shares = {}; const fixedAmts = {};
+    groupCoaches.forEach(c => {
+      shares[c.id] = String(c.share_percentage ?? '');
+      fixedAmts[c.id] = c.fixed_amount != null ? String(c.fixed_amount) : '';
+    });
+    setCoachShares(shares);
+    setCoachFixedAmounts(fixedAmts);
+    setUse15Min(false);
     const { data: courtData } = await sb.from('courts')
       .select('id, court_number, court_type')
       .eq('club_id', clubId).eq('is_active', true).order('court_number');
@@ -902,7 +1010,7 @@ function GroupsScreen({ clubId }) {
   };
 
   const addNewMemberRow = () => {
-    setNewMembers(prev => [...prev, { member_name: '', contact_number: '', contact_person: '' }]);
+    setNewMembers(prev => [...prev, { member_name: '', contact_number: '', contact_person: '', custom_fee: '' }]);
   };
 
   const removeNewMemberRow = (idx) => {
@@ -913,38 +1021,70 @@ function GroupsScreen({ clubId }) {
     if (!form.name?.trim()) { alert('Grup adı zorunludur.'); return; }
     if (groupModal.type === 'add') {
       const valid = newMembers.filter(m => m.member_name.trim());
-      if (valid.length < 3) { alert('Grup oluşturmak için en az 3 üye gereklidir.'); return; }
+      if (valid.length < 2) { alert('Grup oluşturmak için en az 2 üye gereklidir.'); return; }
     }
     if (schedConflicts.length) { alert('Program çakışmaları giderilmeden kaydedilemez.'); return; }
     for (const d of schedSelDays) {
-      const ds = daySettings[d] || {};
-      if ((ds.start ?? 9) >= (ds.end ?? 11)) {
-        alert(`${DAY_NAMES_FULL[d]}: Bitiş saati başlangıçtan büyük olmalı.`); return;
+      const slots = daySettings[d] ?? [{ start: 9, end: 11 }];
+      for (const sl of slots) {
+        if ((sl.start ?? 9) >= (sl.end ?? 11)) {
+          alert(`${DAY_NAMES_FULL[d]}: Bitiş saati başlangıçtan büyük olmalı.`); return;
+        }
       }
     }
     const clubPct = Number(form.club_percentage);
-    if (!isNaN(clubPct) && form.club_percentage !== '' && (clubPct < 0 || clubPct > 100)) {
+    if (splitType === 'percentage' && !isNaN(clubPct) && form.club_percentage !== '' && (clubPct < 0 || clubPct > 100)) {
       alert('Kulüp yüzdesi 0-100 arasında olmalıdır.'); return;
+    }
+    // Validate coach shares sum to 100 for percentage mode
+    if (splitType === 'percentage' && selectedCoachIds.length > 1) {
+      const total = selectedCoachIds.reduce((s, id) => s + (parseFloat(coachShares[id]) || 0), 0);
+      if (Math.abs(total - 100) > 0.1) {
+        alert(`Antrenör payları toplamı %100 olmalı (şu an: %${total.toFixed(1)})`); return;
+      }
     }
     setSaving(true);
     try {
+      const primaryCoachId = selectedCoachIds[0] || null;
       const payload = {
         name:            form.name.trim(),
         description:     form.description?.trim() || null,
         monthly_fee:     form.monthly_fee !== '' ? Number(form.monthly_fee) : 0,
-        club_percentage: Number(form.club_percentage) || 100,
-        coach_id:        form.coach_id || null,
+        club_percentage: splitType === 'percentage' ? (Number(form.club_percentage) || 100) : 100,
+        split_type:      splitType,
+        coach_id:        primaryCoachId,
         is_active:       form.is_active !== false,
       };
+
+      // Build club_group_coaches rows
+      const coachRows = selectedCoachIds.map((coachId, i) => {
+        const equalShare = parseFloat((100 / selectedCoachIds.length).toFixed(2));
+        return {
+          coach_id: coachId,
+          share_percentage: selectedCoachIds.length === 1 ? 100
+            : (i === selectedCoachIds.length - 1
+              ? parseFloat((100 - equalShare * (selectedCoachIds.length - 1)).toFixed(2))
+              : parseFloat(coachShares[coachId]) || equalShare),
+          fixed_amount: splitType === 'fixed_amount'
+            ? (parseFloat(coachFixedAmounts[coachId] ?? '') || null)
+            : null,
+        };
+      });
+
       let savedGroupId = form.id;
       if (groupModal.type === 'add') {
         const validMembers = newMembers
           .filter(m => m.member_name.trim())
-          .map(m => ({ member_name: m.member_name.trim(), contact_number: m.contact_number?.trim() || null, contact_person: m.contact_person?.trim() || null }));
-        const created = await GroupSvc.createGroup(clubId, payload, validMembers);
+          .map(m => ({
+            member_name:    m.member_name.trim(),
+            contact_number: m.contact_number?.trim() || null,
+            contact_person: m.contact_person?.trim() || null,
+            custom_fee:     m.custom_fee?.trim() ? parseFloat(m.custom_fee) : null,
+          }));
+        const created = await GroupSvc.createGroup(clubId, payload, validMembers, coachRows);
         savedGroupId = created?.id ?? savedGroupId;
       } else {
-        await GroupSvc.updateGroup(form.id, payload);
+        await GroupSvc.updateGroup(form.id, payload, coachRows);
       }
       if (savedGroupId && schedSelDays.length > 0) {
         await GroupScheduleSvc.saveGroupSchedulePerDay(
@@ -980,7 +1120,7 @@ function GroupsScreen({ clubId }) {
   const openMembers = (g) => {
     setMembersModal({ group: g });
     setGroupMembers(g.members || []);
-    setAddMemberForm({ member_name: '', contact_number: '', contact_person: '' });
+    setAddMemberForm({ member_name: '', contact_number: '', contact_person: '', custom_fee: '' });
     setEditMemberRow(null);
   };
 
@@ -988,13 +1128,15 @@ function GroupsScreen({ clubId }) {
     if (!addMemberForm.member_name?.trim()) { alert('Üye adı zorunludur.'); return; }
     setMemberSaving(true);
     try {
+      const cfStr = addMemberForm.custom_fee?.trim();
       const m = await GroupSvc.addMember(membersModal.group.id, {
         member_name:    addMemberForm.member_name.trim(),
         contact_number: addMemberForm.contact_number?.trim() || null,
         contact_person: addMemberForm.contact_person?.trim() || null,
+        custom_fee:     cfStr ? parseFloat(cfStr) : null,
       });
       setGroupMembers(prev => [...prev, m]);
-      setAddMemberForm({ member_name: '', contact_number: '', contact_person: '' });
+      setAddMemberForm({ member_name: '', contact_number: '', contact_person: '', custom_fee: '' });
       loadGroups();
     } catch (e) { alert(e.message); }
     finally { setMemberSaving(false); }
@@ -1012,13 +1154,16 @@ function GroupsScreen({ clubId }) {
   const saveEditMember = async (memberId, updated) => {
     if (!updated.member_name?.trim()) { alert('Üye adı zorunludur.'); return; }
     try {
+      const cfStr = updated.custom_fee?.trim();
       const m = await GroupSvc.updateMember(memberId, {
         member_name:    updated.member_name.trim(),
         contact_number: updated.contact_number?.trim() || null,
         contact_person: updated.contact_person?.trim() || null,
+        custom_fee:     cfStr ? parseFloat(cfStr) : null,
       });
       setGroupMembers(prev => prev.map(x => x.id === memberId ? m : x));
       setEditMemberRow(null);
+      loadGroups();
     } catch (e) { alert(e.message); }
   };
 
@@ -1066,13 +1211,15 @@ function GroupsScreen({ clubId }) {
     if (!confirm('Bu ayın aidatlarını finanslara işlemek istediğinize emin misiniz?')) return;
     setPosting(true);
     try {
+      const g = duesModal.group;
       await GroupDuesSvc.postDuesToFinance(
-        duesModal.group.id, duesModal.group.name,
+        g.id, g.name,
         duesYear, duesMonth, dues,
-        duesModal.group.club_percentage ?? 100,
-        duesModal.group.coach_id || null,
+        g.club_percentage ?? 100,
+        g.split_type || 'percentage',
+        g.coaches || [],
       );
-      await loadDues(duesModal.group, duesYear, duesMonth);
+      await loadDues(g, duesYear, duesMonth);
     } catch (e) { alert(e.message); }
     finally { setPosting(false); }
   };
@@ -1082,6 +1229,15 @@ function GroupsScreen({ clubId }) {
   const totalDues   = dues.reduce((s, d) => s + (d.amount || 0), 0);
   const paidAmount  = dues.filter(d => d.is_paid).reduce((s, d) => s + (d.amount || 0), 0);
   const coachPct    = duesModal ? 100 - (duesModal.group.club_percentage ?? 100) : 0;
+  const calcClubAmount = () => {
+    if (!duesModal) return 0;
+    const g = duesModal.group;
+    if ((g.split_type || 'percentage') === 'fixed_amount' && g.coaches?.length > 0) {
+      const totalFixed = g.coaches.reduce((s, c) => s + (c.fixed_amount ?? 0), 0);
+      return Math.max(0, totalDues - Math.min(totalFixed, totalDues));
+    }
+    return Math.round(totalDues * ((g.club_percentage ?? 100) / 100) * 100) / 100;
+  };
 
   // ─────────────────────────────────────────────────────────────
   return (
@@ -1132,14 +1288,17 @@ function GroupsScreen({ clubId }) {
                       {fmtMoney(g.monthly_fee)}/ay
                     </span>
                   )}
-                  {coachShare > 0 && (
+                  {(g.coaches && g.coaches.length > 0
+                    ? g.coaches
+                    : g.coach ? [{ id: g.coach.id, full_name: g.coach.full_name, share_percentage: 100 }] : []
+                  ).map(c => (
+                    <span key={c.id} style={{ fontSize:12, color:'var(--brand-navy)', background:'#EEF2FF', border:'1px solid #C7D2FE', borderRadius:8, padding:'4px 9px', fontWeight:600 }}>
+                      {c.full_name}
+                    </span>
+                  ))}
+                  {coachShare > 0 && (!g.coaches || g.coaches.length === 0) && (
                     <span style={{ fontSize:12, color:'#8B5CF6', background:'#F3E8FF', border:'1px solid #DDD6FE', borderRadius:8, padding:'4px 9px' }}>
                       Koç %{coachShare}
-                    </span>
-                  )}
-                  {g.coach?.full_name && (
-                    <span style={{ fontSize:12, color:'var(--brand-navy)', background:'#EEF2FF', border:'1px solid #C7D2FE', borderRadius:8, padding:'4px 9px', fontWeight:600 }}>
-                      {g.coach.full_name}
                     </span>
                   )}
                 </div>
@@ -1202,30 +1361,126 @@ function GroupsScreen({ clubId }) {
                 onChange={e => setForm({...form, description: e.target.value})} style={{ resize:'vertical' }} />
             </Field>
 
-            <div className="fields-2">
-              <Field label="Aylık Ücret (₺)">
-                <input type="number" min={0} placeholder="0" value={form.monthly_fee ?? ''}
-                  onChange={e => setForm({...form, monthly_fee: e.target.value})} />
-              </Field>
-              <Field label="Kulüp Payı (%)">
-                <input type="number" min={0} max={100} placeholder="100" value={form.club_percentage ?? 100}
-                  onChange={e => setForm({...form, club_percentage: e.target.value})} />
-              </Field>
-            </div>
-
-            {Number(form.club_percentage) < 100 && (
-              <div style={{ background:'#F5F3FF', border:'1px solid #DDD6FE', borderRadius:8, padding:'8px 12px', fontSize:12, color:'#7C3AED' }}>
-                Koç payı: %{100 - Number(form.club_percentage || 0)}
-                {form.monthly_fee > 0 && ` · ${fmtMoney(Number(form.monthly_fee) * (1 - (form.club_percentage || 0) / 100))}/üye`}
-              </div>
-            )}
-
-            <Field label="Antrenör">
-              <select value={form.coach_id || ''} onChange={e => setForm({...form, coach_id: e.target.value})}>
-                <option value="">Antrenör seçin…</option>
-                {coaches.map(c => <option key={c.id} value={c.id}>{c.full_name}</option>)}
-              </select>
+            <Field label="Aylık Ücret (₺)">
+              <input type="number" min={0} placeholder="0" value={form.monthly_fee ?? ''}
+                onChange={e => setForm({...form, monthly_fee: e.target.value})} />
             </Field>
+
+            {/* Antrenörler — çoklu seçim */}
+            <Field label="ANTRENÖRLER (birden fazla seçilebilir)">
+              <div style={{ display:'flex', flexWrap:'wrap', gap:6, marginBottom:8 }}>
+                {coaches.length === 0
+                  ? <span style={{ fontSize:12, color:'var(--text-2)' }}>Aktif antrenör bulunamadı</span>
+                  : coaches.map(c => (
+                    <button key={c.id} type="button"
+                      className={'btn btn-sm ' + (selectedCoachIds.includes(c.id) ? 'btn-pri' : 'btn-ghost')}
+                      onClick={() => {
+                        const next = selectedCoachIds.includes(c.id)
+                          ? selectedCoachIds.filter(id => id !== c.id)
+                          : [...selectedCoachIds, c.id];
+                        setSelectedCoachIds(next);
+                        if (next.length > 0) {
+                          const equal = parseFloat((100 / next.length).toFixed(2));
+                          const s = {};
+                          next.forEach((id, i) => { s[id] = i === next.length - 1 ? (100 - equal * (next.length - 1)).toFixed(2) : equal.toFixed(2); });
+                          setCoachShares(s);
+                        } else { setCoachShares({}); }
+                      }}>
+                      {c.full_name}
+                    </button>
+                  ))
+                }
+              </div>
+            </Field>
+
+            {/* Pay Modeli — sadece antrenör seçiliyse */}
+            {selectedCoachIds.length > 0 && (
+              <>
+                <Field label="PAY MODELİ">
+                  <div style={{ display:'flex', gap:8 }}>
+                    <button type="button"
+                      className={'btn btn-sm ' + (splitType === 'percentage' ? 'btn-pri' : 'btn-ghost')}
+                      style={{ flex:1 }}
+                      onClick={() => setSplitType('percentage')}>% Yüzde</button>
+                    <button type="button"
+                      className={'btn btn-sm ' + (splitType === 'fixed_amount' ? 'btn-pri' : 'btn-ghost')}
+                      style={{ flex:1 }}
+                      onClick={() => setSplitType('fixed_amount')}>₺ Sabit Tutar</button>
+                  </div>
+                </Field>
+
+                {splitType === 'percentage' && (
+                  <>
+                    <Field label="Kulüp Payı (%)">
+                      <input type="number" min={0} max={100} placeholder="100" value={form.club_percentage ?? 100}
+                        onChange={e => setForm({...form, club_percentage: e.target.value})} />
+                    </Field>
+                    {Number(form.club_percentage) < 100 && (
+                      <div style={{ background:'#F5F3FF', border:'1px solid #DDD6FE', borderRadius:8, padding:'8px 12px', fontSize:12, color:'#7C3AED' }}>
+                        Antrenör payı: %{100 - Number(form.club_percentage || 0)}
+                      </div>
+                    )}
+                    {selectedCoachIds.length > 1 && (
+                      <div>
+                        <div style={{ fontSize:11, fontWeight:700, color:'var(--text-2)', marginBottom:8, display:'flex', justifyContent:'space-between', alignItems:'center' }}>
+                          <span>ANTRENÖR PAYLARI (toplam %100)</span>
+                          <button type="button" style={{ fontSize:11, color:'var(--brand-navy)', background:'none', border:'none', cursor:'pointer', fontWeight:600 }}
+                            onClick={() => {
+                              const equal = parseFloat((100 / selectedCoachIds.length).toFixed(2));
+                              const s = {};
+                              selectedCoachIds.forEach((id, i) => { s[id] = i === selectedCoachIds.length - 1 ? (100 - equal * (selectedCoachIds.length - 1)).toFixed(2) : equal.toFixed(2); });
+                              setCoachShares(s);
+                            }}>= Eşit Böl</button>
+                        </div>
+                        {selectedCoachIds.map(id => {
+                          const coach = coaches.find(c => c.id === id);
+                          return (
+                            <div key={id} style={{ display:'flex', alignItems:'center', gap:8, marginBottom:6 }}>
+                              <span style={{ flex:1, fontSize:13 }}>{coach?.full_name}</span>
+                              <input type="number" min={0} max={100} placeholder="0"
+                                value={coachShares[id] ?? ''}
+                                onChange={e => setCoachShares(p => ({...p, [id]: e.target.value}))}
+                                style={{ width:70, textAlign:'center', fontSize:13 }} />
+                              <span style={{ fontSize:13, color:'var(--text-2)' }}>%</span>
+                            </div>
+                          );
+                        })}
+                        {(() => {
+                          const total = selectedCoachIds.reduce((s, id) => s + (parseFloat(coachShares[id]) || 0), 0);
+                          const ok = Math.abs(total - 100) < 0.1;
+                          return <div style={{ fontSize:12, fontWeight:700, color: ok ? '#22C55E' : '#EF4444' }}>Toplam: %{total.toFixed(1)} {ok ? '✓' : '✗ (100 olmalı)'}</div>;
+                        })()}
+                      </div>
+                    )}
+                  </>
+                )}
+
+                {splitType === 'fixed_amount' && (
+                  <div>
+                    <div style={{ fontSize:11, fontWeight:700, color:'var(--text-2)', marginBottom:8, textTransform:'uppercase', letterSpacing:'0.05em' }}>
+                      Antrenör Sabit Tutarları (₺)
+                    </div>
+                    {selectedCoachIds.map(id => {
+                      const coach = coaches.find(c => c.id === id);
+                      return (
+                        <div key={id} style={{ display:'flex', alignItems:'center', gap:8, marginBottom:6 }}>
+                          <span style={{ flex:1, fontSize:13 }}>{coach?.full_name}</span>
+                          <input type="number" min={0} placeholder="0"
+                            value={coachFixedAmounts[id] ?? ''}
+                            onChange={e => setCoachFixedAmounts(p => ({...p, [id]: e.target.value}))}
+                            style={{ width:100, fontSize:13 }} />
+                          <span style={{ fontSize:13, color:'var(--text-2)' }}>₺</span>
+                        </div>
+                      );
+                    })}
+                    <div style={{ fontSize:12, color:'var(--text-2)', marginTop:4 }}>Girilen tutarlar toplamı hocalara dağıtılır, geri kalan kulübe gider</div>
+                  </div>
+                )}
+              </>
+            )}
+            {selectedCoachIds.length === 0 && (
+              <div style={{ fontSize:12, color:'var(--text-2)' }}>Antrenör seçilmezse tüm aidat kulübe gider</div>
+            )}
 
             <Switch on={form.is_active !== false} onChange={v => setForm({...form, is_active: v})} label="Aktif Grup" />
 
@@ -1235,7 +1490,7 @@ function GroupsScreen({ clubId }) {
                 <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', marginBottom:8 }}>
                   <div style={{ fontWeight:700, fontSize:13, color:'var(--text-2)' }}>
                     Üyeler <span style={{ color:'var(--danger)' }}>*</span>
-                    <span style={{ fontWeight:400, marginLeft:6, fontSize:12 }}>(en az 3)</span>
+                    <span style={{ fontWeight:400, marginLeft:6, fontSize:12 }}>(en az 2)</span>
                   </div>
                   <button className="btn btn-ghost btn-sm" onClick={addNewMemberRow}>
                     <span className="material-icons" style={{fontSize:14}}>add</span> Üye Ekle
@@ -1243,7 +1498,7 @@ function GroupsScreen({ clubId }) {
                 </div>
                 <div style={{ display:'flex', flexDirection:'column', gap:8 }}>
                   {newMembers.map((m, idx) => (
-                    <div key={idx} style={{ display:'grid', gridTemplateColumns:'2fr 1.5fr 1.5fr auto', gap:6, alignItems:'center' }}>
+                    <div key={idx} style={{ display:'grid', gridTemplateColumns:'2fr 1.2fr 1.2fr 1fr auto', gap:6, alignItems:'center' }}>
                       <input placeholder={`Üye ${idx+1} adı *`} value={m.member_name}
                         onChange={e => updateNewMember(idx, 'member_name', e.target.value)}
                         style={{ fontSize:13 }} />
@@ -1253,7 +1508,10 @@ function GroupsScreen({ clubId }) {
                       <input placeholder="Veli / İletişim" value={m.contact_person}
                         onChange={e => updateNewMember(idx, 'contact_person', e.target.value)}
                         style={{ fontSize:13 }} />
-                      {newMembers.length > 3 && (
+                      <input type="number" min={0} placeholder={`Özel ücret (₺)`} value={m.custom_fee ?? ''}
+                        onChange={e => updateNewMember(idx, 'custom_fee', e.target.value)}
+                        style={{ fontSize:13 }} title="Boş bırakılırsa grup aidatı uygulanır" />
+                      {newMembers.length > 2 && (
                         <button className="btn btn-danger btn-sm btn-icon" onClick={() => removeNewMemberRow(idx)}>
                           <span className="material-icons" style={{fontSize:14}}>remove</span>
                         </button>
@@ -1280,6 +1538,8 @@ function GroupsScreen({ clubId }) {
               setDayCoachIds={setDayCoachIds}
               schedConflicts={schedConflicts}
               schedChecking={schedChecking}
+              use15Min={use15Min}
+              setUse15Min={setUse15Min}
               compact
             />
           </div>
@@ -1308,9 +1568,10 @@ function GroupsScreen({ clubId }) {
                       <Av name={m.member_name} size="sm" />
                       <div style={{ flex:1, minWidth:0 }}>
                         <div style={{ fontWeight:600, fontSize:13 }}>{m.member_name}</div>
-                        <div style={{ fontSize:11, color:'var(--text-2)', display:'flex', gap:8, marginTop:2 }}>
+                        <div style={{ fontSize:11, color:'var(--text-2)', display:'flex', gap:8, marginTop:2, flexWrap:'wrap' }}>
                           {m.contact_number && <span>📞 {m.contact_number}</span>}
                           {m.contact_person && <span>👤 {m.contact_person}</span>}
+                          {m.custom_fee != null && <span style={{ color:'#7C3AED', fontWeight:600 }}>💰 {fmtMoney(m.custom_fee)}/ay</span>}
                         </div>
                       </div>
                       <button className="btn btn-ghost btn-sm btn-icon" title="Düzenle" onClick={() => setEditMemberRow(m.id)}>
@@ -1329,7 +1590,7 @@ function GroupsScreen({ clubId }) {
           {/* Yeni üye ekle */}
           <div style={{ borderTop:'1px solid var(--border)', paddingTop:14 }}>
             <div style={{ fontWeight:700, fontSize:13, color:'var(--text-2)', marginBottom:8 }}>Yeni Üye Ekle</div>
-            <div style={{ display:'grid', gridTemplateColumns:'2fr 1.5fr 1.5fr', gap:8, marginBottom:10 }}>
+            <div style={{ display:'grid', gridTemplateColumns:'2fr 1.2fr 1.2fr 1fr', gap:8, marginBottom:10 }}>
               <input placeholder="Üye adı soyadı *" value={addMemberForm.member_name || ''}
                 onChange={e => setAddMemberForm({...addMemberForm, member_name: e.target.value})}
                 style={{ fontSize:13 }} />
@@ -1339,6 +1600,9 @@ function GroupsScreen({ clubId }) {
               <input placeholder="Veli / İletişim kişisi" value={addMemberForm.contact_person || ''}
                 onChange={e => setAddMemberForm({...addMemberForm, contact_person: e.target.value})}
                 style={{ fontSize:13 }} />
+              <input type="number" min={0} placeholder="Özel ücret (₺)" value={addMemberForm.custom_fee || ''}
+                onChange={e => setAddMemberForm({...addMemberForm, custom_fee: e.target.value})}
+                style={{ fontSize:13 }} title="Boş bırakılırsa grup aidatı uygulanır" />
             </div>
             <button className="btn btn-pri btn-sm" onClick={addMember} disabled={memberSaving}>
               <span className="material-icons" style={{fontSize:14}}>person_add</span>
@@ -1435,12 +1699,31 @@ function GroupsScreen({ clubId }) {
               {/* Finansa aktar */}
               {!duesPost && dues.length > 0 && (
                 <div style={{ display:'flex', flexDirection:'column', gap:8, borderTop:'1px solid var(--border)', paddingTop:14 }}>
-                  {coachPct > 0 && (
-                    <div style={{ background:'#F5F3FF', border:'1px solid #DDD6FE', borderRadius:8, padding:'8px 12px', fontSize:12, color:'#7C3AED' }}>
-                      Finanslara aktarıldığında: Kulüp <strong>{fmtMoney(totalDues * (duesModal.group.club_percentage ?? 100) / 100)}</strong>
-                      {' · '}Koç <strong>{fmtMoney(totalDues * coachPct / 100)}</strong>
-                    </div>
-                  )}
+                  {(duesModal.group.coaches?.length > 0 || coachPct > 0) && (() => {
+                    const g = duesModal.group;
+                    const clubAmt = calcClubAmount();
+                    const coachAmt = Math.round((totalDues - clubAmt) * 100) / 100;
+                    return (
+                      <div style={{ background:'#F5F3FF', border:'1px solid #DDD6FE', borderRadius:8, padding:'8px 12px', fontSize:12, color:'#7C3AED' }}>
+                        <div>Finanslara aktarıldığında: Kulüp <strong>{fmtMoney(clubAmt)}</strong>
+                          {coachAmt > 0 && <> · Antrenör(ler) <strong>{fmtMoney(coachAmt)}</strong></>}
+                        </div>
+                        {g.coaches?.length > 1 && (
+                          <div style={{ marginTop:6, display:'flex', flexDirection:'column', gap:2 }}>
+                            {g.coaches.map(c => {
+                              let amt;
+                              if ((g.split_type || 'percentage') === 'fixed_amount') {
+                                amt = c.fixed_amount ?? 0;
+                              } else {
+                                amt = Math.round(coachAmt * ((c.share_percentage ?? 100) / 100) * 100) / 100;
+                              }
+                              return <span key={c.id}>{c.full_name}: <strong>{fmtMoney(amt)}</strong></span>;
+                            })}
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })()}
                   <button
                     className="btn btn-pri"
                     style={{ alignSelf:'flex-start' }}
@@ -1513,6 +1796,8 @@ function GroupsScreen({ clubId }) {
             setDayCoachIds={setDayCoachIds}
             schedConflicts={schedConflicts}
             schedChecking={schedChecking}
+            use15Min={use15Min}
+            setUse15Min={setUse15Min}
           />
         </Modal>
       )}
@@ -1957,15 +2242,18 @@ function EditMemberRow({ member, onSave, onCancel }) {
     member_name:    member.member_name    || '',
     contact_number: member.contact_number || '',
     contact_person: member.contact_person || '',
+    custom_fee:     member.custom_fee != null ? String(member.custom_fee) : '',
   });
   return (
-    <div style={{ display:'grid', gridTemplateColumns:'2fr 1.5fr 1.5fr auto auto', gap:6, alignItems:'center', background:'#EEF2FF', borderRadius:10, padding:'8px 10px', border:'1px solid #C7D2FE' }}>
+    <div style={{ display:'grid', gridTemplateColumns:'2fr 1.2fr 1.2fr 1fr auto auto', gap:6, alignItems:'center', background:'#EEF2FF', borderRadius:10, padding:'8px 10px', border:'1px solid #C7D2FE' }}>
       <input value={vals.member_name} placeholder="Üye adı *"
         onChange={e => setVals({...vals, member_name: e.target.value})} style={{ fontSize:13 }} />
       <input value={vals.contact_number} placeholder="Telefon"
         onChange={e => setVals({...vals, contact_number: e.target.value})} style={{ fontSize:13 }} />
       <input value={vals.contact_person} placeholder="Veli / İletişim"
         onChange={e => setVals({...vals, contact_person: e.target.value})} style={{ fontSize:13 }} />
+      <input type="number" min={0} value={vals.custom_fee} placeholder="Özel ücret (₺)"
+        onChange={e => setVals({...vals, custom_fee: e.target.value})} style={{ fontSize:13 }} title="Boş bırakılırsa grup aidatı uygulanır" />
       <button className="btn btn-success btn-sm btn-icon" onClick={() => onSave(member.id, vals)}>
         <span className="material-icons" style={{fontSize:14}}>check</span>
       </button>
