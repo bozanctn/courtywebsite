@@ -45,6 +45,7 @@ input, select, textarea { font: inherit; color: inherit; }
 }
 
 /* ─── Sidebar ─── */
+.shell { transition: grid-template-columns 220ms ease; }
 .side {
   background: var(--side-bg, #FFFFFF);
   color: var(--side-fg, var(--text-1));
@@ -52,6 +53,7 @@ input, select, textarea { font: inherit; color: inherit; }
   display: flex; flex-direction: column;
   position: sticky; top: 0; height: 100vh;
   overflow: hidden;
+  transition: width 220ms ease;
 }
 .side-brand {
   display: flex; align-items: center; gap: 10px;
@@ -131,6 +133,36 @@ input, select, textarea { font: inherit; color: inherit; }
 }
 .side-foot button:hover { background: var(--side-hover, var(--bg)); color: var(--side-fg, var(--text-1)); }
 .side-foot .material-icons { font-size: 16px; }
+
+/* ─── Sidebar toggle button ─── */
+.side-toggle {
+  margin-left: auto;
+  background: none; border: none; cursor: pointer;
+  display: flex; align-items: center; justify-content: center;
+  width: 28px; height: 28px; border-radius: 6px;
+  color: var(--side-fg-2, var(--text-2));
+  transition: background 120ms;
+  flex-shrink: 0;
+}
+.side-toggle:hover { background: var(--side-hover, var(--bg)); }
+.side-toggle .material-icons { font-size: 18px; }
+
+/* ─── Collapsed sidebar ─── */
+.side-collapsed .side-brand { justify-content: center; padding: 18px 10px 16px; }
+.side-collapsed .side-nav { padding: 8px 6px 16px; }
+.side-collapsed .side-item-collapsed {
+  justify-content: center;
+  padding: 10px 6px;
+  gap: 0;
+}
+.side-collapsed .side-item-collapsed .material-icons { font-size: 20px; }
+.side-collapsed .side-item-collapsed .ct {
+  position: absolute; top: 4px; right: 4px;
+  margin-left: 0;
+  min-width: 14px; height: 14px; font-size: 9px;
+}
+.side-collapsed .side-foot { padding: 10px 6px 14px; justify-content: center; }
+.side-collapsed .side-foot button { padding: 10px 6px; }
 
 /* ─── Main column ─── */
 .main { display: flex; flex-direction: column; min-width: 0; }

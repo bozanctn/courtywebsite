@@ -82,6 +82,7 @@ function DashboardScreen({ clubId, clubProfile, setScreen }) {
   const [pendingMem,  setPendingMem]  = useState(0);
   const [courtCount,  setCourtCount]  = useState(0);
   const [bookings,    setBookings]    = useState([]);
+  const [courts,      setCourts]      = useState([]);
 
   useEffect(() => { if (clubId) load(); }, [clubId]);
 
@@ -113,9 +114,10 @@ function DashboardScreen({ clubId, clubProfile, setScreen }) {
           .eq('club_id', clubId)
           .eq('status', 'pending'),
         sb.from('courts')
-          .select('*', { count: 'exact', head: true })
+          .select('id,court_number,court_type,hourly_rate,is_indoor,is_active')
           .eq('club_id', clubId)
-          .eq('is_active', true),
+          .eq('is_active', true)
+          .order('court_number'),
       ]);
 
       const rows = (bRes.data || []).map(b => ({
@@ -123,19 +125,23 @@ function DashboardScreen({ clubId, clubProfile, setScreen }) {
         start_time: dbTimeToLocal(b.start_time),
         end_time:   dbTimeToLocal(b.end_time),
       }));
+      const courtList = courtRes.data || [];
       setBookings(rows);
+      setCourts(courtList);
       setTodayCount(rows.length);
       // payment_status filtresi JS tarafında (DB'de alan var ama opsiyonel)
       setPendingPay(rows.filter(b => b.payment_status !== 'paid').length);
       setPendingMem(pendMemRes.count ?? 0);
-      setCourtCount(courtRes.count ?? 0);
+      setCourtCount(courtList.length);
     } catch (e) { console.error(e); }
     finally { setLoading(false); }
   };
 
   const TILES = [
     { icon: 'event_available', label: 'Rezervasyonlar', screen: 'reservations', color: '#003399' },
-    { icon: 'bar_chart',       label: 'Analitik',        screen: 'analytics',    color: '#8B5CF6' },
+    { icon: 'calendar_today',  label: 'Program',         screen: 'program',      color: '#6366F1' },
+    { icon: 'sports_tennis',   label: 'Kortlar',          screen: 'courts',       color: '#0891B2' },
+    { icon: 'bar_chart',       label: 'Analitik',         screen: 'analytics',    color: '#8B5CF6' },
     { icon: 'person',          label: 'Koçlar',           screen: 'coaches',      color: '#0D9488' },
     { icon: 'emoji_events',    label: 'Turnuvalar',       screen: 'tournaments',  color: '#F97316' },
     { icon: 'groups',          label: 'Gruplar',          screen: 'groups',       color: '#0EA5E9' },
@@ -179,7 +185,7 @@ function DashboardScreen({ clubId, clubProfile, setScreen }) {
         </div>
       </div>
 
-      {/* Bugünkü rezervasyonlar */}
+      {/* Bugünkü rezervasyonlar + Program kısayolu */}
       <div className="row2">
         <div className="card tight">
           <div className="card-h">
@@ -195,6 +201,21 @@ function DashboardScreen({ clubId, clubProfile, setScreen }) {
         </div>
 
         <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+          {/* Program kısayolu */}
+          <div className="card" style={{ cursor: 'pointer', border: '1.5px solid #6366F122' }} onClick={() => setScreen('program')}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+              <div style={{ width: 44, height: 44, borderRadius: 12, background: '#EEF2FF', display: 'grid', placeItems: 'center', flexShrink: 0 }}>
+                <span className="material-icons" style={{ color: '#6366F1', fontSize: 22 }}>calendar_today</span>
+              </div>
+              <div style={{ flex: 1 }}>
+                <div style={{ fontWeight: 700, fontSize: 15, color: 'var(--text-1)' }}>Program</div>
+                <div style={{ fontSize: 12, color: 'var(--text-2)', marginTop: 2 }}>Günlük kort takvimini görüntüle</div>
+              </div>
+              <span className="material-icons" style={{ color: 'var(--text-3, #cbd5e1)', fontSize: 18 }}>chevron_right</span>
+            </div>
+          </div>
+
+          {/* Kulüp Bilgileri */}
           <div className="card">
             <div className="row between" style={{ marginBottom: 12 }}>
               <span style={{ fontWeight: 700, fontSize: 15 }}>Kulüp Bilgileri</span>
@@ -213,6 +234,45 @@ function DashboardScreen({ clubId, clubProfile, setScreen }) {
           </div>
         </div>
       </div>
+
+      {/* Kortlar Önizleme */}
+      {courts.length > 0 && (
+        <div className="card tight" style={{ marginTop: 0 }}>
+          <div className="card-h">
+            <h3>Kortlar</h3>
+            <div className="right">
+              <a onClick={() => setScreen('courts')} style={{ cursor: 'pointer' }}>Tümünü Gör</a>
+            </div>
+          </div>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(180px, 1fr))', gap: 12, padding: '12px 16px 16px' }}>
+            {courts.map(c => {
+              const todayBkCount = bookings.filter(b => b.court_id === c.id).length;
+              const typeLabel = c.court_type === 'clay' ? 'Toprak' : c.court_type === 'hard' ? 'Sert' : c.court_type === 'grass' ? 'Çim' : c.court_type === 'indoor' ? 'Kapalı' : c.court_type || '—';
+              return (
+                <div key={c.id}
+                  onClick={() => setScreen('courts')}
+                  style={{ background: 'var(--bg)', borderRadius: 12, padding: '14px 16px', border: '1px solid var(--border)', cursor: 'pointer', transition: 'box-shadow 0.15s' }}
+                  onMouseEnter={e => e.currentTarget.style.boxShadow = '0 4px 16px rgba(0,0,0,0.10)'}
+                  onMouseLeave={e => e.currentTarget.style.boxShadow = ''}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
+                    <span style={{ fontSize: 16, fontWeight: 800, color: 'var(--text-1)' }}>Kort {c.court_number}</span>
+                    <div style={{ width: 8, height: 8, borderRadius: '50%', background: todayBkCount > 0 ? '#EF4444' : '#22C55E' }} />
+                  </div>
+                  <div style={{ fontSize: 12, color: 'var(--text-2)', marginBottom: 4 }}>
+                    {typeLabel}{c.is_indoor ? ' · Kapalı' : ' · Açık'}
+                  </div>
+                  {c.hourly_rate > 0 && (
+                    <div style={{ fontSize: 12, color: 'var(--text-2)' }}>₺{c.hourly_rate}/saat</div>
+                  )}
+                  <div style={{ marginTop: 8, fontSize: 11, fontWeight: 700, color: todayBkCount > 0 ? '#DC2626' : '#16A34A' }}>
+                    {todayBkCount > 0 ? `${todayBkCount} rezervasyon` : 'Müsait'}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -237,6 +297,18 @@ function ReservationsScreen({ clubId, setScreen }) {
   const [modal,     setModal]     = useState(null);
   const [form,      setForm]      = useState({});
   const [saving,    setSaving]    = useState(false);
+
+  // Yeni rezervasyon bottom-sheet modalı
+  const [bkModalVisible,  setBkModalVisible]  = useState(false);
+  const [bkForm,          setBkForm]          = useState({});
+  const [bkAvailCourts,   setBkAvailCourts]   = useState([]);
+  const [bkCourtsLoading, setBkCourtsLoading] = useState(false);
+  const [bkSaving,        setBkSaving]        = useState(false);
+  const [bkMemberId,      setBkMemberId]      = useState(null);
+  const [bkMemberName,    setBkMemberName]    = useState('');
+  const [bkMemberQuery,   setBkMemberQuery]   = useState('');
+  const [bkMemberResults, setBkMemberResults] = useState([]);
+  const [bkMemberLoading, setBkMemberLoading] = useState(false);
 
   // Özel dersler state
   const [lessons,      setLessons]      = useState([]);
@@ -264,8 +336,26 @@ function ReservationsScreen({ clubId, setScreen }) {
     if (!p) return;
     if (p.type === 'reservation') {
       window.__slotPrefill = null;
-      setForm({ start_time: `${p.date}T${p.start_time}`, end_time: `${p.date}T${p.end_time}`, court_id: p.court_id, status: 'confirmed', notes: '' });
-      setModal({ type: 'add' });
+      const [sh, sm] = p.start_time.split(':').map(Number);
+      const [eh, em] = p.end_time.split(':').map(Number);
+      const dMins = (eh * 60 + em) - (sh * 60 + sm);
+      const dur = [0.75, 1.0, 1.5, 2.0].reduce((prev, cur) =>
+        Math.abs(cur * 60 - dMins) < Math.abs(prev * 60 - dMins) ? cur : prev
+      );
+      setBkForm({ courtId: p.court_id, date: p.date, startTime: p.start_time, endTime: p.end_time, duration: dur, status: 'confirmed' });
+      setBkMemberId(null); setBkMemberName(''); setBkMemberQuery(''); setBkMemberResults([]);
+      setBkModalVisible(true);
+      // Courts henüz yüklenmemişse önce yükle
+      if (courts.length > 0) {
+        loadBkAvailCourts(p.date, p.start_time, p.end_time);
+      } else {
+        sb.from('courts').select('id,court_number,court_type,hourly_rate,is_indoor').eq('club_id', clubId).eq('is_active', true).order('court_number')
+          .then(({ data }) => {
+            const list = data || [];
+            setCourts(list);
+            loadBkAvailCourts(p.date, p.start_time, p.end_time, list);
+          });
+      }
     } else if (p.type === 'lesson') {
       // Özel ders: coaches yüklendikten sonra açılacak — loadLessons içinde handle ediliyor
       setMainTab('lessons');
@@ -285,7 +375,7 @@ function ReservationsScreen({ clubId, setScreen }) {
   }, [lessonForm.duration, lessonForm.start_time]);
 
   const loadCourts = async () => {
-    const { data } = await sb.from('courts').select('id,court_number,court_type,hourly_rate').eq('club_id', clubId).eq('is_active', true);
+    const { data } = await sb.from('courts').select('id,court_number,court_type,hourly_rate,is_indoor').eq('club_id', clubId).eq('is_active', true);
     setCourts(data || []);
   };
 
@@ -297,6 +387,7 @@ function ReservationsScreen({ clubId, setScreen }) {
     const { data } = await sb.from('bookings')
       .select('start_time')
       .in('court_id', courtIds)
+      .neq('status', 'cancelled')
       .gte('start_time', from.toISOString())
       .lte('start_time', to.toISOString());
     const dates = [...new Set((data || []).map(b => b.start_time.split('T')[0]))];
@@ -319,12 +410,20 @@ function ReservationsScreen({ clubId, setScreen }) {
         .select('*, courts!bookings_court_id_fkey(court_number,court_type), booking_players!booking_players_booking_id_fkey(player_id, is_primary_player, profiles!booking_players_player_id_fkey(id,full_name,email))')
         .in('court_id', courtIds)
         .neq('status', 'cancelled')
+        .is('lesson_id', null)
         .gte('start_time', startDb)
         .lte('start_time', endDb)
         .order('start_time', { ascending: true });
       if (error) { console.error('loadDay error:', error); setBookings([]); return; }
+      // Pending bookingleri otomatik onayla
+      const pendingIds = (data || []).filter(b => b.status === 'pending').map(b => b.id);
+      if (pendingIds.length > 0) {
+        sb.from('bookings').update({ status: 'confirmed' }).in('id', pendingIds)
+          .then(() => {}).catch(e => console.warn('Auto-confirm error:', e));
+      }
       setBookings((data || []).map(b => ({
         ...b,
+        status:     b.status === 'pending' ? 'confirmed' : b.status,
         start_time: dbTimeToLocal(b.start_time),
         end_time:   dbTimeToLocal(b.end_time),
       })));
@@ -343,29 +442,29 @@ function ReservationsScreen({ clubId, setScreen }) {
         const { error } = await sb.from('bookings').update({ status }).eq('id', id);
         if (error) throw error;
         if (booking?.user_id) {
-          await sb.from('notifications').insert({
+          sb.from('notifications').insert({
             user_id: booking.user_id,
             title:   'Rezervasyon İptal Edildi',
             message: 'Rezervasyonunuz kulüp tarafından iptal edildi.',
             type:    'reservation_cancelled',
             data:    { booking_id: id },
-          });
+          }).then(() => {}).catch(e => console.warn('Bildirim gönderilemedi:', e));
         }
       } else {
         const { error } = await sb.from('bookings').update({ status }).eq('id', id);
         if (error) throw error;
         if (status === 'confirmed' && booking?.user_id) {
-          await sb.from('notifications').insert({
+          sb.from('notifications').insert({
             user_id: booking.user_id,
             title:   'Rezervasyon Onaylandı',
             message: 'Rezervasyonunuz kulüp tarafından onaylandı.',
             type:    'reservation_confirmed',
             data:    { booking_id: id },
-          });
+          }).then(() => {}).catch(e => console.warn('Bildirim gönderilemedi:', e));
         }
       }
-      loadDay();
-    } catch (e) { alert(e.message); }
+    } catch (e) { alert(e.message); return; }
+    loadDay();
   };
 
   const markBookingPaid = async (booking) => {
@@ -392,9 +491,177 @@ function ReservationsScreen({ clubId, setScreen }) {
   };
 
   const openAdd = () => {
-    const dt = selDate + 'T09:00';
-    setForm({ start_time: dt, end_time: selDate + 'T10:00', court_id: courts[0]?.id || '', status: 'confirmed', notes: '' });
-    setModal({ type: 'add' });
+    const startTime = '09:00';
+    const endTime   = '10:00';
+    setBkForm({ courtId: courts[0]?.id || '', date: selDate, startTime, endTime, duration: 1.0, status: 'confirmed' });
+    setBkMemberId(null); setBkMemberName(''); setBkMemberQuery(''); setBkMemberResults([]);
+    loadBkAvailCourts(selDate, startTime, endTime);
+    setBkModalVisible(true);
+  };
+
+  // ── Yeni Rezervasyon Modal Fonksiyonları ────────────────────
+  const loadBkAvailCourts = async (date, startTime, endTime, courtList) => {
+    const list = courtList ?? courts;
+    if (!date || !startTime || !endTime || list.length === 0) {
+      setBkAvailCourts([...list]); return;
+    }
+    setBkCourtsLoading(true);
+    try {
+      const startDb = localTimeToDb(`${date}T${startTime}`);
+      const endDb   = localTimeToDb(`${date}T${endTime}`);
+      const allIds  = list.map(c => c.id);
+      const blocked = new Set();
+      const [bRes, lRes, mlRes, clRes] = await Promise.all([
+        sb.from('bookings').select('court_id').in('court_id', allIds)
+          .in('status',['pending','confirmed']).lt('start_time', endDb).gt('end_time', startDb),
+        sb.from('lessons').select('court_id').in('court_id', allIds)
+          .neq('status','cancelled').lt('start_time', endDb).gt('end_time', startDb).not('court_id','is',null),
+        sb.from('club_manual_lessons').select('court_id, start_time, end_time')
+          .in('court_id', allIds).eq('date', date).not('court_id','is',null),
+        sb.from('court_closures').select('court_id, closure_type, day_of_week, start_hour, start_minute, end_hour, end_minute, start_date, end_date')
+          .in('court_id', allIds).eq('is_active', true),
+      ]);
+      (bRes.data  || []).forEach(r => blocked.add(r.court_id));
+      (lRes.data  || []).forEach(r => blocked.add(r.court_id));
+      const [sh, sm] = startTime.split(':').map(Number);
+      const [eh, em] = endTime.split(':').map(Number);
+      const newStart = sh * 60 + sm;
+      const newEnd   = eh * 60 + em;
+      for (const ml of mlRes.data || []) {
+        const [msh, msm] = ml.start_time.split(':').map(Number);
+        const [meh, mem] = ml.end_time.split(':').map(Number);
+        if (newStart < meh * 60 + mem && newEnd > msh * 60 + msm) blocked.add(ml.court_id);
+      }
+      const dow = new Date(date + 'T12:00:00').getDay();
+      for (const cl of clRes.data || []) {
+        const clStart = (cl.start_hour||0) * 60 + (cl.start_minute||0);
+        const clEnd   = (cl.end_hour||0) * 60 + (cl.end_minute||0);
+        if (newStart >= clEnd || newEnd <= clStart) continue;
+        if (cl.closure_type === 'recurring_weekly' && cl.day_of_week === dow) blocked.add(cl.court_id);
+        else if (cl.closure_type === 'one_time') {
+          if ((!cl.start_date || cl.start_date <= date) && (!cl.end_date || cl.end_date >= date)) blocked.add(cl.court_id);
+        }
+      }
+      setBkAvailCourts(list.filter(c => !blocked.has(c.id)));
+    } catch(e) { console.error(e); setBkAvailCourts([...list]); }
+    finally { setBkCourtsLoading(false); }
+  };
+
+  const handleBkDuration = (d) => {
+    const [sh, sm] = (bkForm.startTime || '09:00').split(':').map(Number);
+    const totalMin = sh * 60 + sm + Math.round(d * 60);
+    const eh = Math.floor(totalMin / 60) % 24;
+    const em = totalMin % 60;
+    const newEnd = `${String(eh).padStart(2,'0')}:${String(em).padStart(2,'0')}`;
+    const newForm = { ...bkForm, duration: d, endTime: newEnd };
+    setBkForm(newForm);
+    loadBkAvailCourts(newForm.date, newForm.startTime, newEnd);
+  };
+
+  const searchBkMembers = async (q) => {
+    setBkMemberQuery(q);
+    if (q.length < 2) { setBkMemberResults([]); return; }
+    setBkMemberLoading(true);
+    try {
+      const { data } = await sb.from('profiles')
+        .select('id, full_name, email')
+        .ilike('full_name', `%${q}%`)
+        .limit(8);
+      setBkMemberResults(data || []);
+    } catch(e) { console.error(e); }
+    finally { setBkMemberLoading(false); }
+  };
+
+  const saveBkBooking = async () => {
+    const { courtId, date, startTime, endTime, duration, status } = bkForm;
+    if (!courtId)   { alert('Lütfen bir kort seçin.'); return; }
+    if (!startTime) { alert('Başlangıç saati eksik.');  return; }
+
+    // Üyelik limit kontrolü
+    if (bkMemberId) {
+      const startDT = `${date}T${startTime}`;
+      const warnings = await checkMembershipLimits(bkMemberId, startDT);
+      if (warnings.length > 0) {
+        const ok = confirm('⚠️ Üyelik Uyarısı:\n\n' + warnings.join('\n') + '\n\nYine de rezervasyon oluşturulsun mu?');
+        if (!ok) return;
+      }
+    }
+
+    const startDb = localTimeToDb(`${date}T${startTime}`);
+    const endDb   = localTimeToDb(`${date}T${endTime}`);
+
+    if (new Date(startDb) < new Date()) {
+      const ok = confirm('Geçmiş bir saate rezervasyon oluşturulsun mu?');
+      if (!ok) return;
+    }
+
+    const [sh, sm] = startTime.split(':').map(Number);
+    const [eh, em] = endTime.split(':').map(Number);
+    const newStart = sh * 60 + sm;
+    const newEnd   = eh * 60 + em;
+    const dow      = new Date(date + 'T12:00:00').getDay();
+
+    setBkSaving(true);
+    try {
+      const [bConflict, mConflict, closures] = await Promise.all([
+        sb.from('bookings').select('id').eq('court_id', courtId)
+          .in('status',['pending','confirmed']).lt('start_time', endDb).gt('end_time', startDb),
+        sb.from('club_manual_lessons').select('id, start_time, end_time')
+          .eq('court_id', courtId).eq('date', date),
+        sb.from('court_closures').select('*').eq('court_id', courtId).eq('is_active', true),
+      ]);
+      if ((bConflict.data || []).length > 0) {
+        alert('Bu kort seçilen saatte zaten rezerve edilmiş.'); return;
+      }
+      const hasManualConflict = (mConflict.data || []).some(l => {
+        const [lsh, lsm] = l.start_time.split(':').map(Number);
+        const [leh, lem] = l.end_time.split(':').map(Number);
+        return newStart < leh * 60 + lem && newEnd > lsh * 60 + lsm;
+      });
+      if (hasManualConflict) { alert('Bu kort seçilen saatte planlanmış bir ders var.'); return; }
+      const closureBlock = (closures.data || []).some(cl => {
+        const clStart = (cl.start_hour||0) * 60 + (cl.start_minute||0);
+        const clEnd   = (cl.end_hour||0) * 60 + (cl.end_minute||0);
+        if (newStart >= clEnd || newEnd <= clStart) return false;
+        if (cl.closure_type === 'recurring_weekly') return cl.day_of_week === dow;
+        return (!cl.start_date || cl.start_date <= date) && (!cl.end_date || cl.end_date >= date);
+      });
+      if (closureBlock) { alert('Bu kort seçilen saatte kapalı (bakım veya etkinlik).'); return; }
+
+      const { data: { user } } = await sb.auth.getUser();
+      if (!user) throw new Error('Oturum bulunamadı.');
+
+      const court = courts.find(c => c.id === courtId);
+      const durationHours = (newEnd - newStart) / 60;
+      const totalAmount   = Math.round((court?.hourly_rate || 0) * durationHours * 100) / 100;
+
+      const { data: bk, error: bkErr } = await sb.from('bookings').insert({
+        court_id:        courtId,
+        user_id:         user.id,
+        start_time:      startDb,
+        end_time:        endDb,
+        status:          status || 'confirmed',
+        is_solo_booking: !bkMemberId,
+        duration_hours:  durationHours,
+        total_amount:    totalAmount,
+      }).select().single();
+      if (bkErr) throw bkErr;
+
+      if (bkMemberId && bk?.id) {
+        await sb.from('booking_players').insert({
+          booking_id:        bk.id,
+          player_id:         bkMemberId,
+          is_primary_player: true,
+          status:            'confirmed',
+        });
+      }
+
+      setBkModalVisible(false);
+      loadDay();
+      loadDotDates();
+      alert('Rezervasyon başarıyla oluşturuldu.');
+    } catch(e) { alert('Hata: ' + e.message); }
+    finally { setBkSaving(false); }
   };
 
   // ── Üyelik limit kontrolü ───────────────────────────────────
@@ -1199,24 +1466,29 @@ function ReservationsScreen({ clubId, setScreen }) {
                         </div>
                         {b.notes && <div style={{ fontSize: 11, color: 'var(--text-2)', marginTop: 2 }}>{b.notes}</div>}
                       </div>
-                      <div style={{ display:'flex', gap:4, alignItems:'center' }}>
-                        {b.payment_status !== 'paid' && ['confirmed','completed'].includes(b.status) ? (
+                      <div style={{ display:'flex', gap:4, alignItems:'center', flexWrap:'wrap' }}>
+                        {/* Ödeme Al / Ödendi rozeti */}
+                        {b.payment_status !== 'paid' && b.status !== 'cancelled' ? (
                           <button className="btn btn-success btn-sm" style={{ fontSize:11, padding:'4px 10px', display:'flex', alignItems:'center', gap:4 }}
                             onClick={() => markBookingPaid(b)}>
                             <span className="material-icons" style={{fontSize:13}}>payments</span>
                             Ödeme Al{b.total_amount > 0 ? ` · ₺${Number(b.total_amount).toLocaleString('tr-TR')}` : ''}
                           </button>
-                        ) : (
+                        ) : b.status !== 'cancelled' ? (
                           <Badge cls={paymentClass(b.payment_status)}>{paymentLabel(b.payment_status)}</Badge>
-                        )}
+                        ) : null}
+                        {/* Tamamlandı */}
                         {b.status === 'confirmed' && (
                           <button className="btn btn-ghost btn-sm btn-icon" title="Tamamlandı" onClick={() => updateStatus(b.id, 'completed', b)}>
                             <span className="material-icons" style={{fontSize:15}}>done_all</span>
                           </button>
                         )}
-                        {['confirmed','completed'].includes(b.status) && (
-                          <button className="btn btn-danger btn-sm btn-icon" title="İptal Et" onClick={() => updateStatus(b.id, 'cancelled', b)}>
-                            <span className="material-icons" style={{fontSize:15}}>close</span>
+                        {/* İptal — mobilden kopyalandı */}
+                        {b.status !== 'cancelled' && b.status !== 'completed' && (
+                          <button className="btn btn-danger btn-sm" style={{ display:'flex', alignItems:'center', gap:4, fontSize:11 }}
+                            onClick={() => updateStatus(b.id, 'cancelled', b)}>
+                            <span className="material-icons" style={{fontSize:13}}>close</span>
+                            İptal Et
                           </button>
                         )}
                       </div>
@@ -1367,41 +1639,223 @@ function ReservationsScreen({ clubId, setScreen }) {
         </div>
       )}
 
-      {/* Rezervasyon Ekle Modalı */}
-      {modal?.type === 'add' && (
-        <Modal title="Yeni Rezervasyon" onClose={() => setModal(null)} footer={
-          <>
-            <button className="btn btn-ghost btn-sm" onClick={() => setModal(null)}>Vazgeç</button>
-            <button className="btn btn-pri btn-sm" onClick={saveBooking} disabled={saving}>
-              {saving ? 'Kaydediliyor…' : 'Kaydet'}
-            </button>
-          </>
-        }>
-          <div className="fields" style={{ gap: 14 }}>
-            <div className="fields-2">
-              <Field label="Başlangıç">
-                <input type="datetime-local" value={form.start_time || ''} onChange={e => setForm({...form, start_time: e.target.value})} />
-              </Field>
-              <Field label="Bitiş">
-                <input type="datetime-local" value={form.end_time || ''} onChange={e => setForm({...form, end_time: e.target.value})} />
-              </Field>
+      {/* ── Yeni Rezervasyon Bottom-Sheet ── */}
+      {bkModalVisible && (
+        <div style={{ position:'fixed', inset:0, background:'rgba(0,0,0,0.45)', zIndex:1000, display:'flex', flexDirection:'column', justifyContent:'flex-end' }}
+          onClick={e => { if (e.target === e.currentTarget && !bkSaving) { setBkModalVisible(false); } }}>
+          <div style={{ background:'#fff', borderTopLeftRadius:24, borderTopRightRadius:24, maxHeight:'90vh', display:'flex', flexDirection:'column' }}>
+
+            {/* Header */}
+            <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', padding:'20px 24px 16px', borderBottom:'1px solid var(--border)', flexShrink:0 }}>
+              <span style={{ fontSize:18, fontWeight:800, color:'var(--text-1)' }}>Yeni Rezervasyon</span>
+              <button onClick={() => setBkModalVisible(false)} disabled={bkSaving}
+                style={{ background:'none', border:'none', cursor:'pointer', display:'grid', placeItems:'center' }}>
+                <span className="material-icons" style={{ fontSize:24, color:'var(--text-2)' }}>close</span>
+              </button>
             </div>
-            <Field label="Kort">
-              <select value={form.court_id || ''} onChange={e => setForm({...form, court_id: e.target.value})}>
-                {courts.map(c => <option key={c.id} value={c.id}>Kort {c.court_number} — {courtTypeLabel(c.court_type)}</option>)}
-              </select>
-            </Field>
-            <Field label="Üye Seç (İsteğe Bağlı — Limit Kontrolü İçin)">
-              <MemberLimitSearch clubId={clubId} value={form.member_id} onChange={mid => setForm({...form, member_id: mid})} />
-            </Field>
-            <Field label="Durum">
-              <select value={form.status || 'confirmed'} onChange={e => setForm({...form, status: e.target.value})}>
-                <option value="confirmed">Rezerveli</option>
-                <option value="completed">Tamamlandı</option>
-              </select>
-            </Field>
+
+            {/* Scrollable body */}
+            <div style={{ overflowY:'auto', flex:1, padding:'20px 24px', display:'flex', flexDirection:'column', gap:20 }}>
+
+              {/* Seçim özeti */}
+              <div style={{ display:'flex', gap:8, flexWrap:'wrap' }}>
+                <div style={{ display:'flex', alignItems:'center', gap:6, background:'#EEF2FF', borderRadius:10, padding:'6px 12px' }}>
+                  <span className="material-icons" style={{ fontSize:15, color:'#6366F1' }}>calendar_today</span>
+                  <span style={{ fontSize:13, fontWeight:600, color:'#4338CA' }}>
+                    {new Date((bkForm.date||'') + 'T12:00:00').toLocaleDateString('tr-TR', { weekday:'short', day:'numeric', month:'short' })}
+                  </span>
+                </div>
+                <div style={{ display:'flex', alignItems:'center', gap:6, background:'#EEF2FF', borderRadius:10, padding:'6px 12px' }}>
+                  <span className="material-icons" style={{ fontSize:15, color:'#6366F1' }}>schedule</span>
+                  <span style={{ fontSize:13, fontWeight:600, color:'#4338CA' }}>{bkForm.startTime} – {bkForm.endTime}</span>
+                </div>
+                {/* Tarih değiştirme */}
+                <div style={{ display:'flex', alignItems:'center', gap:6, background:'var(--bg)', border:'1.5px solid var(--border)', borderRadius:10, padding:'5px 10px' }}>
+                  <span className="material-icons" style={{ fontSize:15, color:'var(--text-2)' }}>edit_calendar</span>
+                  <input type="date" value={bkForm.date || ''} min={todayISO()}
+                    onChange={e => {
+                      const newForm = { ...bkForm, date: e.target.value };
+                      setBkForm(newForm);
+                      loadBkAvailCourts(e.target.value, newForm.startTime, newForm.endTime);
+                    }}
+                    style={{ border:'none', background:'transparent', fontSize:13, fontWeight:600, color:'var(--text-2)', cursor:'pointer', outline:'none' }} />
+                </div>
+              </div>
+
+              {/* Süre */}
+              <div>
+                <div style={{ fontSize:12, fontWeight:700, color:'var(--text-2)', marginBottom:10, letterSpacing:0.4 }}>SÜRE</div>
+                <div style={{ display:'flex', gap:8, flexWrap:'wrap' }}>
+                  {[{d:0.75,l:'45 dk'},{d:1.0,l:'1 saat'},{d:1.5,l:'1,5 saat'},{d:2.0,l:'2 saat'}].map(({d,l}) => {
+                    const sel = bkForm.duration === d;
+                    return (
+                      <button key={d} onClick={() => handleBkDuration(d)}
+                        style={{ padding:'9px 18px', borderRadius:12, border: sel ? '1.5px solid var(--brand-navy)' : '1.5px solid var(--border)', background: sel ? '#EEF2FF' : 'var(--bg)', cursor:'pointer', fontSize:13, fontWeight: sel ? 700 : 500, color: sel ? 'var(--brand-navy)' : 'var(--text-2)' }}>
+                        {l}
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+
+              {/* Saat düzenleme */}
+              <div>
+                <div style={{ fontSize:12, fontWeight:700, color:'var(--text-2)', marginBottom:10, letterSpacing:0.4 }}>SAAT</div>
+                <div style={{ display:'flex', gap:10, alignItems:'center' }}>
+                  <input type="time" value={bkForm.startTime || ''} step="900"
+                    onChange={e => {
+                      const [sh, sm] = e.target.value.split(':').map(Number);
+                      const totalMin = sh * 60 + sm + Math.round((bkForm.duration || 1) * 60);
+                      const eh = Math.floor(totalMin / 60) % 24;
+                      const em = totalMin % 60;
+                      const newEnd = `${String(eh).padStart(2,'0')}:${String(em).padStart(2,'0')}`;
+                      const newForm = { ...bkForm, startTime: e.target.value, endTime: newEnd };
+                      setBkForm(newForm);
+                      loadBkAvailCourts(newForm.date, e.target.value, newEnd);
+                    }}
+                    style={{ flex:1, border:'1.5px solid var(--border)', borderRadius:12, padding:'10px 12px', fontSize:15, color:'var(--text-1)', background:'var(--bg)' }} />
+                  <span style={{ color:'var(--text-2)', fontWeight:600 }}>–</span>
+                  <input type="time" value={bkForm.endTime || ''} step="900"
+                    onChange={e => {
+                      const newForm = { ...bkForm, endTime: e.target.value };
+                      setBkForm(newForm);
+                      loadBkAvailCourts(newForm.date, newForm.startTime, e.target.value);
+                    }}
+                    style={{ flex:1, border:'1.5px solid var(--border)', borderRadius:12, padding:'10px 12px', fontSize:15, color:'var(--text-1)', background:'var(--bg)' }} />
+                </div>
+              </div>
+
+              {/* Kort Seçimi */}
+              <div>
+                <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', marginBottom:10 }}>
+                  <div style={{ fontSize:12, fontWeight:700, color:'var(--text-2)', letterSpacing:0.4 }}>KORT</div>
+                  {bkCourtsLoading && (
+                    <span style={{ fontSize:11, color:'var(--text-2)', display:'flex', alignItems:'center', gap:4 }}>
+                      <span className="material-icons" style={{ fontSize:13 }}>hourglass_empty</span>
+                      Müsaitlik kontrol ediliyor...
+                    </span>
+                  )}
+                </div>
+                {courts.length === 0 ? (
+                  <div style={{ padding:16, borderRadius:12, background:'var(--bg)', border:'1px solid var(--border)', textAlign:'center', color:'var(--text-2)', fontSize:13 }}>Kort bulunamadı.</div>
+                ) : (
+                  <div style={{ display:'flex', gap:10, flexWrap:'wrap' }}>
+                    {courts.map(court => {
+                      const avail = !bkCourtsLoading && bkAvailCourts.some(c => c.id === court.id);
+                      const sel   = bkForm.courtId === court.id;
+                      return (
+                        <div key={court.id}
+                          onClick={() => !bkCourtsLoading && avail && setBkForm(f => ({...f, courtId: court.id}))}
+                          style={{
+                            padding:'12px 16px', borderRadius:14, minWidth:100, transition:'all 0.12s',
+                            border: sel ? '2px solid var(--brand-navy)' : `1.5px solid ${avail ? 'var(--border)' : '#FEE2E2'}`,
+                            background: sel ? '#EEF2FF' : avail ? 'var(--bg)' : '#FEF2F2',
+                            cursor: (!bkCourtsLoading && avail) ? 'pointer' : 'not-allowed',
+                            opacity: bkCourtsLoading ? 0.5 : 1,
+                          }}>
+                          <div style={{ display:'flex', alignItems:'center', gap:5, marginBottom:4 }}>
+                            <div style={{ width:6, height:6, borderRadius:'50%', background: avail ? '#22C55E' : '#EF4444', flexShrink:0 }} />
+                            <span style={{ fontSize:10, fontWeight:700, color: avail ? '#16A34A' : '#DC2626', letterSpacing:0.3 }}>
+                              {bkCourtsLoading ? '...' : avail ? 'MÜSAİT' : 'DOLU'}
+                            </span>
+                          </div>
+                          <div style={{ fontSize:14, fontWeight:700, color: sel ? 'var(--brand-navy)' : 'var(--text-1)' }}>Kort {court.court_number}</div>
+                          <div style={{ fontSize:11, color:'var(--text-2)', marginTop:2 }}>{court.court_type} · {court.hourly_rate||'—'}₺/sa</div>
+                          {court.is_indoor !== undefined && (
+                            <div style={{ fontSize:10, color:'var(--text-2)', marginTop:1 }}>{court.is_indoor ? 'Kapalı' : 'Açık'}</div>
+                          )}
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
+
+              {/* Üye (opsiyonel) */}
+              <div>
+                <div style={{ fontSize:12, fontWeight:700, color:'var(--text-2)', marginBottom:10, letterSpacing:0.4 }}>ÜYE (OPSİYONEL — Limit Kontrolü)</div>
+                {bkMemberId ? (
+                  <div style={{ display:'flex', alignItems:'center', gap:8, background:'#EEF2FF', borderRadius:12, padding:'10px 14px' }}>
+                    <span className="material-icons" style={{ color:'var(--brand-navy)', fontSize:16 }}>person</span>
+                    <span style={{ flex:1, fontWeight:600, fontSize:13, color:'var(--text-1)' }}>{bkMemberName}</span>
+                    <button type="button" onClick={() => { setBkMemberId(null); setBkMemberName(''); setBkMemberQuery(''); setBkMemberResults([]); }}
+                      style={{ background:'none', border:'none', cursor:'pointer', color:'var(--text-2)', padding:0, display:'grid', placeItems:'center' }}>
+                      <span className="material-icons" style={{ fontSize:16 }}>close</span>
+                    </button>
+                  </div>
+                ) : (
+                  <div style={{ position:'relative' }}>
+                    <div style={{ position:'relative' }}>
+                      <input placeholder="Üye adı ara..." value={bkMemberQuery}
+                        onChange={e => searchBkMembers(e.target.value)}
+                        style={{ width:'100%', border:'1.5px solid var(--border)', borderRadius:12, padding:'10px 12px 10px 36px', fontSize:14, boxSizing:'border-box', color:'var(--text-1)', background:'var(--bg)' }} />
+                      <span className="material-icons" style={{ position:'absolute', left:10, top:'50%', transform:'translateY(-50%)', fontSize:16, color:'var(--text-2)', pointerEvents:'none' }}>search</span>
+                    </div>
+                    {bkMemberResults.length > 0 && (
+                      <div style={{ position:'absolute', top:'100%', left:0, right:0, zIndex:10, background:'#fff', border:'1px solid var(--border)', borderRadius:12, boxShadow:'0 4px 16px rgba(0,0,0,0.12)', overflow:'hidden', marginTop:4 }}>
+                        {bkMemberResults.map((m, idx) => (
+                          <div key={m.id}
+                            style={{ padding:'10px 14px', cursor:'pointer', borderBottom: idx < bkMemberResults.length-1 ? '1px solid var(--border)' : 'none', fontSize:13, fontWeight:500, display:'flex', alignItems:'center', gap:8 }}
+                            onMouseDown={() => { setBkMemberId(m.id); setBkMemberName(m.full_name); setBkMemberQuery(''); setBkMemberResults([]); }}>
+                            <span className="material-icons" style={{ fontSize:15, color:'var(--brand-navy)' }}>person</span>
+                            <span style={{ flex:1 }}>{m.full_name}</span>
+                            {m.email && <span style={{ fontSize:11, color:'var(--text-2)' }}>{m.email}</span>}
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                )}
+              </div>
+
+              {/* Özet */}
+              {bkForm.courtId && (() => {
+                const court = courts.find(c => c.id === bkForm.courtId);
+                const [sh, sm] = (bkForm.startTime || '0:0').split(':').map(Number);
+                const [eh, em] = (bkForm.endTime   || '0:0').split(':').map(Number);
+                const dh    = (eh * 60 + em - sh * 60 - sm) / 60;
+                const total = Math.round((court?.hourly_rate || 0) * dh * 100) / 100;
+                const fmtD  = d => d === 0.75 ? '45 dk' : d === 1.5 ? '1,5 saat' : `${d} saat`;
+                return (
+                  <div style={{ background:'#F8FAFC', borderRadius:14, padding:'16px 18px', border:'1px solid var(--border)' }}>
+                    <div style={{ fontSize:12, fontWeight:700, color:'var(--text-2)', marginBottom:12, letterSpacing:0.4 }}>REZERVASYON ÖZETİ</div>
+                    {[
+                      { label:'Tarih', value: new Date((bkForm.date||'') + 'T12:00:00').toLocaleDateString('tr-TR') },
+                      { label:'Saat',  value: `${bkForm.startTime} – ${bkForm.endTime}` },
+                      { label:'Süre',  value: fmtD(bkForm.duration || 1) },
+                      { label:'Kort',  value: `Kort ${court?.court_number}` },
+                      ...(bkMemberName ? [{ label:'Üye', value: bkMemberName }] : []),
+                    ].map(({ label, value }) => (
+                      <div key={label} style={{ display:'flex', justifyContent:'space-between', marginBottom:8 }}>
+                        <span style={{ fontSize:13, color:'var(--text-2)' }}>{label}:</span>
+                        <span style={{ fontSize:13, fontWeight:600, color:'var(--text-1)' }}>{value}</span>
+                      </div>
+                    ))}
+                    <div style={{ borderTop:'1px solid var(--border)', paddingTop:10, marginTop:4, display:'flex', justifyContent:'space-between' }}>
+                      <span style={{ fontSize:14, fontWeight:700, color:'var(--text-1)' }}>Toplam:</span>
+                      <span style={{ fontSize:16, fontWeight:800, color:'var(--brand-navy)' }}>₺{total.toFixed(2)}</span>
+                    </div>
+                  </div>
+                );
+              })()}
+
+            </div>{/* end scrollable body */}
+
+            {/* Footer */}
+            <div style={{ display:'flex', gap:10, padding:'16px 24px', borderTop:'1px solid var(--border)', flexShrink:0 }}>
+              <button onClick={() => setBkModalVisible(false)} disabled={bkSaving}
+                style={{ flex:1, padding:'13px', borderRadius:14, border:'1.5px solid var(--border)', background:'var(--bg)', cursor:'pointer', fontSize:14, fontWeight:700, color:'var(--text-2)' }}>
+                İptal
+              </button>
+              <button onClick={saveBkBooking}
+                disabled={!bkForm.courtId || bkSaving || bkCourtsLoading}
+                style={{ flex:2, padding:'13px', borderRadius:14, border:'none', cursor:(!bkForm.courtId || bkSaving || bkCourtsLoading) ? 'not-allowed' : 'pointer', fontSize:14, fontWeight:700, color:'#fff', background:(!bkForm.courtId || bkSaving || bkCourtsLoading) ? '#94a3b8' : 'var(--brand-navy)' }}>
+                {bkSaving ? 'Kaydediliyor...' : 'Rezervasyon Oluştur'}
+              </button>
+            </div>
+
           </div>
-        </Modal>
+        </div>
       )}
 
       {/* Özel Ders Ekle / Düzenle Modalı — Mobil ile birebir aynı */}

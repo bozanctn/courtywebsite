@@ -28,7 +28,7 @@ const ALL_NAV_ITEMS = [
 ];
 
 // ── Sidebar ────────────────────────────────────────────────────
-function Sidebar({ screen, setScreen, clubProfile, employeeProfile, userType, unread, pendingMembers }) {
+function Sidebar({ screen, setScreen, clubProfile, employeeProfile, userType, unread, pendingMembers, collapsed, onToggle }) {
   const isEmployee = userType === 'employee';
   const name = isEmployee
     ? (employeeProfile?.full_name || 'Çalışan')
@@ -39,56 +39,64 @@ function Sidebar({ screen, setScreen, clubProfile, employeeProfile, userType, un
     : ALL_NAV_ITEMS;
 
   return (
-    <aside className="side">
+    <aside className={`side${collapsed ? ' side-collapsed' : ''}`}>
       <div className="side-brand">
         <img src="../Courty_Logo.png" alt="CourtyCLUB" />
-        <div className="name">Courty<em>CLUB</em></div>
+        {!collapsed && <div className="name">Courty<em>CLUB</em></div>}
+        <button className="side-toggle" onClick={onToggle} title={collapsed ? 'Menüyü Aç' : 'Menüyü Kapat'}>
+          <span className="material-icons">{collapsed ? 'chevron_right' : 'chevron_left'}</span>
+        </button>
       </div>
 
-      <div className="side-clubcard">
-        <div className="av av-sq" style={{ background: isEmployee ? '#0D9488' : 'var(--brand-navy)', color: '#fff', width: 36, height: 36, borderRadius: 10, display: 'grid', placeItems: 'center', fontWeight: 800, fontSize: 13, flexShrink: 0 }}>
-          {abbr}
+      {!collapsed && (
+        <div className="side-clubcard">
+          <div className="av av-sq" style={{ background: isEmployee ? '#0D9488' : 'var(--brand-navy)', color: '#fff', width: 36, height: 36, borderRadius: 10, display: 'grid', placeItems: 'center', fontWeight: 800, fontSize: 13, flexShrink: 0 }}>
+            {abbr}
+          </div>
+          <div className="who">
+            <div className="n">{name}</div>
+            <div className="r">{isEmployee ? 'Çalışan' : 'Kulüp Yöneticisi'}</div>
+          </div>
+          <div className="dot" />
         </div>
-        <div className="who">
-          <div className="n">{name}</div>
-          <div className="r">{isEmployee ? 'Çalışan' : 'Kulüp Yöneticisi'}</div>
-        </div>
-        <div className="dot" />
-      </div>
+      )}
 
       <nav className="side-nav">
         {NAV_ITEMS.map(item => {
           if (item.section) {
             return (
               <React.Fragment key={item.key}>
-                <div className="side-section">{item.section}</div>
+                {!collapsed && <div className="side-section">{item.section}</div>}
                 <SideItem item={item} active={screen === item.key} setScreen={setScreen}
-                  badge={item.key === 'notifications' ? unread : item.key === 'members' ? pendingMembers : 0} />
+                  badge={item.key === 'notifications' ? unread : item.key === 'members' ? pendingMembers : 0}
+                  collapsed={collapsed} />
               </React.Fragment>
             );
           }
           return (
             <SideItem key={item.key} item={item} active={screen === item.key} setScreen={setScreen}
-              badge={item.key === 'notifications' ? unread : item.key === 'members' ? pendingMembers : 0} />
+              badge={item.key === 'notifications' ? unread : item.key === 'members' ? pendingMembers : 0}
+              collapsed={collapsed} />
           );
         })}
       </nav>
 
       <div className="side-foot">
-        <button onClick={authSignOut}>
+        <button onClick={authSignOut} title="Çıkış">
           <span className="material-icons">logout</span>
-          Çıkış
+          {!collapsed && 'Çıkış'}
         </button>
       </div>
     </aside>
   );
 }
 
-function SideItem({ item, active, setScreen, badge }) {
+function SideItem({ item, active, setScreen, badge, collapsed }) {
   return (
-    <div className={`side-item${active ? ' active' : ''}`} onClick={() => setScreen(item.key)}>
+    <div className={`side-item${active ? ' active' : ''}${collapsed ? ' side-item-collapsed' : ''}`}
+      onClick={() => setScreen(item.key)} title={collapsed ? item.label : ''}>
       <span className="material-icons">{item.icon}</span>
-      {item.label}
+      {!collapsed && item.label}
       {badge > 0 && <span className="ct">{badge}</span>}
     </div>
   );
@@ -174,6 +182,15 @@ function App() {
   const [loading,         setLoading]         = useState(true);
   const [unread,          setUnread]          = useState(0);
   const [pendingMembers,  setPendingMembers]  = useState(0);
+  const [sideCollapsed,   setSideCollapsed]   = useState(() => localStorage.getItem('sideCollapsed') === 'true');
+
+  const toggleSide = useCallback(() => {
+    setSideCollapsed(v => {
+      const next = !v;
+      localStorage.setItem('sideCollapsed', next);
+      return next;
+    });
+  }, []);
 
   // Oturum kontrolü
   useEffect(() => {
@@ -236,14 +253,13 @@ function App() {
     } catch {}
   };
 
-  // Tweaks'tan gelen tema tercihleri
+  // Tweaks'tan gelen tema tercihleri (--side-w collapsed state tarafından yönetildiğinden burada set edilmiyor)
   useEffect(() => {
     const defaults = window.__tweakDefaults || {};
     const shell = document.querySelector('.shell');
     if (shell) {
       shell.dataset.side    = defaults.sideTheme  || 'navy';
       shell.dataset.density = defaults.density    || 'compact';
-      shell.style.setProperty('--side-w', (defaults.sideWidth || 248) + 'px');
     }
   }, [loading]);
 
@@ -259,7 +275,8 @@ function App() {
   }
 
   return (
-    <div className="shell" data-side="navy" data-density="compact">
+    <div className="shell" data-side="navy" data-density="compact"
+      style={{ '--side-w': sideCollapsed ? '64px' : '248px' }}>
       <Sidebar
         screen={screen}
         setScreen={setScreen}
@@ -268,6 +285,8 @@ function App() {
         userType={userType}
         unread={unread}
         pendingMembers={pendingMembers}
+        collapsed={sideCollapsed}
+        onToggle={toggleSide}
       />
       <div className="main">
         <Topbar
