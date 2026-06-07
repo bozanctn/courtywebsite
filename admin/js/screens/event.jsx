@@ -1828,6 +1828,22 @@ function LessonPackagesScreen({ clubId }) {
   const [confirmModal, setConfirmModal] = useState(null);
   const [confirming,   setConfirming]   = useState(false);
 
+  // Üye kayıt modalı
+  const [enrollModal,         setEnrollModal]         = useState(null); // { pkg }
+  const [enrollMode,          setEnrollMode]          = useState('app'); // 'app' | 'manual'
+  const [enrollSearch,        setEnrollSearch]        = useState('');
+  const [enrollResults,       setEnrollResults]       = useState([]);
+  const [enrollSearching,     setEnrollSearching]     = useState(false);
+  const [enrollSelectedPlayer,setEnrollSelectedPlayer]= useState(null);
+  const [enrollName,          setEnrollName]          = useState('');
+  const [enrollPhone,         setEnrollPhone]         = useState('');
+  const [enrollCoachId,       setEnrollCoachId]       = useState('');
+  const [enrollUsed,          setEnrollUsed]          = useState('0');
+  const [enrollPayStatus,     setEnrollPayStatus]     = useState('paid');
+  const [enrollPaid,          setEnrollPaid]          = useState('');
+  const [enrollNotes,         setEnrollNotes]         = useState('');
+  const [enrollSaving,        setEnrollSaving]        = useState(false);
+
   useEffect(() => { if (clubId) { loadPackages(); loadCoaches(); loadStats(); } }, [clubId]);
   useEffect(() => { if (clubId && tab !== 'packages') loadPlayerPackages(); }, [tab, clubId]);
 
@@ -1920,7 +1936,69 @@ function LessonPackagesScreen({ clubId }) {
     finally { setConfirming(false); }
   };
 
-  const activeStudents  = playerPkgs.filter(p => p.payment_status === 'paid');
+  const openEnrollModal = (pkg) => {
+    setEnrollModal({ pkg });
+    setEnrollMode('app');
+    setEnrollSearch('');
+    setEnrollResults([]);
+    setEnrollSelectedPlayer(null);
+    setEnrollName('');
+    setEnrollPhone('');
+    setEnrollCoachId(coachProfileId(coaches.find(c => c.individual_coach_id === pkg.coach_id || c.id === pkg.coach_id)?.id || '') || '');
+    setEnrollUsed('0');
+    setEnrollPayStatus('paid');
+    setEnrollPaid(String(pkg.price));
+    setEnrollNotes('');
+  };
+
+  const handleEnrollSearch = async (q) => {
+    setEnrollSearch(q);
+    setEnrollSelectedPlayer(null);
+    if (q.trim().length < 2) { setEnrollResults([]); return; }
+    setEnrollSearching(true);
+    try { setEnrollResults(await LessonPackageSvc.searchPlayers(q)); }
+    catch { setEnrollResults([]); }
+    finally { setEnrollSearching(false); }
+  };
+
+  const doEnroll = async () => {
+    if (!enrollModal) return;
+    const pkg = enrollModal.pkg;
+    if (enrollMode === 'app' && !enrollSelectedPlayer) { alert('Bir oyuncu seçin.'); return; }
+    if (enrollMode === 'manual' && !enrollName.trim()) { alert('Üye adı zorunludur.'); return; }
+    const used = parseInt(enrollUsed, 10) || 0;
+    if (used >= pkg.total_lessons) { alert(`Tamamlanan ders sayısı ${pkg.total_lessons - 1} veya daha az olmalı.`); return; }
+    setEnrollSaving(true);
+    try {
+      await LessonPackageSvc.manualEnrollPlayer({
+        package_id:          pkg.id,
+        club_id:             clubId,
+        coach_id:            enrollCoachId ? coachProfileId(enrollCoachId) : null,
+        player_id:           enrollMode === 'app' ? enrollSelectedPlayer.id : null,
+        player_name:         enrollMode === 'app' ? enrollSelectedPlayer.full_name : null,
+        manual_player_name:  enrollMode === 'manual' ? enrollName.trim() : null,
+        manual_player_phone: enrollMode === 'manual' ? (enrollPhone.trim() || null) : null,
+        used_lessons:        used,
+        payment_status:      enrollPayStatus,
+        total_paid:          enrollPayStatus === 'paid' ? (parseFloat(enrollPaid) || pkg.price) : null,
+        notes:               enrollNotes.trim() || null,
+      });
+      setEnrollModal(null);
+      loadPlayerPackages(); loadStats();
+    } catch (e) { alert(e.message); }
+    finally { setEnrollSaving(false); }
+  };
+
+  const cancelPlayerPackage = async (pp) => {
+    const name = pp.player?.full_name || pp.manual_player_name || 'Bu öğrenci';
+    if (!confirm(`${name} için paketi iptal etmek istediğinize emin misiniz?`)) return;
+    try { await LessonPackageSvc.cancelPlayerPackage(pp.id); loadPlayerPackages(); loadStats(); }
+    catch (e) { alert(e.message); }
+  };
+
+  const displayName = (pp) => pp.player?.full_name || pp.manual_player_name || '—';
+
+  const activeStudents  = playerPkgs.filter(p => p.payment_status === 'paid' && p.status !== 'cancelled');
   const pendingStudents = playerPkgs.filter(p => p.payment_status === 'pending');
   const perLesson = (pkg) => pkg.total_lessons > 0 ? pkg.price / pkg.total_lessons : 0;
   // lesson_packages.coach_id = profiles.id = club_coaches.individual_coach_id
@@ -2039,6 +2117,9 @@ function LessonPackagesScreen({ clubId }) {
                 <div style={{ height:1, background:'var(--border)' }} />
 
                 <div style={{ display:'flex', gap:6 }}>
+                  <button className="btn btn-pri btn-sm" title="Üye Kaydet" onClick={() => openEnrollModal(pkg)}>
+                    <span className="material-icons" style={{fontSize:15}}>person_add</span> Üye Kaydet
+                  </button>
                   <button className="btn btn-ghost btn-sm btn-icon" title="Düzenle" onClick={() => openEdit(pkg)}>
                     <span className="material-icons" style={{fontSize:15}}>edit</span>
                   </button>
@@ -2065,12 +2146,17 @@ function LessonPackagesScreen({ clubId }) {
               const pct       = total > 0 ? Math.round(used / total * 100) : 0;
               const expired   = pp.expiry_date && new Date(pp.expiry_date) < new Date();
               const completed = pp.status === 'completed';
+              const name      = displayName(pp);
               return (
                 <div key={pp.id} className="card" style={{ display:'flex', alignItems:'center', gap:14 }}>
-                  <Av name={pp.player?.full_name} size="md" />
+                  <Av name={name} size="md" />
                   <div style={{ flex:1, minWidth:0 }}>
-                    <div style={{ fontWeight:700, fontSize:14 }}>{pp.player?.full_name || '—'}</div>
+                    <div style={{ fontWeight:700, fontSize:14 }}>
+                      {name}
+                      {pp.manual_player_name && <span style={{ fontSize:11, color:'var(--text-2)', marginLeft:6 }}>(manuel)</span>}
+                    </div>
                     <div style={{ fontSize:12, color:'var(--text-2)', marginTop:2 }}>{pkg?.name || '—'}</div>
+                    {pp.coach_name && <div style={{ fontSize:11, color:'var(--text-2)' }}>Antrenör: {pp.coach_name}</div>}
                     <div style={{ marginTop:8 }}>
                       <div style={{ display:'flex', justifyContent:'space-between', fontSize:11, color:'var(--text-2)', marginBottom:4 }}>
                         <span>{used} / {total} ders kullanıldı</span>
@@ -2091,6 +2177,9 @@ function LessonPackagesScreen({ clubId }) {
                     {pp.expiry_date && (
                       <span style={{ fontSize:11, color:'var(--text-2)' }}>Son: {fmtDate(pp.expiry_date)}</span>
                     )}
+                    <button className="btn btn-danger btn-sm btn-icon" title="Paketi İptal Et" onClick={() => cancelPlayerPackage(pp)}>
+                      <span className="material-icons" style={{fontSize:14}}>cancel</span>
+                    </button>
                   </div>
                 </div>
               );
@@ -2109,9 +2198,9 @@ function LessonPackagesScreen({ clubId }) {
               const pkg = pp.package;
               return (
                 <div key={pp.id} className="card" style={{ display:'flex', alignItems:'center', gap:14 }}>
-                  <Av name={pp.player?.full_name} size="md" />
+                  <Av name={displayName(pp)} size="md" />
                   <div style={{ flex:1, minWidth:0 }}>
-                    <div style={{ fontWeight:700, fontSize:14 }}>{pp.player?.full_name || '—'}</div>
+                    <div style={{ fontWeight:700, fontSize:14 }}>{displayName(pp)}</div>
                     <div style={{ fontSize:12, color:'var(--text-2)', marginTop:2 }}>
                       {pkg?.name || '—'} · {pkg?.total_lessons} ders
                     </div>
@@ -2131,6 +2220,119 @@ function LessonPackagesScreen({ clubId }) {
             })}
           </div>
         )
+      )}
+
+      {/* ══ ÜYE KAYIT MODALI ══ */}
+      {enrollModal && (
+        <Modal
+          title={`Üye Kaydet — ${enrollModal.pkg.name}`}
+          wide
+          onClose={() => setEnrollModal(null)}
+          footer={
+            <>
+              <button className="btn btn-ghost btn-sm" onClick={() => setEnrollModal(null)}>Vazgeç</button>
+              <button className="btn btn-pri btn-sm" onClick={doEnroll} disabled={enrollSaving}>
+                {enrollSaving ? 'Kaydediliyor…' : 'Kaydet'}
+              </button>
+            </>
+          }
+        >
+          <div className="fields" style={{ gap:14 }}>
+            {/* Mod seçimi */}
+            <div style={{ display:'flex', gap:8 }}>
+              {[{key:'app',label:'Uygulama Kullanıcısı'},{key:'manual',label:'Manuel Kayıt'}].map(m => (
+                <button key={m.key}
+                  className={'btn btn-sm ' + (enrollMode === m.key ? 'btn-pri' : 'btn-ghost')}
+                  onClick={() => { setEnrollMode(m.key); setEnrollSearch(''); setEnrollResults([]); setEnrollSelectedPlayer(null); }}>
+                  {m.label}
+                </button>
+              ))}
+            </div>
+
+            {/* Uygulama kullanıcısı arama */}
+            {enrollMode === 'app' && (
+              <Field label="Oyuncu Ara *">
+                {enrollSelectedPlayer ? (
+                  <div style={{ display:'flex', alignItems:'center', gap:10, padding:'8px 12px', background:'#EEF2FF', borderRadius:8, border:'1px solid #C7D2FE' }}>
+                    <span style={{ flex:1, fontWeight:600 }}>{enrollSelectedPlayer.full_name}</span>
+                    <span style={{ fontSize:12, color:'var(--text-2)' }}>{enrollSelectedPlayer.email}</span>
+                    <button className="btn btn-ghost btn-sm btn-icon" onClick={() => { setEnrollSelectedPlayer(null); setEnrollSearch(''); }}>
+                      <span className="material-icons" style={{fontSize:14}}>close</span>
+                    </button>
+                  </div>
+                ) : (
+                  <div style={{ position:'relative' }}>
+                    <input
+                      placeholder="İsimle ara… (en az 2 karakter)"
+                      value={enrollSearch}
+                      onChange={e => handleEnrollSearch(e.target.value)}
+                    />
+                    {(enrollSearching || enrollResults.length > 0) && (
+                      <div style={{ position:'absolute', top:'100%', left:0, right:0, background:'#fff', border:'1px solid var(--border)', borderRadius:8, zIndex:50, maxHeight:200, overflowY:'auto', boxShadow:'0 4px 12px rgba(0,0,0,.1)' }}>
+                        {enrollSearching && <div style={{ padding:'10px 14px', color:'var(--text-2)', fontSize:13 }}>Aranıyor…</div>}
+                        {!enrollSearching && enrollResults.length === 0 && enrollSearch.trim().length >= 2 && (
+                          <div style={{ padding:'10px 14px', color:'var(--text-2)', fontSize:13 }}>Sonuç bulunamadı</div>
+                        )}
+                        {enrollResults.map(p => (
+                          <div key={p.id}
+                            style={{ padding:'10px 14px', cursor:'pointer', display:'flex', flexDirection:'column', gap:2, borderBottom:'1px solid var(--border)' }}
+                            onMouseDown={() => { setEnrollSelectedPlayer(p); setEnrollSearch(p.full_name); setEnrollResults([]); }}>
+                            <span style={{ fontWeight:600, fontSize:14 }}>{p.full_name}</span>
+                            <span style={{ fontSize:12, color:'var(--text-2)' }}>{p.email}</span>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                )}
+              </Field>
+            )}
+
+            {/* Manuel kayıt */}
+            {enrollMode === 'manual' && (
+              <div className="fields-2">
+                <Field label="Ad Soyad *">
+                  <input placeholder="Üye adı" value={enrollName} onChange={e => setEnrollName(e.target.value)} />
+                </Field>
+                <Field label="Telefon (isteğe bağlı)">
+                  <input placeholder="05xx xxx xx xx" value={enrollPhone} onChange={e => setEnrollPhone(e.target.value)} />
+                </Field>
+              </div>
+            )}
+
+            {/* Ortak alanlar */}
+            <Field label="Antrenör (isteğe bağlı)">
+              <select value={enrollCoachId} onChange={e => setEnrollCoachId(e.target.value)}>
+                <option value="">Antrenör seçin…</option>
+                {coaches.map(c => <option key={c.id} value={c.id}>{c.full_name}</option>)}
+              </select>
+            </Field>
+
+            <div className="fields-2">
+              <Field label="Kullanılmış Ders Sayısı">
+                <input type="number" min={0} max={enrollModal.pkg.total_lessons - 1} value={enrollUsed}
+                  onChange={e => setEnrollUsed(e.target.value)} />
+              </Field>
+              <Field label="Ödeme Durumu">
+                <select value={enrollPayStatus} onChange={e => setEnrollPayStatus(e.target.value)}>
+                  <option value="paid">Ödendi</option>
+                  <option value="pending">Bekliyor</option>
+                </select>
+              </Field>
+            </div>
+
+            {enrollPayStatus === 'paid' && (
+              <Field label="Tahsil Edilen Tutar (₺)">
+                <input type="number" min={0} value={enrollPaid} onChange={e => setEnrollPaid(e.target.value)} />
+              </Field>
+            )}
+
+            <Field label="Notlar (isteğe bağlı)">
+              <textarea rows={2} value={enrollNotes} onChange={e => setEnrollNotes(e.target.value)}
+                placeholder="Varsa eklemek istediğiniz notlar…" style={{ resize:'vertical' }} />
+            </Field>
+          </div>
+        </Modal>
       )}
 
       {/* ══ PAKET OLUŞTUR / DÜZENLE MODALI ══ */}

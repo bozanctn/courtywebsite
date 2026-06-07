@@ -27,23 +27,31 @@ function pkgMeta(pkg) {
 
 function MemberProfileModal({ member, clubId, packages, onClose }) {
   const { useState, useEffect } = React;
-  const [bookings,  setBookings]  = useState([]);
-  const [loadingBk, setLoadingBk] = useState(true);
+  const [bookings,     setBookings]     = useState([]);
+  const [loadingBk,    setLoadingBk]    = useState(true);
+  const [playerGender, setPlayerGender] = useState(null);
+  const [profileBirth, setProfileBirth] = useState(null);
 
   useEffect(() => {
     if (!member?.user_id) { setLoadingBk(false); return; }
     (async () => {
       setLoadingBk(true);
       try {
-        const courtIds = await getClubCourtIds(clubId);
+        const [courtIds, ppRes, profileRes] = await Promise.all([
+          getClubCourtIds(clubId),
+          sb.from('player_profiles').select('gender').eq('id', member.user_id).maybeSingle(),
+          sb.from('profiles').select('birth_date').eq('id', member.user_id).maybeSingle(),
+        ]);
+        setPlayerGender(ppRes.data?.gender ?? null);
+        setProfileBirth(profileRes.data?.birth_date ?? null);
         if (courtIds.length === 0) { setLoadingBk(false); return; }
-        const { data } = await sb.from('booking_players')
-          .select('booking:bookings!booking_players_booking_id_fkey(id,start_time,end_time,status,payment_status,total_amount,court:courts!bookings_court_id_fkey(court_number,court_type))')
-          .eq('player_id', member.user_id)
-          .in('booking.court_id', courtIds)
-          .order('booking(start_time)', { ascending: false })
-          .limit(10);
-        setBookings((data || []).map(d => d.booking).filter(Boolean));
+        const { data } = await sb.from('bookings')
+          .select('id, start_time, end_time, status, payment_status, total_amount, court:courts!bookings_court_id_fkey(court_number, court_type)')
+          .eq('user_id', member.user_id)
+          .in('court_id', courtIds)
+          .order('start_time', { ascending: false })
+          .limit(20);
+        setBookings(data || []);
       } catch (e) { console.error(e); }
       finally { setLoadingBk(false); }
     })();
@@ -76,8 +84,8 @@ function MemberProfileModal({ member, clubId, packages, onClose }) {
             { label:'Durum',         value: STATUS_LABELS[member.status] || member.status },
             { label:'Üyelik Paketi', value: pkg?.name || 'Paketsiz' },
             { label:'Katılım Tarihi',value: member.join_date ? fmtDate(member.join_date) : '—' },
-            { label:'Cinsiyet',      value: GENDER_LABELS[member.gender] || '—' },
-            { label:'Doğum Tarihi',  value: member.birth_date ? fmtDate(member.birth_date) : '—' },
+            { label:'Cinsiyet',      value: GENDER_LABELS[playerGender || member.gender] || '—' },
+            { label:'Doğum Tarihi',  value: (profileBirth || member.birth_date) ? fmtDate(profileBirth || member.birth_date) : '—' },
           ].map((row, i) => (
             <div key={i} style={{ display:'flex', justifyContent:'space-between', padding:'10px 14px', borderBottom:'1px solid var(--border)' }}>
               <span style={{ fontSize:13, color:'var(--text-2)' }}>{row.label}</span>
@@ -282,7 +290,10 @@ function MembersScreen({ clubId }) {
       setAddVisible(false);
       resetAddForm();
       loadData();
-    } catch (e) { alert(e.message ?? 'Üye eklenemedi.'); }
+    } catch (e) {
+      const msg = e.message ?? '';
+      alert(msg.includes('uq_club_user_membership') ? 'Bu kişi kulübünüze zaten kayıtlı.' : (msg || 'Üye eklenemedi.'));
+    }
     finally { setSaving(false); }
   };
 
@@ -302,7 +313,10 @@ function MembersScreen({ clubId }) {
       setAddVisible(false);
       resetAddForm();
       loadData();
-    } catch (e) { alert(e.message ?? 'Üye eklenemedi.'); }
+    } catch (e) {
+      const msg = e.message ?? '';
+      alert(msg.includes('uq_club_user_membership') ? 'Bu kişi kulübünüze zaten kayıtlı.' : (msg || 'Üye eklenemedi.'));
+    }
     finally { setSaving(false); }
   };
 

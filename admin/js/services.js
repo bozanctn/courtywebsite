@@ -76,7 +76,7 @@ const MembershipSvc = {
   async getClubMemberships(clubId, statusFilter) {
     await sb.rpc('expire_past_memberships').catch(() => {});
     let q = sb.from('club_memberships')
-      .select('*, package:club_membership_packages(*), profile:profiles(id, full_name, profile_photo_url)')
+      .select('*, package:club_membership_packages(*), profile:profiles(id, full_name, profile_photo_url, birth_date)')
       .eq('club_id', clubId)
       .order('created_at', { ascending: false });
     if (statusFilter && statusFilter.length > 0) q = q.in('status', statusFilter);
@@ -133,7 +133,7 @@ const MembershipSvc = {
       birth_date: data.birth_date ?? null,
       status: 'active',
       join_date: new Date().toISOString().split('T')[0],
-    }).select('*, package:club_membership_packages(*), profile:profiles(id, full_name, profile_photo_url)').single();
+    }).select('*, package:club_membership_packages(*), profile:profiles(id, full_name, profile_photo_url, birth_date)').single();
     if (error) throw error;
     return m;
   },
@@ -1126,6 +1126,80 @@ const LessonPackageSvc = {
       pendingCount: rows.filter(r => r.payment_status === 'pending').length,
       completedCount: rows.filter(r => r.status === 'completed').length,
     };
+  },
+
+  async searchPlayers(query) {
+    if (!query || !query.trim()) return [];
+    const { data, error } = await sb
+      .from('profiles')
+      .select('id, full_name, email')
+      .ilike('full_name', `%${query.trim()}%`)
+      .eq('user_type', 'player')
+      .limit(20);
+    if (error) throw error;
+    return data ?? [];
+  },
+
+  async manualEnrollPlayer(enrollData) {
+    const { data: pkg, error: pkgErr } = await sb
+      .from('lesson_packages')
+      .select('*')
+      .eq('id', enrollData.package_id)
+      .single();
+    if (pkgErr || !pkg) throw new Error('Paket bulunamadı');
+
+    const usedLessons = enrollData.used_lessons ?? 0;
+    const isPaid = (enrollData.payment_status ?? 'paid') === 'paid';
+    let expiryDate = null;
+    if (isPaid) {
+      const d = new Date();
+      d.setDate(d.getDate() + pkg.validity_days);
+      expiryDate = d.toISOString();
+    }
+    const totalPaid = enrollData.total_paid ?? (isPaid ? pkg.price : null);
+
+    const { data: plp, error } = await sb
+      .from('player_lesson_packages')
+      .insert({
+        player_id:          enrollData.player_id ?? null,
+        manual_player_name: enrollData.player_id ? null : (enrollData.manual_player_name?.trim() ?? null),
+        manual_player_phone: enrollData.player_id ? null : (enrollData.manual_player_phone?.trim() ?? null),
+        package_id:         enrollData.package_id,
+        club_id:            enrollData.club_id,
+        coach_id:           enrollData.coach_id ?? pkg.coach_id ?? null,
+        total_lessons:      pkg.total_lessons,
+        used_lessons:       usedLessons,
+        payment_status:     isPaid ? 'paid' : 'pending',
+        status:             'active',
+        total_paid:         totalPaid,
+        expiry_date:        expiryDate,
+        notes:              enrollData.notes ?? null,
+      })
+      .select().single();
+    if (error) throw error;
+
+    if (isPaid && totalPaid && totalPaid > 0) {
+      const displayName = enrollData.player_id
+        ? (enrollData.player_name ?? 'Üye')
+        : (enrollData.manual_player_name?.trim() ?? 'Üye');
+      await sb.from('club_finances').insert({
+        club_id: enrollData.club_id,
+        type: 'income',
+        category: 'Ders Paketi Geliri',
+        amount: totalPaid,
+        description: `${pkg.name} - ${displayName}`,
+        date: new Date().toISOString().split('T')[0],
+      });
+    }
+    return plp;
+  },
+
+  async cancelPlayerPackage(playerPackageId) {
+    const { error } = await sb
+      .from('player_lesson_packages')
+      .update({ status: 'cancelled' })
+      .eq('id', playerPackageId);
+    if (error) throw error;
   },
 };
 

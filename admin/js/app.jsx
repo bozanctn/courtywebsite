@@ -178,7 +178,7 @@ function App() {
   const [clubProfile,     setClubProfile]     = useState(null);
   const [employeeProfile, setEmployeeProfile] = useState(null);
   const [userType,        setUserType]        = useState(null); // 'club' | 'employee'
-  const [screen,          setScreen]          = useState('dashboard');
+  const [screen,          setScreen]          = useState('program');
   const [loading,         setLoading]         = useState(true);
   const [unread,          setUnread]          = useState(0);
   const [pendingMembers,  setPendingMembers]  = useState(0);
