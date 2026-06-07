@@ -271,7 +271,15 @@ function CoachesScreen({ clubId }) {
         source:        'manual',
       }));
 
-      const all = [...lessonItems, ...manualItems, ...groupItems].sort((a, b) => a._sortMs - b._sortMs);
+      const seenGroups = new Set();
+      const uniqueGroupItems = groupItems.filter(item => {
+        const key = `${item._date}_${item._displayStart}_${item._displayEnd}_${item.student_name}`;
+        if (seenGroups.has(key)) return false;
+        seenGroups.add(key);
+        return true;
+      });
+
+      const all = [...lessonItems, ...manualItems, ...uniqueGroupItems].sort((a, b) => a._sortMs - b._sortMs);
       setWeekLessons(all);
     } catch (e) { console.error(e); }
     finally { setScheduleLoading(false); }
