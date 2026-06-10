@@ -823,22 +823,35 @@ function GroupsScreen({ clubId }) {
     if (groupIds.length > 0) {
       const { data: closures } = await sb
         .from('court_closures')
-        .select('group_id, day_of_week, start_hour, end_hour, courts(court_number)')
+        .select('group_id, day_of_week, start_hour, start_minute, end_hour, end_minute, courts(court_number)')
         .in('group_id', groupIds)
         .eq('is_active', true);
+      const DAY_SHORT = ['Paz','Pzt','Sal','Çar','Per','Cum','Cmt'];
       for (const c of closures ?? []) {
-        if (!schedMap[c.group_id]) schedMap[c.group_id] = c;
+        if (!schedMap[c.group_id]) schedMap[c.group_id] = [];
+        schedMap[c.group_id].push(c);
+      }
+      // Her grup için benzersiz gün+saat kombinasyonlarını özetle
+      for (const gid of Object.keys(schedMap)) {
+        const rows = schedMap[gid];
+        const seenDays = new Set();
+        const dayLabels = [];
+        for (const r of rows) {
+          const dk = `${r.day_of_week}_${r.start_hour}_${r.start_minute ?? 0}_${r.end_hour}_${r.end_minute ?? 0}`;
+          if (seenDays.has(dk)) continue;
+          seenDays.add(dk);
+          const sh = String(r.start_hour).padStart(2,'0') + ':' + String(r.start_minute ?? 0).padStart(2,'0');
+          const eh = String(r.end_hour).padStart(2,'0')   + ':' + String(r.end_minute   ?? 0).padStart(2,'0');
+          dayLabels.push(`${DAY_SHORT[r.day_of_week]} ${sh}–${eh}`);
+        }
+        schedMap[gid] = dayLabels.join(' · ');
       }
     }
 
     setGroups((data || []).map(g => ({
       ...g,
       member_count: g.members?.length ?? 0,
-      _schedule: schedMap[g.id]
-        ? `Kort ${schedMap[g.id].courts?.court_number} · ${
-            ['Paz','Pzt','Sal','Çar','Per','Cum','Cmt'][schedMap[g.id].day_of_week]
-          } ${String(schedMap[g.id].start_hour).padStart(2,'0')}:00–${String(schedMap[g.id].end_hour).padStart(2,'0')}:00`
-        : null,
+      _schedule: schedMap[g.id] || null,
     })));
     setLoading(false);
   };

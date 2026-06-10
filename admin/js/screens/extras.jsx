@@ -602,6 +602,13 @@ function MyProgramScreen({ clubId, setScreen }) {
   const [bookingMemberResults, setBookingMemberResults] = useState([]);
   const [bookingMemberLoading, setBookingMemberLoading] = useState(false);
 
+  // Müşteri (CRM) arama — program ekranı
+  const [bookingCustomerId,      setBookingCustomerId]      = useState(null);
+  const [bookingCustomerName,    setBookingCustomerName]    = useState('');
+  const [bookingCustomerQuery,   setBookingCustomerQuery]   = useState('');
+  const [bookingCustomerResults, setBookingCustomerResults] = useState([]);
+  const [bookingPersonMode,      setBookingPersonMode]      = useState('member'); // 'member' | 'customer'
+
   // Ham veri — sorgu yok, useMemo'da filtre var
   const [allBookings,       setAllBookings]       = useState([]);
   const [allLessons,        setAllLessons]        = useState([]);
@@ -1058,6 +1065,8 @@ function MyProgramScreen({ clubId, setScreen }) {
       );
       setBookingForm({ courtId: courtIds[0], date: selDate, startTime: startStr, endTime: endStr, duration, status: 'confirmed' });
       setBookingMemberId(null); setBookingMemberName(''); setBookingMemberQuery(''); setBookingMemberResults([]);
+      setBookingCustomerId(null); setBookingCustomerName(''); setBookingCustomerQuery(''); setBookingCustomerResults([]);
+      setBookingPersonMode('member');
       setSlotTypeModal(false);
       loadBookingAvailCourts(selDate, startStr, endStr);
       setBookingModal(true);
@@ -1783,6 +1792,19 @@ function MyProgramScreen({ clubId, setScreen }) {
     finally { setBookingMemberLoading(false); }
   };
 
+  const searchBookingCustomers = async (q) => {
+    setBookingCustomerQuery(q);
+    if (q.length < 2) { setBookingCustomerResults([]); return; }
+    try {
+      const { data } = await sb.from('club_customers')
+        .select('id, full_name, phone, email, user_id')
+        .eq('club_id', clubId).eq('is_active', true)
+        .or(`full_name.ilike.%${q}%,phone.ilike.%${q}%,email.ilike.%${q}%`)
+        .limit(8);
+      setBookingCustomerResults(data || []);
+    } catch(e) { console.error(e); }
+  };
+
   const saveInlineBooking = async () => {
     const { courtId, date, startTime, endTime, duration, status } = bookingForm;
     if (!courtId)   { alert('Lütfen bir kort seçin.'); return; }
@@ -1838,21 +1860,23 @@ function MyProgramScreen({ clubId, setScreen }) {
       const totalAmount   = Math.round((court?.hourly_rate || 0) * durationHours * 100) / 100;
 
       const { data: bk, error: bkErr } = await sb.from('bookings').insert({
-        court_id:        courtId,
-        user_id:         user.id,
-        start_time:      startDb,
-        end_time:        endDb,
-        status:          status || 'confirmed',
-        is_solo_booking: !bookingMemberId,
-        duration_hours:  durationHours,
-        total_amount:    totalAmount,
+        court_id:         courtId,
+        user_id:          user.id,
+        start_time:       startDb,
+        end_time:         endDb,
+        status:           status || 'confirmed',
+        is_solo_booking:  !bookingMemberId && !bookingCustomerId,
+        duration_hours:   durationHours,
+        total_amount:     totalAmount,
+        club_customer_id: bookingCustomerId || null,
       }).select().single();
       if (bkErr) throw bkErr;
 
-      if (bookingMemberId && bk?.id) {
+      const playerIdToLink = bookingMemberId || null;
+      if (playerIdToLink && bk?.id) {
         await sb.from('booking_players').insert({
           booking_id:        bk.id,
-          player_id:         bookingMemberId,
+          player_id:         playerIdToLink,
           is_primary_player: true,
           status:            'confirmed',
         });
@@ -1860,6 +1884,9 @@ function MyProgramScreen({ clubId, setScreen }) {
 
       setBookingModal(false);
       setSlotClickInfo(null);
+      setBookingCustomerId(null); setBookingCustomerName('');
+      setBookingCustomerQuery(''); setBookingCustomerResults([]);
+      setBookingPersonMode('member');
       await load();
       alert('Rezervasyon başarıyla oluşturuldu.');
     } catch(e) { alert('Hata: ' + e.message); }
@@ -2937,10 +2964,30 @@ function MyProgramScreen({ clubId, setScreen }) {
                 )}
               </div>
 
-              {/* Üye (opsiyonel) */}
+              {/* Kişi seçimi (Üye veya Müşteri) */}
               <div>
-                <div style={{ fontSize:12, fontWeight:700, color:'var(--text-2)', marginBottom:10, letterSpacing:0.4 }}>ÜYE (OPSİYONEL — Limit Kontrolü)</div>
-                {bookingMemberId ? (
+                <div style={{ fontSize:12, fontWeight:700, color:'var(--text-2)', marginBottom:10, letterSpacing:0.4 }}>KİŞİ (OPSİYONEL)</div>
+                {/* Toggle */}
+                <div style={{ display:'flex', gap:8, marginBottom:12 }}>
+                  {[{ key:'member', icon:'group', label:'Üye' }, { key:'customer', icon:'people_alt', label:'Müşteri' }].map(t => (
+                    <button key={t.key} type="button"
+                      style={{ flex:1, padding:'9px 0', borderRadius:10, cursor:'pointer', fontSize:13, fontWeight:600, display:'flex', alignItems:'center', justifyContent:'center', gap:6,
+                        border: bookingPersonMode === t.key ? '1.5px solid var(--brand-navy)' : '1.5px solid var(--border)',
+                        background: bookingPersonMode === t.key ? '#EEF2FF' : 'var(--bg)',
+                        color: bookingPersonMode === t.key ? 'var(--brand-navy)' : 'var(--text-2)' }}
+                      onClick={() => {
+                        setBookingPersonMode(t.key);
+                        if (t.key === 'member') { setBookingCustomerId(null); setBookingCustomerName(''); setBookingCustomerQuery(''); setBookingCustomerResults([]); }
+                        else { setBookingMemberId(null); setBookingMemberName(''); setBookingMemberQuery(''); setBookingMemberResults([]); }
+                      }}>
+                      <span className="material-icons" style={{ fontSize:14 }}>{t.icon}</span>
+                      {t.label}
+                    </button>
+                  ))}
+                </div>
+
+                {/* Üye arama */}
+                {bookingPersonMode === 'member' && (bookingMemberId ? (
                   <div style={{ display:'flex', alignItems:'center', gap:8, background:'#EEF2FF', borderRadius:12, padding:'10px 14px' }}>
                     <span className="material-icons" style={{ color:'var(--brand-navy)', fontSize:16 }}>person</span>
                     <span style={{ flex:1, fontWeight:600, fontSize:13, color:'var(--text-1)' }}>{bookingMemberName}</span>
@@ -2974,7 +3021,47 @@ function MyProgramScreen({ clubId, setScreen }) {
                       </div>
                     )}
                   </div>
-                )}
+                ))}
+
+                {/* Müşteri arama */}
+                {bookingPersonMode === 'customer' && (bookingCustomerId ? (
+                  <div style={{ display:'flex', alignItems:'center', gap:8, background:'#EEF2FF', borderRadius:12, padding:'10px 14px' }}>
+                    <span className="material-icons" style={{ color:'var(--brand-navy)', fontSize:16 }}>people_alt</span>
+                    <span style={{ flex:1, fontWeight:600, fontSize:13, color:'var(--text-1)' }}>{bookingCustomerName}</span>
+                    <button type="button"
+                      onClick={() => { setBookingCustomerId(null); setBookingCustomerName(''); setBookingCustomerQuery(''); setBookingCustomerResults([]); setBookingMemberId(null); setBookingMemberName(''); }}
+                      style={{ background:'none', border:'none', cursor:'pointer', color:'var(--text-2)', padding:0, display:'grid', placeItems:'center' }}>
+                      <span className="material-icons" style={{ fontSize:16 }}>close</span>
+                    </button>
+                  </div>
+                ) : (
+                  <div style={{ position:'relative' }}>
+                    <div style={{ position:'relative' }}>
+                      <input placeholder="Müşteri adı veya telefon ara..." value={bookingCustomerQuery}
+                        onChange={e => searchBookingCustomers(e.target.value)}
+                        style={{ width:'100%', border:'1.5px solid var(--border)', borderRadius:12, padding:'10px 12px 10px 36px', fontSize:14, boxSizing:'border-box', color:'var(--text-1)', background:'var(--bg)' }} />
+                      <span className="material-icons" style={{ position:'absolute', left:10, top:'50%', transform:'translateY(-50%)', fontSize:16, color:'var(--text-2)', pointerEvents:'none' }}>search</span>
+                    </div>
+                    {bookingCustomerResults.length > 0 && (
+                      <div style={{ position:'absolute', top:'100%', left:0, right:0, zIndex:10, background:'#fff', border:'1px solid var(--border)', borderRadius:12, boxShadow:'0 4px 16px rgba(0,0,0,0.12)', overflow:'hidden', marginTop:4 }}>
+                        {bookingCustomerResults.map((c, idx) => (
+                          <div key={c.id}
+                            style={{ padding:'10px 14px', cursor:'pointer', borderBottom: idx < bookingCustomerResults.length-1 ? '1px solid var(--border)' : 'none', fontSize:13, fontWeight:500, display:'flex', alignItems:'center', gap:8 }}
+                            onMouseDown={() => {
+                              setBookingCustomerId(c.id); setBookingCustomerName(c.full_name);
+                              setBookingCustomerQuery(''); setBookingCustomerResults([]);
+                              if (c.user_id) { setBookingMemberId(c.user_id); setBookingMemberName(c.full_name); }
+                            }}>
+                            <span className="material-icons" style={{ fontSize:15, color:'var(--brand-navy)' }}>people_alt</span>
+                            <span style={{ flex:1 }}>{c.full_name}</span>
+                            <span style={{ fontSize:11, color:'var(--text-2)' }}>{c.phone}</span>
+                            {c.user_id && <span style={{ fontSize:10, fontWeight:700, background:'#EEF2FF', color:'var(--brand-navy)', padding:'1px 6px', borderRadius:20 }}>CC</span>}
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                ))}
               </div>
 
               {/* Özet */}
@@ -2991,7 +3078,8 @@ function MyProgramScreen({ clubId, setScreen }) {
                       { label:'Saat',  value: `${bookingForm.startTime} – ${bookingForm.endTime}` },
                       { label:'Süre',  value: fmtD(dh) },
                       { label:'Kort',  value: `Kort ${court?.court_number}` },
-                      ...(bookingMemberName ? [{ label:'Üye', value: bookingMemberName }] : []),
+                      ...(bookingPersonMode === 'member' && bookingMemberName ? [{ label:'Üye', value: bookingMemberName }] : []),
+                      ...(bookingPersonMode === 'customer' && bookingCustomerName ? [{ label:'Müşteri', value: bookingCustomerName }] : []),
                     ].map(({ label, value }) => (
                       <div key={label} style={{ display:'flex', justifyContent:'space-between', marginBottom:8 }}>
                         <span style={{ fontSize:13, color:'var(--text-2)' }}>{label}:</span>
@@ -5892,7 +5980,11 @@ function MemberProfileView({ member, onBack, clubId }) {
                 <div style={{ fontSize:11, fontWeight:700, color:'var(--text-2)', marginBottom:8, letterSpacing:'0.05em' }}>GRUPLAR</div>
                 {allMemberships.map(mem => {
                   const dayLabels = mem.schedule_slots.length > 0
-                    ? mem.schedule_slots.slice().sort((a,b)=>(a.day===0?7:a.day)-(b.day===0?7:b.day)||a.start_hour-b.start_hour).map(s=>`${DAY_LABELS[s.day]} ${String(s.start_hour).padStart(2,'0')}:00`).join(', ')
+                    ? mem.schedule_slots.slice().sort((a,b)=>(a.day===0?7:a.day)-(b.day===0?7:b.day)||a.start_hour-b.start_hour).map(s => {
+                        const cl = (membershipClosures[mem.groupId]||[]).find(c => c.day_of_week===s.day && c.start_hour===s.start_hour);
+                        const min = s.start_minute ?? cl?.start_minute ?? 0;
+                        return `${DAY_LABELS[s.day]} ${String(s.start_hour).padStart(2,'0')}:${String(min).padStart(2,'0')}`;
+                      }).join(', ')
                     : mem.schedule_days.length > 0 ? mem.schedule_days.map(d => DAY_LABELS[d]).join(', ') : 'Tüm seanslar';
                   return (
                     <div key={mem.id}
@@ -6214,7 +6306,7 @@ function GroupPlayersScreen({ clubId }) {
 
       let query = sb
         .from('club_groups')
-        .select('id, name, members:club_group_members(id, member_name, contact_number, contact_person, schedule_days, schedule_slots)', { count: 'exact' })
+        .select('id, name, members:club_group_members(id, member_name, contact_number, contact_person, schedule_days, schedule_slots), closures:court_closures(day_of_week, start_hour, start_minute)', { count: 'exact' })
         .eq('club_id', clubId)
         .eq('is_active', true)
         .order('name')
@@ -6324,7 +6416,11 @@ function GroupPlayersScreen({ clubId }) {
                       {(slots.length > 0 || days.length > 0) && (
                         <div style={{ fontSize:11, color:'#0D9488', fontWeight:600, marginTop:1 }}>
                           {slots.length > 0
-                            ? slots.map(s => `${DAY_LABELS[s.day]} ${String(s.start_hour).padStart(2,'0')}:00`).join(' · ')
+                            ? slots.map(s => {
+                                const cl = (group.closures||[]).find(c => c.day_of_week===s.day && c.start_hour===s.start_hour);
+                                const min = s.start_minute ?? cl?.start_minute ?? 0;
+                                return `${DAY_LABELS[s.day]} ${String(s.start_hour).padStart(2,'0')}:${String(min).padStart(2,'0')}`;
+                              }).join(' · ')
                             : days.map(d => DAY_LABELS[d]).join(' · ')}
                         </div>
                       )}

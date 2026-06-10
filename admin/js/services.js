@@ -936,6 +936,7 @@ const GroupScheduleSvc = {
   },
 
   // Gün bazında çakışma kontrolü (çoklu seans destekli)
+  // Optimizasyon: tüm DB sorguları döngüden önce tek Promise.all ile çekilir (~7 sorgu sabit, gün/slot/antrenör sayısından bağımsız)
   async checkConflictsPerDay(groupId, daySettings, days, allCoaches, globalCoachIds, diffCoachPerDay, dayCoachIds) {
     const msgs = [];
     const DN = ['Pazar','Pazartesi','Salı','Çarşamba','Perşembe','Cuma','Cumartesi'];
@@ -945,49 +946,151 @@ const GroupScheduleSvc = {
       return `${String(Math.floor(h)).padStart(2,'0')}:${min}`;
     };
 
+    // ── 1. Tüm kort ve antrenör ID'lerini topla ───────────────────────────────
+    const allCourtIds = [...new Set(days.flatMap(day =>
+      (daySettings[day] ?? []).flatMap(sl => sl.courts ?? [])
+    ))];
+    const allCoachIds = [...new Set(days.flatMap(day =>
+      diffCoachPerDay ? (dayCoachIds[day] ?? []) : globalCoachIds
+    ))];
+
+    if (allCourtIds.length === 0 && allCoachIds.length === 0) return msgs;
+
+    const todayDb  = localTimeToDb(new Date().toISOString());
+    const todayTs  = new Date().toISOString().split('T')[0] + 'T00:00:00';
+    const today2   = new Date().toISOString().split('T')[0];
+
+    // ── 2. Tüm veriyi tek Promise.all ile paralel çek ─────────────────────────
+    const [coachMetaRows, courtClosureRows, coachClosureRows, bkRows, lsnClubRows, manualRows] =
+      await Promise.all([
+        allCoachIds.length > 0
+          ? sb.from('club_coaches').select('id, individual_coach_id').in('id', allCoachIds)
+          : { data: [] },
+        allCourtIds.length > 0
+          ? sb.from('court_closures')
+              .select('court_id, day_of_week, start_hour, start_minute, end_hour, end_minute, reason, group_id, courts(court_number)')
+              .in('court_id', allCourtIds).in('day_of_week', days)
+              .eq('closure_type', 'recurring_weekly').eq('is_active', true)
+          : { data: [] },
+        allCoachIds.length > 0
+          ? sb.from('court_closures')
+              .select('court_id, day_of_week, start_hour, start_minute, end_hour, end_minute, reason, group_id, coach_id, courts(court_number)')
+              .in('coach_id', allCoachIds).in('day_of_week', days)
+              .eq('closure_type', 'recurring_weekly').eq('is_active', true)
+          : { data: [] },
+        allCourtIds.length > 0
+          ? sb.from('bookings')
+              .select('court_id, start_time, end_time, courts!fk_bookings_court_id(court_number)')
+              .in('court_id', allCourtIds).in('status', ['pending', 'confirmed'])
+              .gte('start_time', todayDb)
+          : { data: [] },
+        allCoachIds.length > 0
+          ? sb.from('lessons').select('coach_id, club_coach_id, start_time, end_time, student_name')
+              .in('club_coach_id', allCoachIds).neq('status', 'cancelled').gte('start_time', todayTs)
+          : { data: [] },
+        allCoachIds.length > 0
+          ? sb.from('club_manual_lessons').select('coach_id, date, start_time, end_time, student_name')
+              .in('coach_id', allCoachIds).gte('date', today2)
+          : { data: [] },
+      ]);
+
+    // individual_coach_id'leri topla, tek ek sorguyla dersleri çek
+    const indToClub = {};
+    const individualCoachIds = [];
+    for (const r of coachMetaRows.data ?? []) {
+      if (r.individual_coach_id) {
+        indToClub[r.individual_coach_id] = r.id;
+        individualCoachIds.push(r.individual_coach_id);
+      }
+    }
+    const lsnIndRows = individualCoachIds.length > 0
+      ? (await sb.from('lessons').select('coach_id, club_coach_id, start_time, end_time, student_name')
+          .in('coach_id', individualCoachIds).neq('status', 'cancelled').gte('start_time', todayTs)).data ?? []
+      : [];
+
+    // ── 3. Lookup map'leri oluştur (in-memory) ────────────────────────────────
+    const mk = (map, key, val) => { (map[key] = map[key] || []).push(val); };
+
+    // Kort closure: key = `${court_id}_${day}`
+    const courtClosureMap = {};
+    for (const r of courtClosureRows.data ?? []) mk(courtClosureMap, `${r.court_id}_${r.day_of_week}`, r);
+
+    // Antrenör closure: key = `${coach_id}_${day}`
+    const coachClosureMap = {};
+    for (const r of coachClosureRows.data ?? []) mk(coachClosureMap, `${r.coach_id}_${r.day_of_week}`, r);
+
+    // Booking: key = `${court_id}_${dow_tr}` (dbTimeToLocal ile TR saati)
+    const bkMap = {};
+    for (const b of bkRows.data ?? []) {
+      const ls = new Date(dbTimeToLocal(b.start_time));
+      const le = new Date(dbTimeToLocal(b.end_time));
+      mk(bkMap, `${b.court_id}_${ls.getDay()}`, {
+        courtNum: b.courts?.court_number ?? '?',
+        bsh: ls.getHours() + ls.getMinutes() / 60,
+        beh: le.getHours() + le.getMinutes() / 60,
+      });
+    }
+
+    // Ders: key = `${club_coach_id}_${dow}`
+    const lessonMap = {};
+    for (const l of [...lsnIndRows, ...(lsnClubRows.data ?? [])]) {
+      const clubId = l.club_coach_id || indToClub[l.coach_id];
+      if (!clubId) continue;
+      const ls = new Date(l.start_time);
+      const le = new Date(l.end_time);
+      mk(lessonMap, `${clubId}_${ls.getDay()}`, {
+        lsh: ls.getHours() + ls.getMinutes() / 60,
+        leh: le.getHours() + le.getMinutes() / 60,
+        student: l.student_name,
+      });
+    }
+
+    // Manuel ders: key = `${coach_id}_${dow}`
+    const manualMap = {};
+    for (const ml of manualRows.data ?? []) {
+      const [msh, msm] = (ml.start_time ?? '0:0').split(':').map(Number);
+      const [meh, mem] = (ml.end_time   ?? '0:0').split(':').map(Number);
+      mk(manualMap, `${ml.coach_id}_${new Date(ml.date + 'T12:00:00').getDay()}`, {
+        lsh: msh + msm / 60, leh: meh + mem / 60, student: ml.student_name,
+      });
+    }
+
+    // ── 4. Çakışma kontrolü — tamamen in-memory ───────────────────────────────
     for (const day of days) {
       const slots = daySettings[day] ?? [{ courts: [], start: 9, end: 11 }];
       const coachIds = diffCoachPerDay ? (dayCoachIds[day] ?? []) : globalCoachIds;
       const effectiveCoaches = allCoaches.filter(c => coachIds.includes(c.id));
 
-      // Fetch coach meta once per day (not per slot)
-      const coachMetas = {};
-      for (const coach of effectiveCoaches) {
-        const { data: meta } = await sb.from('club_coaches').select('individual_coach_id').eq('id', coach.id).maybeSingle();
-        coachMetas[coach.id] = meta;
-      }
-
       for (const { courts: dayCourts = [], start = 9, end = 11 } of slots) {
         if (!dayCourts.length) continue;
         const startMins = start * 60, endMins = end * 60;
 
-        // Kort çakışması
-        const { data: courtRows } = await sb
-          .from('court_closures')
-          .select('court_id, day_of_week, start_hour, start_minute, end_hour, end_minute, reason, group_id, courts(court_number)')
-          .in('court_id', dayCourts)
-          .eq('day_of_week', day)
-          .eq('closure_type', 'recurring_weekly')
-          .eq('is_active', true);
-        for (const row of courtRows ?? []) {
-          if (row.group_id === groupId) continue;
-          const rs = (row.start_hour + (row.start_minute ?? 0) / 60) * 60;
-          const re = (row.end_hour   + (row.end_minute   ?? 0) / 60) * 60;
-          if (startMins >= re || endMins <= rs) continue;
-          const label = row.reason ? ` (${row.reason})` : '';
-          msgs.push({ type: 'court', msg: `Kort ${row.courts?.court_number ?? '?'} · ${DN[day]} ${fmtH(row.start_hour + (row.start_minute??0)/60)}–${fmtH(row.end_hour + (row.end_minute??0)/60)} dolu${label}` });
+        for (const courtId of dayCourts) {
+          // Kort closure çakışması
+          for (const row of courtClosureMap[`${courtId}_${day}`] ?? []) {
+            if (row.group_id === groupId) continue;
+            const rs = (row.start_hour + (row.start_minute ?? 0) / 60) * 60;
+            const re = (row.end_hour   + (row.end_minute   ?? 0) / 60) * 60;
+            if (startMins >= re || endMins <= rs) continue;
+            const label = row.reason ? ` (${row.reason})` : '';
+            msgs.push({ type: 'court', msg: `Kort ${row.courts?.court_number ?? '?'} · ${DN[day]} ${fmtH(row.start_hour + (row.start_minute??0)/60)}–${fmtH(row.end_hour + (row.end_minute??0)/60)} dolu${label}` });
+          }
+
+          // Rezervasyon çakışması
+          const seenBk = new Set();
+          for (const b of bkMap[`${courtId}_${day}`] ?? []) {
+            if (startMins >= b.beh * 60 || endMins <= b.bsh * 60) continue;
+            const bkKey = `${courtId}_${day}`;
+            if (!seenBk.has(bkKey)) {
+              seenBk.add(bkKey);
+              msgs.push({ type: 'court', msg: `Kort ${b.courtNum} · ${DN[day]} ${fmtH(b.bsh)}–${fmtH(b.beh)} aktif rezervasyon var` });
+            }
+          }
         }
 
-        // Hoca çakışması (closure + lessons + manual) per slot
         for (const coach of effectiveCoaches) {
-          const { data: coachRows } = await sb
-            .from('court_closures')
-            .select('court_id, day_of_week, start_hour, start_minute, end_hour, end_minute, reason, group_id, courts(court_number)')
-            .eq('coach_id', coach.id)
-            .eq('day_of_week', day)
-            .eq('closure_type', 'recurring_weekly')
-            .eq('is_active', true);
-          for (const row of coachRows ?? []) {
+          // Antrenör closure çakışması
+          for (const row of coachClosureMap[`${coach.id}_${day}`] ?? []) {
             if (row.group_id === groupId) continue;
             const rs = (row.start_hour + (row.start_minute ?? 0) / 60) * 60;
             const re = (row.end_hour   + (row.end_minute   ?? 0) / 60) * 60;
@@ -995,42 +1098,23 @@ const GroupScheduleSvc = {
             msgs.push({ type: 'coach', msg: `${coach.full_name} · Kort ${row.courts?.court_number ?? '?'} ${DN[day]} ${fmtH(row.start_hour + (row.start_minute??0)/60)}–${fmtH(row.end_hour + (row.end_minute??0)/60)}` });
           }
 
-          const todayTs = new Date().toISOString().split('T')[0] + 'T00:00:00';
-          const meta = coachMetas[coach.id];
-          const lsnQueries = [];
-          if (meta?.individual_coach_id) {
-            lsnQueries.push(sb.from('lessons').select('start_time,end_time,student_name')
-              .eq('coach_id', meta.individual_coach_id).neq('status','cancelled').gte('start_time', todayTs));
-          }
-          lsnQueries.push(sb.from('lessons').select('start_time,end_time,student_name')
-            .eq('club_coach_id', coach.id).neq('status','cancelled').gte('start_time', todayTs));
-          const lsnResults = await Promise.all(lsnQueries);
+          // Ders çakışması
           const seen = new Set();
-          for (const l of lsnResults.flatMap(r => r.data ?? [])) {
-            const ls = new Date(l.start_time);
-            if (ls.getDay() !== day) continue;
-            const lsh = ls.getHours() + ls.getMinutes() / 60;
-            const leh = new Date(l.end_time).getHours() + new Date(l.end_time).getMinutes() / 60;
-            const key = `${coach.id}_${fmtH(start)}_${fmtH(end)}`;
-            if (start < leh && end > lsh && !seen.has(key)) {
+          for (const l of lessonMap[`${coach.id}_${day}`] ?? []) {
+            const key = `${coach.id}_${day}_${fmtH(start)}_${fmtH(end)}`;
+            if (start < l.leh && end > l.lsh && !seen.has(key)) {
               seen.add(key);
-              msgs.push({ type: 'coach', msg: `${coach.full_name} · Ders: ${l.student_name || 'Öğrenci'} her ${DN[day]} ${fmtH(start)}–${fmtH(end)}` });
+              msgs.push({ type: 'coach', msg: `${coach.full_name} · Ders: ${l.student || 'Öğrenci'} her ${DN[day]} ${fmtH(start)}–${fmtH(end)}` });
             }
           }
 
-          const today2 = new Date().toISOString().split('T')[0];
-          const { data: manual } = await sb.from('club_manual_lessons').select('date,start_time,end_time,student_name')
-            .eq('coach_id', coach.id).gte('date', today2);
+          // Manuel ders çakışması
           const seen2 = new Set();
-          for (const ml of manual ?? []) {
-            if (new Date(ml.date).getDay() !== day) continue;
-            const [msh, msm] = (ml.start_time ?? '0:0').split(':').map(Number);
-            const [meh, mem] = (ml.end_time   ?? '0:0').split(':').map(Number);
-            const lsh = msh + msm / 60, leh = meh + mem / 60;
-            const key2 = `${coach.id}_${fmtH(start)}_${fmtH(end)}`;
-            if (start < leh && end > lsh && !seen2.has(key2)) {
+          for (const ml of manualMap[`${coach.id}_${day}`] ?? []) {
+            const key2 = `${coach.id}_${day}_${fmtH(start)}_${fmtH(end)}`;
+            if (start < ml.leh && end > ml.lsh && !seen2.has(key2)) {
               seen2.add(key2);
-              msgs.push({ type: 'coach', msg: `${coach.full_name} · Manuel ders: ${ml.student_name || 'Öğrenci'} her ${DN[day]}` });
+              msgs.push({ type: 'coach', msg: `${coach.full_name} · Manuel ders: ${ml.student || 'Öğrenci'} her ${DN[day]}` });
             }
           }
         }
@@ -1244,5 +1328,153 @@ const ReservationSvc = {
   async updateBookingStatus(bookingId, status) {
     const { error } = await sb.from('bookings').update({ status }).eq('id', bookingId);
     if (error) throw error;
+  },
+};
+
+// ═══════════════════════════════════════════════════════════════
+// CUSTOMER SERVICE (CRM — kulüp müşterileri)
+// ═══════════════════════════════════════════════════════════════
+const CustomerSvc = {
+
+  async getClubCustomers(clubId) {
+    const { data, error } = await sb.from('club_customers')
+      .select('*').eq('club_id', clubId).eq('is_active', true)
+      .order('created_at', { ascending: false });
+    if (error) throw error;
+    return data ?? [];
+  },
+
+  async createCustomer(clubId, data) {
+    const { data: c, error } = await sb.from('club_customers').insert({
+      club_id:    clubId,
+      full_name:  data.full_name.trim(),
+      phone:      data.phone.trim(),
+      email:      data.email?.trim()      || null,
+      gender:     data.gender             || null,
+      birth_date: data.birth_date         || null,
+      notes:      data.notes?.trim()      || null,
+    }).select().single();
+    if (error) throw error;
+    return c;
+  },
+
+  async updateCustomer(id, data) {
+    const { data: c, error } = await sb.from('club_customers').update({
+      full_name:  data.full_name.trim(),
+      phone:      data.phone.trim(),
+      email:      data.email?.trim()      || null,
+      gender:     data.gender             || null,
+      birth_date: data.birth_date         || null,
+      notes:      data.notes?.trim()      || null,
+    }).eq('id', id).select().single();
+    if (error) throw error;
+    return c;
+  },
+
+  async deleteCustomer(id) {
+    const { error } = await sb.from('club_customers').update({ is_active: false }).eq('id', id);
+    if (error) throw error;
+  },
+
+  async getCustomerStats(customerId, clubId, customerUserId) {
+    const { data: courts } = await sb.from('courts').select('id').eq('club_id', clubId);
+    const courtIds = (courts ?? []).map(c => c.id);
+    if (courtIds.length === 0) return { totalSpent: 0, bookingCount: 0, packageCount: 0 };
+
+    const [bk1, bk2, pkgs] = await Promise.all([
+      sb.from('bookings').select('total_amount')
+        .eq('club_customer_id', customerId).in('court_id', courtIds).neq('status', 'cancelled'),
+      customerUserId
+        ? sb.from('bookings').select('total_amount')
+            .eq('user_id', customerUserId).in('court_id', courtIds)
+            .neq('status', 'cancelled').is('club_customer_id', null)
+        : { data: [] },
+      customerUserId
+        ? sb.from('player_lesson_packages').select('total_paid')
+            .eq('player_id', customerUserId).eq('club_id', clubId).eq('payment_status', 'paid')
+        : { data: [] },
+    ]);
+    const allBk = [...(bk1.data ?? []), ...(bk2.data ?? [])];
+    return {
+      totalSpent:   Math.round((
+        allBk.reduce((s, b) => s + (b.total_amount || 0), 0) +
+        (pkgs.data ?? []).reduce((s, p) => s + (p.total_paid || 0), 0)
+      ) * 100) / 100,
+      bookingCount: allBk.length,
+      packageCount: (pkgs.data ?? []).length,
+    };
+  },
+
+  async getCustomerBookings(customerId, clubId, customerUserId) {
+    const { data: courts } = await sb.from('courts').select('id').eq('club_id', clubId);
+    const courtIds = (courts ?? []).map(c => c.id);
+    if (courtIds.length === 0) return [];
+    const sel = 'id, start_time, end_time, status, payment_status, total_amount, court:courts!fk_bookings_court_id(court_number, court_type)';
+    const [r1, r2] = await Promise.all([
+      sb.from('bookings').select(sel)
+        .eq('club_customer_id', customerId).in('court_id', courtIds)
+        .order('start_time', { ascending: false }).limit(30),
+      customerUserId
+        ? sb.from('bookings').select(sel)
+            .eq('user_id', customerUserId).in('court_id', courtIds)
+            .is('club_customer_id', null).order('start_time', { ascending: false }).limit(30)
+        : { data: [] },
+    ]);
+    const seen = new Set();
+    const rows = [];
+    for (const b of [...(r1.data ?? []), ...(r2.data ?? [])]) {
+      if (!seen.has(b.id)) { seen.add(b.id); rows.push(b); }
+    }
+    return rows
+      .sort((a, b) => new Date(b.start_time) - new Date(a.start_time))
+      .slice(0, 30)
+      .map(b => ({ ...b, start_time: dbTimeToLocal(b.start_time), end_time: dbTimeToLocal(b.end_time) }));
+  },
+
+  async getCustomerLessonPackages(customerId, clubId, customerUserId) {
+    if (!customerUserId) return [];
+    const { data, error } = await sb.from('player_lesson_packages')
+      .select('*, package:lesson_packages(name, total_lessons, price)')
+      .eq('player_id', customerUserId).eq('club_id', clubId)
+      .order('created_at', { ascending: false });
+    if (error) throw error;
+    return data ?? [];
+  },
+
+  async linkToProfile(customerId, userId) {
+    const [{ data: cust }, { data: prof }, { data: pp }] = await Promise.all([
+      sb.from('club_customers').select('email, birth_date, gender').eq('id', customerId).single(),
+      sb.from('profiles').select('email, birth_date').eq('id', userId).single(),
+      sb.from('player_profiles').select('gender').eq('user_id', userId).maybeSingle(),
+    ]);
+
+    // club_customers tablosunu güncelle
+    const upd = { user_id: userId };
+    if (!cust?.email      && prof?.email)      upd.email      = prof.email;
+    if (!cust?.birth_date && prof?.birth_date) upd.birth_date = prof.birth_date;
+    if (!cust?.gender     && pp?.gender)       upd.gender     = pp.gender;
+    const { error: e1 } = await sb.from('club_customers').update(upd).eq('id', customerId);
+    if (e1) throw e1;
+
+    // Bu müşteriye ait mevcut bookingleri bul
+    const { data: existingBk } = await sb.from('bookings')
+      .select('id').eq('club_customer_id', customerId);
+    const bkIds = (existingBk ?? []).map(b => b.id);
+
+    if (bkIds.length > 0) {
+      // Zaten booking_players'da olan satırları al (çift kayıt olmasın)
+      const { data: alreadyLinked } = await sb.from('booking_players')
+        .select('booking_id').in('booking_id', bkIds).eq('player_id', userId);
+      const linkedSet = new Set((alreadyLinked ?? []).map(p => p.booking_id));
+
+      const toInsert = bkIds
+        .filter(id => !linkedSet.has(id))
+        .map(id => ({ booking_id: id, player_id: userId, is_primary_player: true, status: 'confirmed' }));
+
+      if (toInsert.length > 0) {
+        const { error: e3 } = await sb.from('booking_players').insert(toInsert);
+        if (e3) throw e3;
+      }
+    }
   },
 };

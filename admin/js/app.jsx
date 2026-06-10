@@ -10,6 +10,7 @@ const ALL_NAV_ITEMS = [
   { key: 'members',        icon: 'group',                  label: 'Üyeler',             section: null,         employeeOk: true  },
   { key: 'coaches',        icon: 'person',                 label: 'Koçlar',             section: null,         employeeOk: true  },
   { key: 'employees',      icon: 'badge',                  label: 'Çalışanlar',         section: null,         employeeOk: false },
+  { key: 'customers',      icon: 'people_alt',             label: 'Müşteriler',         section: null,         employeeOk: false },
   { key: 'lesson_requests',icon: 'mark_email_unread',      label: 'Ders Talepleri',     section: null,         employeeOk: true  },
   { key: 'packages',       icon: 'inventory_2',            label: 'Ders Paketleri',     section: null,         employeeOk: true  },
   { key: 'student_notes',  icon: 'sticky_note_2',          label: 'Öğrenci Notları',    section: null,         employeeOk: true  },
@@ -137,7 +138,7 @@ function AccessDenied() {
 }
 
 // ── Ekran yönlendirici ─────────────────────────────────────────
-const EMPLOYEE_BLOCKED = new Set(['employees', 'finance', 'wallet', 'analytics', 'reviews', 'profile']);
+const EMPLOYEE_BLOCKED = new Set(['employees', 'customers', 'finance', 'wallet', 'analytics', 'reviews', 'profile']);
 
 function ScreenRouter({ screen, setScreen, clubId, clubProfile, userType }) {
   const ctx = { clubId, clubProfile, setScreen, userType };
@@ -153,6 +154,7 @@ function ScreenRouter({ screen, setScreen, clubId, clubProfile, userType }) {
     case 'members':         return <MembersScreen              {...ctx} />;
     case 'coaches':         return <CoachesScreen              {...ctx} />;
     case 'employees':       return <EmployeesScreen            {...ctx} />;
+    case 'customers':       return <CustomersScreen            {...ctx} />;
     case 'lesson_requests': return <LessonRequestsScreen       {...ctx} />;
     case 'packages':        return <LessonPackagesScreen       {...ctx} />;
     case 'student_notes':   return <StudentNotesScreen         {...ctx} />;

@@ -212,7 +212,7 @@ function CoachesScreen({ clubId }) {
           .gte('date', startDate)
           .lte('date', endDate),
         sb.from('court_closures')
-          .select('id, start_hour, end_hour, start_date, end_date, day_of_week, closure_type, reason, club_groups(name)')
+          .select('id, start_hour, start_minute, end_hour, end_minute, start_date, end_date, day_of_week, closure_type, reason, club_groups(name)')
           .eq('coach_id', coach.id)
           .eq('is_active', true),
       ]);
@@ -225,12 +225,14 @@ function CoachesScreen({ clubId }) {
         const groupName = g.club_groups?.name || g.reason || 'Grup Dersi';
         if (g.closure_type === 'recurring_weekly') {
           const idx = dowToIdx(g.day_of_week);
-          const d = new Date(days[idx]); d.setHours(g.start_hour, 0, 0, 0);
+          const sm = g.start_minute ?? 0;
+          const em = g.end_minute   ?? 0;
+          const d = new Date(days[idx]); d.setHours(g.start_hour, sm, 0, 0);
           groupItems.push({
             id: g.id,
             _date:         days[idx].toISOString().split('T')[0],
-            _displayStart: `${String(g.start_hour).padStart(2, '0')}:00`,
-            _displayEnd:   `${String(g.end_hour).padStart(2, '0')}:00`,
+            _displayStart: `${String(g.start_hour).padStart(2,'0')}:${String(sm).padStart(2,'0')}`,
+            _displayEnd:   `${String(g.end_hour).padStart(2,'0')}:${String(em).padStart(2,'0')}`,
             _sortMs:       d.getTime(),
             student_name:  groupName,
             location:      null, notes: null, amount: null,
@@ -238,12 +240,14 @@ function CoachesScreen({ clubId }) {
             source:        'group',
           });
         } else if (g.closure_type === 'one_time' && g.start_date >= startDate && g.start_date <= endDate) {
-          const d = new Date(g.start_date + 'T00:00:00'); d.setHours(g.start_hour, 0, 0, 0);
+          const sm = g.start_minute ?? 0;
+          const em = g.end_minute   ?? 0;
+          const d = new Date(g.start_date + 'T00:00:00'); d.setHours(g.start_hour, sm, 0, 0);
           groupItems.push({
             id: g.id,
             _date:         g.start_date,
-            _displayStart: `${String(g.start_hour).padStart(2, '0')}:00`,
-            _displayEnd:   `${String(g.end_hour).padStart(2, '0')}:00`,
+            _displayStart: `${String(g.start_hour).padStart(2,'0')}:${String(sm).padStart(2,'0')}`,
+            _displayEnd:   `${String(g.end_hour).padStart(2,'0')}:${String(em).padStart(2,'0')}`,
             _sortMs:       d.getTime(),
             student_name:  groupName,
             location:      null, notes: null, amount: null,
@@ -784,8 +788,8 @@ function LessonsScreen({ clubId }) {
 
         const dow = new Date(dateStr + 'T12:00:00').getDay();
         const closureBlock = (closures || []).some(cl => {
-          const cs = String(cl.start_hour ?? 0).padStart(2,'0') + ':00';
-          const ce = String(cl.end_hour   ?? 0).padStart(2,'0') + ':00';
+          const cs = String(cl.start_hour ?? 0).padStart(2,'0') + ':' + String(cl.start_minute ?? 0).padStart(2,'0');
+          const ce = String(cl.end_hour   ?? 0).padStart(2,'0') + ':' + String(cl.end_minute   ?? 0).padStart(2,'0');
           if (!(cs < endHH && ce > startHH)) return false;
           if (cl.closure_type === 'recurring_weekly') return cl.day_of_week === dow;
           return (!cl.start_date || cl.start_date <= dateStr) && (!cl.end_date || cl.end_date >= dateStr);

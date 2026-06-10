@@ -310,6 +310,13 @@ function ReservationsScreen({ clubId, setScreen }) {
   const [bkMemberResults, setBkMemberResults] = useState([]);
   const [bkMemberLoading, setBkMemberLoading] = useState(false);
 
+  // Müşteri (CRM) arama state'leri
+  const [bkCustomerId,      setBkCustomerId]      = useState(null);
+  const [bkCustomerName,    setBkCustomerName]    = useState('');
+  const [bkCustomerQuery,   setBkCustomerQuery]   = useState('');
+  const [bkCustomerResults, setBkCustomerResults] = useState([]);
+  const [bkPersonMode,      setBkPersonMode]      = useState('member'); // 'member' | 'customer'
+
   // Özel dersler state
   const [lessons,      setLessons]      = useState([]);
   const [coaches,      setCoaches]      = useState([]);
@@ -359,6 +366,31 @@ function ReservationsScreen({ clubId, setScreen }) {
     } else if (p.type === 'lesson') {
       // Özel ders: coaches yüklendikten sonra açılacak — loadLessons içinde handle ediliyor
       setMainTab('lessons');
+    }
+
+    // Müşteri ekranından gelen prefill
+    const cp = window.__customerPrefill;
+    if (cp) {
+      window.__customerPrefill = null;
+      setBkCustomerId(cp.customerId);
+      setBkCustomerName(cp.customerName);
+      if (cp.userId) { setBkMemberId(cp.userId); setBkMemberName(cp.customerName); }
+      setBkPersonMode('customer');
+      setBkMemberId(cp.userId || null);
+      setBkMemberName(cp.userId ? cp.customerName : '');
+      const todayStr = todayISO();
+      setBkForm({ courtId: '', date: todayStr, startTime: '09:00', endTime: '10:00', duration: 1.0, status: 'confirmed' });
+      setBkMemberQuery(''); setBkMemberResults([]);
+      setBkCustomerQuery(''); setBkCustomerResults([]);
+      setBkModalVisible(true);
+      sb.from('courts').select('id,court_number,court_type,hourly_rate,is_indoor')
+        .eq('club_id', clubId).eq('is_active', true).order('court_number')
+        .then(({ data }) => {
+          const list = data || [];
+          setCourts(list);
+          setBkForm(prev => ({ ...prev, courtId: list[0]?.id || '' }));
+          loadBkAvailCourts(todayStr, '09:00', '10:00', list);
+        });
     }
   }, []);
 
@@ -495,6 +527,8 @@ function ReservationsScreen({ clubId, setScreen }) {
     const endTime   = '10:00';
     setBkForm({ courtId: courts[0]?.id || '', date: selDate, startTime, endTime, duration: 1.0, status: 'confirmed' });
     setBkMemberId(null); setBkMemberName(''); setBkMemberQuery(''); setBkMemberResults([]);
+    setBkCustomerId(null); setBkCustomerName(''); setBkCustomerQuery(''); setBkCustomerResults([]);
+    setBkPersonMode('member');
     loadBkAvailCourts(selDate, startTime, endTime);
     setBkModalVisible(true);
   };
@@ -543,7 +577,11 @@ function ReservationsScreen({ clubId, setScreen }) {
         }
       }
       setBkAvailCourts(list.filter(c => !blocked.has(c.id)));
-    } catch(e) { console.error(e); setBkAvailCourts([...list]); }
+    } catch(e) {
+      console.error(e);
+      // Müsaitlik kontrolü başarısız olursa tüm kortları kapalı göster — fail-open yerine fail-closed
+      setBkAvailCourts([]);
+    }
     finally { setBkCourtsLoading(false); }
   };
 
@@ -570,6 +608,19 @@ function ReservationsScreen({ clubId, setScreen }) {
       setBkMemberResults(data || []);
     } catch(e) { console.error(e); }
     finally { setBkMemberLoading(false); }
+  };
+
+  const searchBkCustomers = async (q) => {
+    setBkCustomerQuery(q);
+    if (q.length < 2) { setBkCustomerResults([]); return; }
+    try {
+      const { data } = await sb.from('club_customers')
+        .select('id, full_name, phone, email, user_id')
+        .eq('club_id', clubId).eq('is_active', true)
+        .or(`full_name.ilike.%${q}%,phone.ilike.%${q}%,email.ilike.%${q}%`)
+        .limit(8);
+      setBkCustomerResults(data || []);
+    } catch(e) { console.error(e); }
   };
 
   const saveBkBooking = async () => {
@@ -603,15 +654,21 @@ function ReservationsScreen({ clubId, setScreen }) {
 
     setBkSaving(true);
     try {
-      const [bConflict, mConflict, closures] = await Promise.all([
+      const [bConflict, mConflict, closures, lConflict] = await Promise.all([
         sb.from('bookings').select('id').eq('court_id', courtId)
           .in('status',['pending','confirmed']).lt('start_time', endDb).gt('end_time', startDb),
         sb.from('club_manual_lessons').select('id, start_time, end_time')
           .eq('court_id', courtId).eq('date', date),
         sb.from('court_closures').select('*').eq('court_id', courtId).eq('is_active', true),
+        // startDb/endDb localTimeToDb ile oluşturuldu — lessons da aynı offset konvansiyonunu kullanıyor
+        sb.from('lessons').select('id').eq('court_id', courtId)
+          .neq('status','cancelled').lt('start_time', endDb).gt('end_time', startDb).not('court_id','is',null),
       ]);
       if ((bConflict.data || []).length > 0) {
         alert('Bu kort seçilen saatte zaten rezerve edilmiş.'); return;
+      }
+      if ((lConflict.data || []).length > 0) {
+        alert('Bu kort seçilen saatte planlanmış bir özel ders var.'); return;
       }
       const hasManualConflict = (mConflict.data || []).some(l => {
         const [lsh, lsm] = l.start_time.split(':').map(Number);
@@ -636,21 +693,23 @@ function ReservationsScreen({ clubId, setScreen }) {
       const totalAmount   = Math.round((court?.hourly_rate || 0) * durationHours * 100) / 100;
 
       const { data: bk, error: bkErr } = await sb.from('bookings').insert({
-        court_id:        courtId,
-        user_id:         user.id,
-        start_time:      startDb,
-        end_time:        endDb,
-        status:          status || 'confirmed',
-        is_solo_booking: !bkMemberId,
-        duration_hours:  durationHours,
-        total_amount:    totalAmount,
+        court_id:          courtId,
+        user_id:           user.id,
+        start_time:        startDb,
+        end_time:          endDb,
+        status:            status || 'confirmed',
+        is_solo_booking:   !bkMemberId && !bkCustomerId,
+        duration_hours:    durationHours,
+        total_amount:      totalAmount,
+        club_customer_id:  bkCustomerId || null,
       }).select().single();
       if (bkErr) throw bkErr;
 
-      if (bkMemberId && bk?.id) {
+      const playerIdToLink = bkMemberId || null;
+      if (playerIdToLink && bk?.id) {
         await sb.from('booking_players').insert({
           booking_id:        bk.id,
-          player_id:         bkMemberId,
+          player_id:         playerIdToLink,
           is_primary_player: true,
           status:            'confirmed',
         });
@@ -783,8 +842,8 @@ function ReservationsScreen({ clubId, setScreen }) {
 
       const dow = new Date(dateStr + 'T12:00:00').getDay();
       const closureBlock = (closures || []).some(cl => {
-        const cs = String(cl.start_hour ?? 0).padStart(2,'0') + ':00';
-        const ce = String(cl.end_hour   ?? 0).padStart(2,'0') + ':00';
+        const cs = String(cl.start_hour ?? 0).padStart(2,'0') + ':' + String(cl.start_minute ?? 0).padStart(2,'0');
+        const ce = String(cl.end_hour   ?? 0).padStart(2,'0') + ':' + String(cl.end_minute   ?? 0).padStart(2,'0');
         if (!(cs < endHH && ce > startHH)) return false;
         if (cl.closure_type === 'recurring_weekly') return cl.day_of_week === dow;
         return (!cl.start_date || cl.start_date <= dateStr) && (!cl.end_date || cl.end_date >= dateStr);
@@ -1078,8 +1137,8 @@ function ReservationsScreen({ clubId, setScreen }) {
 
       const dow = new Date(dateStr + 'T12:00:00').getDay();
       const closureBlock = (closures || []).some(cl => {
-        const cs = String(cl.start_hour ?? 0).padStart(2,'0') + ':00';
-        const ce = String(cl.end_hour   ?? 0).padStart(2,'0') + ':00';
+        const cs = String(cl.start_hour ?? 0).padStart(2,'0') + ':' + String(cl.start_minute ?? 0).padStart(2,'0');
+        const ce = String(cl.end_hour   ?? 0).padStart(2,'0') + ':' + String(cl.end_minute   ?? 0).padStart(2,'0');
         if (!(cs < endHH && ce > startHH)) return false;
         if (cl.closure_type === 'recurring_weekly') return cl.day_of_week === dow;
         return (!cl.start_date || cl.start_date <= dateStr) && (!cl.end_date || cl.end_date >= dateStr);
@@ -1114,11 +1173,13 @@ function ReservationsScreen({ clubId, setScreen }) {
 
         const conflicts = [];
         for (const cl of coachClosures || []) {
-          const clStart = (cl.start_hour || 0) * 60;
-          const clEnd   = (cl.end_hour   || 0) * 60;
+          const clStart = (cl.start_hour || 0) * 60 + (cl.start_minute || 0);
+          const clEnd   = (cl.end_hour   || 0) * 60 + (cl.end_minute   || 0);
           if (startMin >= clEnd || endMin <= clStart) continue;
           if (cl.closure_type === 'recurring_weekly' && cl.day_of_week === lessonDow) {
-            conflicts.push(`Grup Programı: ${cl.reason || 'Antrenman'} · ${String(cl.start_hour).padStart(2,'0')}:00–${String(cl.end_hour).padStart(2,'0')}:00`);
+            const clStartStr = String(cl.start_hour).padStart(2,'0') + ':' + String(cl.start_minute ?? 0).padStart(2,'0');
+            const clEndStr   = String(cl.end_hour).padStart(2,'0')   + ':' + String(cl.end_minute   ?? 0).padStart(2,'0');
+            conflicts.push(`Grup Programı: ${cl.reason || 'Antrenman'} · ${clStartStr}–${clEndStr}`);
           } else if (cl.closure_type === 'one_time' && cl.start_date && cl.end_date) {
             if (dateStr >= cl.start_date && dateStr <= cl.end_date) {
               conflicts.push(`Tek Seferlik Program: ${cl.reason || 'Kapalı'} · ${cl.start_date}–${cl.end_date}`);
@@ -1771,10 +1832,30 @@ function ReservationsScreen({ clubId, setScreen }) {
                 )}
               </div>
 
-              {/* Üye (opsiyonel) */}
+              {/* Kişi seçimi (Üye veya Müşteri) */}
               <div>
-                <div style={{ fontSize:12, fontWeight:700, color:'var(--text-2)', marginBottom:10, letterSpacing:0.4 }}>ÜYE (OPSİYONEL — Limit Kontrolü)</div>
-                {bkMemberId ? (
+                <div style={{ fontSize:12, fontWeight:700, color:'var(--text-2)', marginBottom:10, letterSpacing:0.4 }}>KİŞİ (OPSİYONEL)</div>
+                {/* Toggle */}
+                <div style={{ display:'flex', gap:8, marginBottom:12 }}>
+                  {[{ key:'member', icon:'group', label:'Üye' }, { key:'customer', icon:'people_alt', label:'Müşteri' }].map(t => (
+                    <button key={t.key} type="button"
+                      style={{ flex:1, padding:'9px 0', borderRadius:10, cursor:'pointer', fontSize:13, fontWeight:600, display:'flex', alignItems:'center', justifyContent:'center', gap:6,
+                        border: bkPersonMode === t.key ? '1.5px solid var(--brand-navy)' : '1.5px solid var(--border)',
+                        background: bkPersonMode === t.key ? '#EEF2FF' : 'var(--bg)',
+                        color: bkPersonMode === t.key ? 'var(--brand-navy)' : 'var(--text-2)' }}
+                      onClick={() => {
+                        setBkPersonMode(t.key);
+                        if (t.key === 'member') { setBkCustomerId(null); setBkCustomerName(''); setBkCustomerQuery(''); setBkCustomerResults([]); }
+                        else { setBkMemberId(null); setBkMemberName(''); setBkMemberQuery(''); setBkMemberResults([]); }
+                      }}>
+                      <span className="material-icons" style={{ fontSize:14 }}>{t.icon}</span>
+                      {t.label}
+                    </button>
+                  ))}
+                </div>
+
+                {/* Üye arama */}
+                {bkPersonMode === 'member' && (bkMemberId ? (
                   <div style={{ display:'flex', alignItems:'center', gap:8, background:'#EEF2FF', borderRadius:12, padding:'10px 14px' }}>
                     <span className="material-icons" style={{ color:'var(--brand-navy)', fontSize:16 }}>person</span>
                     <span style={{ flex:1, fontWeight:600, fontSize:13, color:'var(--text-1)' }}>{bkMemberName}</span>
@@ -1805,7 +1886,47 @@ function ReservationsScreen({ clubId, setScreen }) {
                       </div>
                     )}
                   </div>
-                )}
+                ))}
+
+                {/* Müşteri arama */}
+                {bkPersonMode === 'customer' && (bkCustomerId ? (
+                  <div style={{ display:'flex', alignItems:'center', gap:8, background:'#EEF2FF', borderRadius:12, padding:'10px 14px' }}>
+                    <span className="material-icons" style={{ color:'var(--brand-navy)', fontSize:16 }}>people_alt</span>
+                    <span style={{ flex:1, fontWeight:600, fontSize:13, color:'var(--text-1)' }}>{bkCustomerName}</span>
+                    <button type="button"
+                      onClick={() => { setBkCustomerId(null); setBkCustomerName(''); setBkCustomerQuery(''); setBkCustomerResults([]); setBkMemberId(null); setBkMemberName(''); }}
+                      style={{ background:'none', border:'none', cursor:'pointer', color:'var(--text-2)', padding:0, display:'grid', placeItems:'center' }}>
+                      <span className="material-icons" style={{ fontSize:16 }}>close</span>
+                    </button>
+                  </div>
+                ) : (
+                  <div style={{ position:'relative' }}>
+                    <div style={{ position:'relative' }}>
+                      <input placeholder="Müşteri adı veya telefon ara..." value={bkCustomerQuery}
+                        onChange={e => searchBkCustomers(e.target.value)}
+                        style={{ width:'100%', border:'1.5px solid var(--border)', borderRadius:12, padding:'10px 12px 10px 36px', fontSize:14, boxSizing:'border-box', color:'var(--text-1)', background:'var(--bg)' }} />
+                      <span className="material-icons" style={{ position:'absolute', left:10, top:'50%', transform:'translateY(-50%)', fontSize:16, color:'var(--text-2)', pointerEvents:'none' }}>search</span>
+                    </div>
+                    {bkCustomerResults.length > 0 && (
+                      <div style={{ position:'absolute', top:'100%', left:0, right:0, zIndex:10, background:'#fff', border:'1px solid var(--border)', borderRadius:12, boxShadow:'0 4px 16px rgba(0,0,0,0.12)', overflow:'hidden', marginTop:4 }}>
+                        {bkCustomerResults.map((c, idx) => (
+                          <div key={c.id}
+                            style={{ padding:'10px 14px', cursor:'pointer', borderBottom: idx < bkCustomerResults.length-1 ? '1px solid var(--border)' : 'none', fontSize:13, fontWeight:500, display:'flex', alignItems:'center', gap:8 }}
+                            onMouseDown={() => {
+                              setBkCustomerId(c.id); setBkCustomerName(c.full_name);
+                              setBkCustomerQuery(''); setBkCustomerResults([]);
+                              if (c.user_id) { setBkMemberId(c.user_id); setBkMemberName(c.full_name); }
+                            }}>
+                            <span className="material-icons" style={{ fontSize:15, color:'var(--brand-navy)' }}>people_alt</span>
+                            <span style={{ flex:1 }}>{c.full_name}</span>
+                            <span style={{ fontSize:11, color:'var(--text-2)' }}>{c.phone}</span>
+                            {c.user_id && <span style={{ fontSize:10, fontWeight:700, background:'#EEF2FF', color:'var(--brand-navy)', padding:'1px 6px', borderRadius:20 }}>CC</span>}
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                ))}
               </div>
 
               {/* Özet */}
@@ -1824,7 +1945,8 @@ function ReservationsScreen({ clubId, setScreen }) {
                       { label:'Saat',  value: `${bkForm.startTime} – ${bkForm.endTime}` },
                       { label:'Süre',  value: fmtD(bkForm.duration || 1) },
                       { label:'Kort',  value: `Kort ${court?.court_number}` },
-                      ...(bkMemberName ? [{ label:'Üye', value: bkMemberName }] : []),
+                      ...(bkPersonMode === 'member' && bkMemberName ? [{ label:'Üye', value: bkMemberName }] : []),
+                      ...(bkPersonMode === 'customer' && bkCustomerName ? [{ label:'Müşteri', value: bkCustomerName }] : []),
                     ].map(({ label, value }) => (
                       <div key={label} style={{ display:'flex', justifyContent:'space-between', marginBottom:8 }}>
                         <span style={{ fontSize:13, color:'var(--text-2)' }}>{label}:</span>
@@ -2287,6 +2409,37 @@ function CourtsScreen({ clubId, setScreen }) {
           setSaving(false);
           setConflictWarning(`⚠️ ${coachName} bu saatte başka bir programa atanmış (${overlapping[0].reason || 'Ders'}). Yine de kaydetmek için tekrar tıklayın.`);
           return;
+        }
+      }
+
+      // Mevcut rezervasyon çakışması kontrolü (TR saati için dbTimeToLocal uygulanıyor)
+      {
+        const chkType    = closureForm.closure_type || 'recurring_weekly';
+        const chkCourtId = closureModal.courtId;
+        let bkQuery = sb.from('bookings')
+          .select('id, start_time, end_time')
+          .eq('court_id', chkCourtId)
+          .in('status', ['pending', 'confirmed'])
+          .gte('start_time', localTimeToDb(new Date().toISOString()));
+        if (chkType === 'one_time' && closureForm.start_date && closureForm.end_date) {
+          bkQuery = bkQuery
+            .lte('start_time', localTimeToDb(`${closureForm.end_date}T23:59:59`));
+        }
+        const { data: upcomingBk } = await bkQuery;
+        const conflictingBk = (upcomingBk || []).filter(b => {
+          const localStart = new Date(dbTimeToLocal(b.start_time));
+          const localEnd   = new Date(dbTimeToLocal(b.end_time));
+          if (chkType === 'recurring_weekly' && localStart.getDay() !== (closureForm.day_of_week ?? 1)) return false;
+          const bsh = localStart.getHours() + localStart.getMinutes() / 60;
+          const beh = localEnd.getHours()   + localEnd.getMinutes()   / 60;
+          return startTime < beh && endTime > bsh;
+        });
+        if (conflictingBk.length > 0) {
+          const ok = confirm(
+            `⚠️ Bu saatte ${conflictingBk.length} aktif rezervasyon var. ` +
+            `Kort kapatılırsa bu rezervasyonlar etkilenecek. Yine de devam etmek istiyor musunuz?`
+          );
+          if (!ok) { setSaving(false); return; }
         }
       }
 
