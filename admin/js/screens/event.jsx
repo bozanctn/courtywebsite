@@ -1856,6 +1856,10 @@ function LessonPackagesScreen({ clubId }) {
   const [enrollPaid,          setEnrollPaid]          = useState('');
   const [enrollNotes,         setEnrollNotes]         = useState('');
   const [enrollSaving,        setEnrollSaving]        = useState(false);
+  const [enrollCustomerSearch,   setEnrollCustomerSearch]   = useState('');
+  const [enrollCustomerResults,  setEnrollCustomerResults]  = useState([]);
+  const [enrollCustomerSearching,setEnrollCustomerSearching]= useState(false);
+  const [enrollSelectedCustomer, setEnrollSelectedCustomer] = useState(null);
 
   useEffect(() => { if (clubId) { loadPackages(); loadCoaches(); loadStats(); } }, [clubId]);
   useEffect(() => { if (clubId && tab !== 'packages') loadPlayerPackages(); }, [tab, clubId]);
@@ -1952,11 +1956,9 @@ function LessonPackagesScreen({ clubId }) {
   const openEnrollModal = (pkg) => {
     setEnrollModal({ pkg });
     setEnrollMode('app');
-    setEnrollSearch('');
-    setEnrollResults([]);
-    setEnrollSelectedPlayer(null);
-    setEnrollName('');
-    setEnrollPhone('');
+    setEnrollSearch(''); setEnrollResults([]); setEnrollSelectedPlayer(null);
+    setEnrollCustomerSearch(''); setEnrollCustomerResults([]); setEnrollSelectedCustomer(null);
+    setEnrollName(''); setEnrollPhone('');
     setEnrollCoachId(coachProfileId(coaches.find(c => c.individual_coach_id === pkg.coach_id || c.id === pkg.coach_id)?.id || '') || '');
     setEnrollUsed('0');
     setEnrollPayStatus('paid');
@@ -1974,23 +1976,49 @@ function LessonPackagesScreen({ clubId }) {
     finally { setEnrollSearching(false); }
   };
 
+  const handleEnrollCustomerSearch = async (q) => {
+    setEnrollCustomerSearch(q);
+    setEnrollSelectedCustomer(null);
+    if (q.trim().length < 2) { setEnrollCustomerResults([]); return; }
+    setEnrollCustomerSearching(true);
+    try {
+      const { data } = await sb.from('club_customers')
+        .select('id, full_name, phone, email, user_id')
+        .eq('club_id', clubId).eq('is_active', true)
+        .or(`full_name.ilike.%${q}%,phone.ilike.%${q}%,email.ilike.%${q}%`)
+        .limit(8);
+      setEnrollCustomerResults(data || []);
+    } catch { setEnrollCustomerResults([]); }
+    finally { setEnrollCustomerSearching(false); }
+  };
+
   const doEnroll = async () => {
     if (!enrollModal) return;
     const pkg = enrollModal.pkg;
-    if (enrollMode === 'app' && !enrollSelectedPlayer) { alert('Bir oyuncu seçin.'); return; }
-    if (enrollMode === 'manual' && !enrollName.trim()) { alert('Üye adı zorunludur.'); return; }
+    if (enrollMode === 'app'      && !enrollSelectedPlayer)  { alert('Bir oyuncu seçin.'); return; }
+    if (enrollMode === 'customer' && !enrollSelectedCustomer) { alert('Bir müşteri seçin.'); return; }
+    if (enrollMode === 'manual'   && !enrollName.trim())      { alert('Ad Soyad zorunludur.'); return; }
     const used = parseInt(enrollUsed, 10) || 0;
     if (used >= pkg.total_lessons) { alert(`Tamamlanan ders sayısı ${pkg.total_lessons - 1} veya daha az olmalı.`); return; }
     setEnrollSaving(true);
     try {
+      const customer = enrollSelectedCustomer;
       await LessonPackageSvc.manualEnrollPlayer({
         package_id:          pkg.id,
         club_id:             clubId,
         coach_id:            enrollCoachId ? coachProfileId(enrollCoachId) : null,
-        player_id:           enrollMode === 'app' ? enrollSelectedPlayer.id : null,
-        player_name:         enrollMode === 'app' ? enrollSelectedPlayer.full_name : null,
-        manual_player_name:  enrollMode === 'manual' ? enrollName.trim() : null,
-        manual_player_phone: enrollMode === 'manual' ? (enrollPhone.trim() || null) : null,
+        player_id:           enrollMode === 'app'      ? enrollSelectedPlayer.id
+                           : enrollMode === 'customer' ? (customer.user_id || null)
+                           : null,
+        player_name:         enrollMode === 'app'      ? enrollSelectedPlayer.full_name
+                           : enrollMode === 'customer' ? customer.full_name
+                           : null,
+        manual_player_name:  enrollMode === 'manual'   ? enrollName.trim()
+                           : enrollMode === 'customer' && !customer.user_id ? customer.full_name
+                           : null,
+        manual_player_phone: enrollMode === 'manual'   ? (enrollPhone.trim() || null)
+                           : enrollMode === 'customer' && !customer.user_id ? (customer.phone || null)
+                           : null,
         used_lessons:        used,
         payment_status:      enrollPayStatus,
         total_paid:          enrollPayStatus === 'paid' ? (parseFloat(enrollPaid) || pkg.price) : null,
@@ -2253,10 +2281,14 @@ function LessonPackagesScreen({ clubId }) {
           <div className="fields" style={{ gap:14 }}>
             {/* Mod seçimi */}
             <div style={{ display:'flex', gap:8 }}>
-              {[{key:'app',label:'Uygulama Kullanıcısı'},{key:'manual',label:'Manuel Kayıt'}].map(m => (
+              {[{key:'app',label:'Oyuncu'},{key:'customer',label:'Müşteri'},{key:'manual',label:'Manuel'}].map(m => (
                 <button key={m.key}
                   className={'btn btn-sm ' + (enrollMode === m.key ? 'btn-pri' : 'btn-ghost')}
-                  onClick={() => { setEnrollMode(m.key); setEnrollSearch(''); setEnrollResults([]); setEnrollSelectedPlayer(null); }}>
+                  onClick={() => {
+                    setEnrollMode(m.key);
+                    setEnrollSearch(''); setEnrollResults([]); setEnrollSelectedPlayer(null);
+                    setEnrollCustomerSearch(''); setEnrollCustomerResults([]); setEnrollSelectedCustomer(null);
+                  }}>
                   {m.label}
                 </button>
               ))}
@@ -2292,6 +2324,51 @@ function LessonPackagesScreen({ clubId }) {
                             onMouseDown={() => { setEnrollSelectedPlayer(p); setEnrollSearch(p.full_name); setEnrollResults([]); }}>
                             <span style={{ fontWeight:600, fontSize:14 }}>{p.full_name}</span>
                             <span style={{ fontSize:12, color:'var(--text-2)' }}>{p.email}</span>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                )}
+              </Field>
+            )}
+
+            {/* Müşteri arama */}
+            {enrollMode === 'customer' && (
+              <Field label="Müşteri Ara *">
+                {enrollSelectedCustomer ? (
+                  <div style={{ display:'flex', alignItems:'center', gap:10, padding:'8px 12px', background:'#E0F7FA', borderRadius:8, border:'1px solid #B2EBF2' }}>
+                    <span style={{ flex:1, fontWeight:600 }}>{enrollSelectedCustomer.full_name}</span>
+                    <span style={{ fontSize:12, color:'var(--text-2)' }}>{enrollSelectedCustomer.phone || enrollSelectedCustomer.email || ''}</span>
+                    {enrollSelectedCustomer.user_id && (
+                      <span style={{ fontSize:10, fontWeight:700, background:'#EEF2FF', color:'var(--brand-navy)', padding:'1px 6px', borderRadius:20 }}>Uygulamada Kayıtlı</span>
+                    )}
+                    <button className="btn btn-ghost btn-sm btn-icon" onClick={() => { setEnrollSelectedCustomer(null); setEnrollCustomerSearch(''); }}>
+                      <span className="material-icons" style={{fontSize:14}}>close</span>
+                    </button>
+                  </div>
+                ) : (
+                  <div style={{ position:'relative' }}>
+                    <input
+                      placeholder="Ad, telefon veya e-posta (en az 2 karakter)"
+                      value={enrollCustomerSearch}
+                      onChange={e => handleEnrollCustomerSearch(e.target.value)}
+                    />
+                    {(enrollCustomerSearching || enrollCustomerResults.length > 0) && (
+                      <div style={{ position:'absolute', top:'100%', left:0, right:0, background:'#fff', border:'1px solid var(--border)', borderRadius:8, zIndex:50, maxHeight:200, overflowY:'auto', boxShadow:'0 4px 12px rgba(0,0,0,.1)' }}>
+                        {enrollCustomerSearching && <div style={{ padding:'10px 14px', color:'var(--text-2)', fontSize:13 }}>Aranıyor…</div>}
+                        {!enrollCustomerSearching && enrollCustomerResults.length === 0 && enrollCustomerSearch.trim().length >= 2 && (
+                          <div style={{ padding:'10px 14px', color:'var(--text-2)', fontSize:13 }}>Sonuç bulunamadı</div>
+                        )}
+                        {enrollCustomerResults.map(c => (
+                          <div key={c.id}
+                            style={{ padding:'10px 14px', cursor:'pointer', display:'flex', flexDirection:'column', gap:2, borderBottom:'1px solid var(--border)' }}
+                            onMouseDown={() => { setEnrollSelectedCustomer(c); setEnrollCustomerSearch(c.full_name); setEnrollCustomerResults([]); }}>
+                            <div style={{ display:'flex', alignItems:'center', gap:6 }}>
+                              <span style={{ fontWeight:600, fontSize:14 }}>{c.full_name}</span>
+                              {c.user_id && <span style={{ fontSize:10, fontWeight:700, background:'#EEF2FF', color:'var(--brand-navy)', padding:'1px 6px', borderRadius:20 }}>Uygulamada Kayıtlı</span>}
+                            </div>
+                            <span style={{ fontSize:12, color:'var(--text-2)' }}>{c.phone || c.email || ''}</span>
                           </div>
                         ))}
                       </div>

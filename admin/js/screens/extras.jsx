@@ -643,6 +643,11 @@ function MyProgramScreen({ clubId, setScreen }) {
   const [lsUsePkg,          setLsUsePkg]          = useState(false);
   const [lsSelectedPkgId,   setLsSelectedPkgId]   = useState(null);
   const [lsSaving,          setLsSaving]          = useState(false);
+  const [lsPersonMode,      setLsPersonMode]      = useState('member'); // 'member' | 'customer'
+  const [lsSelectedCustomer,setLsSelectedCustomer]= useState(null);
+  const [lsCustomerSearch,  setLsCustomerSearch]  = useState('');
+  const [lsCustomerResults, setLsCustomerResults] = useState([]);
+  const [lsAutoCoachLoading,setLsAutoCoachLoading]= useState(false);
 
   // Grup dersi ekleme modalı (inline)
   const [grpModal,           setGrpModal]           = useState(null); // null | { type: 'add' }
@@ -697,7 +702,7 @@ function MyProgramScreen({ clubId, setScreen }) {
           remaining: (r.total_lessons || 0) - (r.used_lessons || 0),
         }));
         setLsPackages(pkgs);
-        if (pkgs.length > 0) setLsSelectedPkgId(pkgs[0].id);
+        if (pkgs.length > 0) { setLsSelectedPkgId(pkgs[0].id); setLsUsePkg(true); setLsForm(prev => ({ ...prev, amount: '0', payment_status: 'paid' })); }
         else { setLsUsePkg(false); setLsSelectedPkgId(null); }
       } catch (e) { console.error('ls package load:', e); }
       finally { setLsLoadingPkgs(false); }
@@ -817,14 +822,17 @@ function MyProgramScreen({ clubId, setScreen }) {
 
       // Paket seans eşleştirmesi — hangi dersler paket kapsamında?
       const lessonIds = (lessonRes.data || []).map(l => l.id);
-      let pkgLessonIds = new Set();
+      const pkgSessionMap = new Map(); // lessonId → { sessionId, packageId }
       if (lessonIds.length > 0) {
         const { data: pkgSessions } = await sb.from('lesson_package_sessions')
-          .select('lesson_id').in('lesson_id', lessonIds);
-        (pkgSessions || []).forEach(s => pkgLessonIds.add(s.lesson_id));
+          .select('id, lesson_id, player_package_id').in('lesson_id', lessonIds).not('lesson_id', 'is', null);
+        (pkgSessions || []).forEach(s => pkgSessionMap.set(s.lesson_id, { sessionId: s.id, packageId: s.player_package_id }));
       }
       const lessonsWithPkg = (lessonRes.data || []).map(l => ({
-        ...l, is_package_lesson: pkgLessonIds.has(l.id),
+        ...l,
+        is_package_lesson:  pkgSessionMap.has(l.id),
+        pkg_session_id:     pkgSessionMap.get(l.id)?.sessionId || null,
+        player_package_id:  pkgSessionMap.get(l.id)?.packageId || null,
       }));
 
       // Pending bookingleri otomatik onayla
@@ -836,7 +844,28 @@ function MyProgramScreen({ clubId, setScreen }) {
       }
       setAllBookings(bkData.map(b => b.status === 'pending' ? { ...b, status: 'confirmed' } : b));
       setAllLessons(lessonsWithPkg);
-      setAllManualLessons(manualRes.data || []);
+
+      // Manuel dersler için paket seans bilgisi — core.jsx ile aynı mantık:
+      // lesson_id IS NULL + session_date + individual coach_id eşleşmesi
+      const manualData = manualRes.data || [];
+      const individualIds_ = coaches_.map(c => c.individual_coach_id).filter(Boolean);
+      const coachToIndividual_ = new Map(coaches_.map(c => [c.id, c.individual_coach_id]));
+      let manualPkgMap = new Map(); // `${individualCoachId}_${sessionDate}` → { session_id, player_package_id }
+      if (individualIds_.length > 0) {
+        const { data: manualSessions } = await sb.from('lesson_package_sessions')
+          .select('id, player_package_id, coach_id, session_date')
+          .is('lesson_id', null)
+          .in('coach_id', individualIds_);
+        (manualSessions || []).forEach(s => {
+          manualPkgMap.set(`${s.coach_id}_${s.session_date}`, { session_id: s.id, player_package_id: s.player_package_id });
+        });
+      }
+      const manualWithPkg = manualData.map(m => {
+        const indId = coachToIndividual_.get(m.coach_id);
+        const pkgInfo = indId ? manualPkgMap.get(`${indId}_${m.date}`) : null;
+        return { ...m, is_package_lesson: !!pkgInfo, pkg_session_id: pkgInfo?.session_id || null, player_package_id: pkgInfo?.player_package_id || null };
+      });
+      setAllManualLessons(manualWithPkg);
       setAllClosureEvents(closureEvents);
       setBkPlayerMap(playerMap_);
     } catch (e) { console.error('Program load error:', e); }
@@ -895,7 +924,8 @@ function MyProgramScreen({ clubId, setScreen }) {
         label: `${l.student_name || 'Öğrenci'} · ${coachName}`, sh, sm, eh, em, color: '#8B5CF6',
         paymentStatus: l.payment_status, amount: l.amount, coachName,
         studentName: l.student_name, source: 'lesson', rawId: l.id,
-        lessonDate: dateStr, coachId: l.club_coach_id, isPackageLesson: !!l.is_package_lesson });
+        lessonDate: dateStr, coachId: l.club_coach_id, isPackageLesson: !!l.is_package_lesson,
+        pkgSessionId: l.pkg_session_id || null, playerPackageId: l.player_package_id || null });
     });
 
     // Manuel dersler — `date` alanı YYYY-MM-DD, start_time/end_time HH:MM
@@ -1078,6 +1108,8 @@ function MyProgramScreen({ clubId, setScreen }) {
         court_id: courtIds[0], notes: '', amount: '', payment_status: 'unpaid',
       });
       setLsSelectedPlayer(null); setLsPlayerSearch(''); setLsPlayerResults([]);
+      setLsSelectedCustomer(null); setLsCustomerSearch(''); setLsCustomerResults([]);
+      setLsPersonMode('member');
       setLsUsePkg(false); setLsSelectedPkgId(null); setLsPackages([]);
       setLsModal({ type: 'add' });
       setSlotTypeModal(false);
@@ -1429,6 +1461,73 @@ function MyProgramScreen({ clubId, setScreen }) {
     finally { setLsDetailSaving(false); }
   };
 
+  const handleLsDetailCancel = async () => {
+    if (!lsDetail) return;
+
+    // İptal anında canlı olarak paket seans sorgula (önbelleğe güvenme)
+    let pkgSessionId = null, playerPackageId = null;
+    if (lsDetail.source === 'manual' && lsDetail.coachId && lsDetail.lessonDate) {
+      const coachRec = coachesList.find(c => c.id === lsDetail.coachId);
+      const indCoachId = coachRec?.individual_coach_id;
+      if (indCoachId) {
+        const { data: sess } = await sb.from('lesson_package_sessions')
+          .select('id, player_package_id')
+          .eq('session_date', lsDetail.lessonDate)
+          .eq('coach_id', indCoachId)
+          .is('lesson_id', null)
+          .limit(1);
+        if (sess?.length > 0) { pkgSessionId = sess[0].id; playerPackageId = sess[0].player_package_id; }
+      }
+    } else if (lsDetail.source === 'lesson') {
+      const { data: sess } = await sb.from('lesson_package_sessions')
+        .select('id, player_package_id')
+        .eq('lesson_id', lsDetail.rawId)
+        .limit(1);
+      if (sess?.length > 0) { pkgSessionId = sess[0].id; playerPackageId = sess[0].player_package_id; }
+    }
+
+    const isPackage = !!(pkgSessionId && playerPackageId);
+    const msg = isPackage
+      ? 'Bu dersi silmek istediğinizden emin misiniz? Paketten düşülmüşse kredi geri yüklenir.'
+      : 'Bu dersi iptal etmek istediğinize emin misiniz?';
+    if (!confirm(msg)) return;
+
+    setLsDetailSaving(true);
+    try {
+      // Paket seans geri yükle — core.jsx cancelLesson ile birebir aynı mantık
+      if (pkgSessionId && playerPackageId) {
+        const { data: plp } = await sb.from('player_lesson_packages')
+          .select('used_lessons').eq('id', playerPackageId).single();
+        if (plp) {
+          await Promise.all([
+            sb.from('player_lesson_packages').update({
+              used_lessons: Math.max(0, (plp.used_lessons || 0) - 1),
+              status:       'active',
+              updated_at:   new Date().toISOString(),
+            }).eq('id', playerPackageId),
+            sb.from('lesson_package_sessions').delete().eq('id', pkgSessionId),
+          ]);
+        }
+      }
+      if (lsDetail.source === 'manual') {
+        await sb.from('club_manual_lessons').delete().eq('id', lsDetail.rawId);
+        if (lsDetail.courtId) {
+          const sh = String(lsDetail.sh).padStart(2,'0'), sm_ = String(lsDetail.sm).padStart(2,'0');
+          const eh = String(lsDetail.eh).padStart(2,'0'), em_ = String(lsDetail.em).padStart(2,'0');
+          const startDb = localTimeToDb(`${lsDetail.lessonDate}T${sh}:${sm_}`);
+          const endDb   = localTimeToDb(`${lsDetail.lessonDate}T${eh}:${em_}`);
+          await sb.from('bookings').update({ status: 'cancelled' })
+            .eq('court_id', lsDetail.courtId).eq('start_time', startDb).eq('end_time', endDb);
+        }
+      } else {
+        await sb.from('lessons').update({ status: 'cancelled' }).eq('id', lsDetail.rawId);
+      }
+      setLsDetail(null);
+      load();
+    } catch (e) { console.warn('Ders iptal hatası:', e.message); alert(e.message); }
+    finally { setLsDetailSaving(false); }
+  };
+
   // ── Blok / Kapatma Detay Aksiyonları ─────────────────────────
   const deleteBlockClosure = async () => {
     if (!clDetail) return;
@@ -1500,6 +1599,58 @@ function MyProgramScreen({ clubId, setScreen }) {
       .ilike('full_name', `%${query}%`).limit(8);
     setLsPlayerResults(data || []);
   };
+
+  const searchLsCustomers = async (query) => {
+    if (!query || query.length < 2) { setLsCustomerResults([]); return; }
+    try {
+      const { data } = await sb.from('club_customers')
+        .select('id, full_name, phone, email, user_id')
+        .eq('club_id', clubId).eq('is_active', true)
+        .or(`full_name.ilike.%${query}%,phone.ilike.%${query}%,email.ilike.%${query}%`)
+        .limit(8);
+      setLsCustomerResults(data || []);
+    } catch(e) { console.error(e); }
+  };
+
+  // Birleşik arama — üye + müşteri aynı anda
+  const searchLsPerson = async (query) => {
+    setLsPlayerSearch(query);
+    setLsForm(prev => ({ ...prev, student_name: query, player_id: null }));
+    if (!query || query.length < 2) { setLsPlayerResults([]); setLsCustomerResults([]); return; }
+    const [{ data: players }, { data: customers }] = await Promise.all([
+      sb.from('profiles').select('id,full_name,email').eq('user_type','player').ilike('full_name',`%${query}%`).limit(6),
+      sb.from('club_customers').select('id,full_name,phone,email,user_id').eq('club_id',clubId).eq('is_active',true)
+        .or(`full_name.ilike.%${query}%,phone.ilike.%${query}%,email.ilike.%${query}%`).limit(6),
+    ]);
+    setLsPlayerResults((players || []).map(p => ({ ...p, _kind: 'member' })));
+    setLsCustomerResults((customers || []).map(c => ({ ...c, _kind: 'customer' })));
+  };
+
+  // Öğrenci seçilince aktif paketi varsa hocanın otomatik seçilmesi
+  React.useEffect(() => {
+    const playerId = lsSelectedPlayer?.id;
+    if (!playerId || lsForm.use_manual_coach || coachesList.length === 0) return;
+    let cancelled = false;
+    (async () => {
+      setLsAutoCoachLoading(true);
+      try {
+        const now = new Date().toISOString();
+        const { data } = await sb.from('player_lesson_packages')
+          .select('coach_id')
+          .eq('player_id', playerId)
+          .eq('payment_status', 'paid').eq('status', 'active')
+          .or(`expiry_date.is.null,expiry_date.gt.${now}`)
+          .order('created_at', { ascending: false })
+          .limit(1);
+        if (!cancelled && data?.length > 0) {
+          const matchedCoach = coachesList.find(c => c.individual_coach_id === data[0].coach_id);
+          if (matchedCoach) setLsForm(prev => ({ ...prev, coach_id: matchedCoach.id }));
+        }
+      } catch(e) { console.error('auto coach:', e); }
+      finally { if (!cancelled) setLsAutoCoachLoading(false); }
+    })();
+    return () => { cancelled = true; };
+  }, [lsSelectedPlayer, coachesList.length, lsForm.use_manual_coach]);
 
   const saveNewLesson = async () => {
     // Zorunlu alan kontrolü
@@ -1705,6 +1856,10 @@ function MyProgramScreen({ clubId, setScreen }) {
         }
       }
       setLsModal(null);
+      setLsSelectedPlayer(null); setLsPlayerSearch(''); setLsPlayerResults([]);
+      setLsSelectedCustomer(null); setLsCustomerSearch(''); setLsCustomerResults([]);
+      setLsPersonMode('member');
+      setLsUsePkg(false); setLsSelectedPkgId(null); setLsPackages([]);
       load();
     } catch (e) {
       if (e.message?.includes('no_overlapping_bookings') || e.code === '23P01') {
@@ -1803,6 +1958,22 @@ function MyProgramScreen({ clubId, setScreen }) {
         .limit(8);
       setBookingCustomerResults(data || []);
     } catch(e) { console.error(e); }
+  };
+
+  const searchBookingPerson = async (q) => {
+    setBookingMemberQuery(q);
+    if (q.length < 2) { setBookingMemberResults([]); setBookingCustomerResults([]); return; }
+    setBookingMemberLoading(true);
+    try {
+      const [{ data: players }, { data: customers }] = await Promise.all([
+        sb.from('profiles').select('id, full_name, email').eq('user_type', 'player').ilike('full_name', `%${q}%`).limit(6),
+        sb.from('club_customers').select('id, full_name, phone, email, user_id').eq('club_id', clubId).eq('is_active', true)
+          .or(`full_name.ilike.%${q}%,phone.ilike.%${q}%,email.ilike.%${q}%`).limit(6),
+      ]);
+      setBookingMemberResults(players || []);
+      setBookingCustomerResults(customers || []);
+    } catch(e) { console.error(e); }
+    finally { setBookingMemberLoading(false); }
   };
 
   const saveInlineBooking = async () => {
@@ -2017,7 +2188,7 @@ function MyProgramScreen({ clubId, setScreen }) {
         {Array.from({ length: (END_H - START_H) * 4 }, (_, i) => {
           const slot = i;
           const { h, m } = slotToHM(slot);
-          const isHour = m === 0;
+          const isHour = m === 45;
           const occupied = courtId ? isSlot15Occupied(courtId, slot) : true;
           const inDrag = dragState && courtId != null &&
             courtIdx >= Math.min(dragState.startCIdx, dragState.currentCIdx) &&
@@ -2031,7 +2202,7 @@ function MyProgramScreen({ clubId, setScreen }) {
               title={courtId != null && !occupied ? `${String(h).padStart(2,'0')}:${String(m).padStart(2,'0')} – sürükleyerek seç` : undefined}
               style={{
                 height: SLOT_H / 4,
-                borderBottom: isHour ? '1px solid var(--border,#f1f5f9)' : '1px dashed var(--border,#e2e8f0)',
+                borderBottom: isHour ? '1px solid #cbd5e1' : '1px solid #f1f5f9',
                 cursor: courtId != null && !occupied ? 'crosshair' : 'default',
                 background: inDrag ? '#EEF2FF' : '',
                 outline: inDrag ? '2px solid #6366F1' : 'none',
@@ -2100,7 +2271,7 @@ function MyProgramScreen({ clubId, setScreen }) {
             <div style={{ width:52, flexShrink:0, borderRight:'1px solid var(--border)' }}>
               <div style={{ height:36, borderBottom:'1px solid var(--border)' }} />
               {Array.from({ length: END_H - START_H }, (_, i) => (
-                <div key={i} style={{ height:SLOT_H, borderBottom:'1px solid var(--border,#f1f5f9)', position:'relative' }}>
+                <div key={i} style={{ height:SLOT_H, borderBottom:'1px solid #cbd5e1', position:'relative' }}>
                   {[0, 15, 30, 45].map(min => (
                     <div key={min} style={{
                       position:'absolute',
@@ -2196,13 +2367,9 @@ function MyProgramScreen({ clubId, setScreen }) {
 
       {/* ── Rezervasyon Detay / Aksiyon Modalı ── */}
       {bkDetail && (
-        <div style={{ position:'fixed', inset:0, background:'rgba(0,0,0,0.45)', zIndex:1300, display:'flex', flexDirection:'column', justifyContent:'flex-end' }}
+        <div style={{ position:'fixed', inset:0, background:'rgba(0,0,0,0.45)', zIndex:1300, display:'flex', alignItems:'center', justifyContent:'center' }}
           onClick={e => { if (e.target === e.currentTarget && !bkDetailSaving) setBkDetail(null); }}>
-          <div style={{ background:'#fff', borderTopLeftRadius:24, borderTopRightRadius:24, maxHeight:'80vh', display:'flex', flexDirection:'column' }}>
-            {/* Handle */}
-            <div style={{ display:'flex', justifyContent:'center', paddingTop:12, paddingBottom:4 }}>
-              <div style={{ width:40, height:4, borderRadius:2, background:'#e2e8f0' }} />
-            </div>
+          <div style={{ background:'#fff', borderRadius:20, width:'min(480px,95vw)', maxHeight:'85vh', display:'flex', flexDirection:'column', boxShadow:'0 8px 40px rgba(0,0,0,0.18)' }}>
             {/* Header */}
             <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', padding:'12px 20px 8px' }}>
               <div>
@@ -2282,12 +2449,9 @@ function MyProgramScreen({ clubId, setScreen }) {
 
       {/* ── Ders Detay / Ödeme Modalı ── */}
       {lsDetail && (
-        <div style={{ position:'fixed', inset:0, background:'rgba(0,0,0,0.45)', zIndex:1300, display:'flex', flexDirection:'column', justifyContent:'flex-end' }}
+        <div style={{ position:'fixed', inset:0, background:'rgba(0,0,0,0.45)', zIndex:1300, display:'flex', alignItems:'center', justifyContent:'center' }}
           onClick={e => { if (e.target === e.currentTarget && !lsDetailSaving) setLsDetail(null); }}>
-          <div style={{ background:'#fff', borderTopLeftRadius:24, borderTopRightRadius:24, maxHeight:'80vh', display:'flex', flexDirection:'column' }}>
-            <div style={{ display:'flex', justifyContent:'center', paddingTop:12, paddingBottom:4 }}>
-              <div style={{ width:40, height:4, borderRadius:2, background:'#E5E7EB' }} />
-            </div>
+          <div style={{ background:'#fff', borderRadius:20, width:'min(480px,95vw)', maxHeight:'85vh', display:'flex', flexDirection:'column', boxShadow:'0 8px 40px rgba(0,0,0,0.18)' }}>
             <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', padding:'12px 20px 8px' }}>
               <div>
                 <div style={{ fontSize:17, fontWeight:800, color:'var(--text-1)' }}>
@@ -2355,6 +2519,13 @@ function MyProgramScreen({ clubId, setScreen }) {
                   Ödendi
                 </div>
               )}
+              <button
+                onClick={handleLsDetailCancel}
+                disabled={lsDetailSaving}
+                style={{ display:'flex', alignItems:'center', justifyContent:'center', gap:6, padding:'13px 16px', borderRadius:14, border:'1.5px solid #EF4444', background:'#FEF2F2', cursor: lsDetailSaving ? 'not-allowed' : 'pointer', fontSize:14, fontWeight:700, color:'#EF4444', opacity: lsDetailSaving ? 0.6 : 1, flexShrink:0 }}>
+                <span className="material-icons" style={{fontSize:18}}>cancel</span>
+                İptal
+              </button>
             </div>
           </div>
         </div>
@@ -2362,13 +2533,10 @@ function MyProgramScreen({ clubId, setScreen }) {
 
       {/* ── Blok / Kapatma Detay Modalı ── */}
       {clDetail && (
-        <div style={{ position:'fixed', inset:0, background:'rgba(0,0,0,0.45)', zIndex:1300, display:'flex', flexDirection:'column', justifyContent:'flex-end' }}
+        <div style={{ position:'fixed', inset:0, background:'rgba(0,0,0,0.45)', zIndex:1300, display:'flex', alignItems:'center', justifyContent:'center' }}
           onClick={e => { if (e.target === e.currentTarget && !clDetailSaving) { setClDetail(null); setClEditMode(false); } }}>
-          <div style={{ background:'#fff', borderTopLeftRadius:24, borderTopRightRadius:24, maxHeight:'80vh', display:'flex', flexDirection:'column' }}>
-            {/* Handle */}
-            <div style={{ display:'flex', justifyContent:'center', paddingTop:12, paddingBottom:4 }}>
-              <div style={{ width:40, height:4, borderRadius:2, background:'#E5E7EB' }} />
-            </div>
+          <div style={{ background:'#fff', borderRadius:20, width:'min(480px,95vw)', maxHeight:'85vh', display:'flex', flexDirection:'column', boxShadow:'0 8px 40px rgba(0,0,0,0.18)' }}>
+
             {/* Header */}
             <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', padding:'8px 20px 16px' }}>
               <div>
@@ -2478,106 +2646,99 @@ function MyProgramScreen({ clubId, setScreen }) {
 
       {/* ── Yeni Ders Modalı ── */}
       {lsModal && (
-        <div style={{ position:'fixed', inset:0, background:'rgba(0,0,0,0.45)', zIndex:1250, display:'flex', flexDirection:'column', justifyContent:'flex-end' }}
+        <div style={{ position:'fixed', inset:0, background:'rgba(0,0,0,0.45)', zIndex:1250, display:'flex', alignItems:'center', justifyContent:'center' }}
           onClick={e => { if (e.target === e.currentTarget && !lsSaving) setLsModal(null); }}>
-          <div style={{ background:'#fff', borderTopLeftRadius:24, borderTopRightRadius:24, padding:20, maxHeight:'92vh', display:'flex', flexDirection:'column', gap:0 }}>
-            <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', marginBottom:20 }}>
-              <span style={{ fontSize:18, fontWeight:800, color:'var(--text-1)' }}>Ders Ekle</span>
-              <button style={{ background:'none', border:'none', cursor:'pointer', display:'grid', placeItems:'center' }} onClick={() => setLsModal(null)}>
-                <span className="material-icons" style={{ fontSize:24, color:'var(--text-2)' }}>close</span>
-              </button>
+          <div style={{ background:'#fff', borderRadius:20, width:'min(480px,95vw)', maxHeight:'85vh', display:'flex', flexDirection:'column', boxShadow:'0 8px 40px rgba(0,0,0,0.18)' }}>
+            {/* Header */}
+            <div style={{ padding:'16px 20px 12px', borderBottom:'1px solid var(--border)', flexShrink:0 }}>
+              <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between' }}>
+                <span style={{ fontSize:17, fontWeight:800, color:'var(--text-1)' }}>Özel Ders Ekle</span>
+                <button style={{ background:'none', border:'none', cursor:'pointer', display:'grid', placeItems:'center' }} onClick={() => setLsModal(null)}>
+                  <span className="material-icons" style={{ fontSize:22, color:'var(--text-2)' }}>close</span>
+                </button>
+              </div>
+              {/* Read-only zaman + kort bilgisi */}
+              <div style={{ display:'flex', flexWrap:'wrap', gap:6, marginTop:8 }}>
+                <span style={{ display:'inline-flex', alignItems:'center', gap:4, background:'#EEF2FF', color:'var(--brand-navy)', borderRadius:8, padding:'4px 10px', fontSize:12, fontWeight:700 }}>
+                  <span className="material-icons" style={{ fontSize:13 }}>schedule</span>
+                  {lsForm.start_time} – {lsForm.end_time}
+                </span>
+                {lsForm.court_id && courts.find(c => c.id === lsForm.court_id) && (
+                  <span style={{ display:'inline-flex', alignItems:'center', gap:4, background:'#EEF2FF', color:'var(--brand-navy)', borderRadius:8, padding:'4px 10px', fontSize:12, fontWeight:700 }}>
+                    <span className="material-icons" style={{ fontSize:13 }}>sports_tennis</span>
+                    Kort {courts.find(c => c.id === lsForm.court_id).court_number}
+                  </span>
+                )}
+                <span style={{ display:'inline-flex', alignItems:'center', gap:4, background:'#F1F5F9', color:'var(--text-2)', borderRadius:8, padding:'4px 10px', fontSize:12, fontWeight:600 }}>
+                  <span className="material-icons" style={{ fontSize:13 }}>calendar_today</span>
+                  {new Date(lsForm.date + 'T12:00:00').toLocaleDateString('tr-TR', { day:'numeric', month:'short', year:'numeric' })}
+                </span>
+              </div>
             </div>
-            <div style={{ overflowY:'auto', flex:1, display:'flex', flexDirection:'column', gap:0 }}>
+            <div style={{ overflowY:'auto', flex:1, display:'flex', flexDirection:'column', gap:0, padding:'16px 20px' }}>
 
-              {/* ANTRENÖR */}
-              <div style={{ fontSize:12, fontWeight:700, color:'var(--text-2)', marginBottom:8, letterSpacing:0.4 }}>ANTRENÖR</div>
-              <div style={{ display:'flex', gap:8, marginBottom:12 }}>
-                <button style={{ flex:1, padding:'9px', borderRadius:10, border: !lsForm.use_manual_coach ? '1.5px solid var(--brand-navy)' : '1.5px solid var(--border)', background: !lsForm.use_manual_coach ? '#EEF2FF' : 'var(--bg)', cursor:'pointer', fontSize:13, fontWeight:600, color: !lsForm.use_manual_coach ? 'var(--brand-navy)' : 'var(--text-2)' }}
-                  onClick={() => setLsForm({...lsForm, use_manual_coach:false, manual_coach_name:''})}>Listeden Seç</button>
-                <button style={{ flex:1, padding:'9px', borderRadius:10, border: lsForm.use_manual_coach ? '1.5px solid var(--brand-navy)' : '1.5px solid var(--border)', background: lsForm.use_manual_coach ? '#EEF2FF' : 'var(--bg)', cursor:'pointer', fontSize:13, fontWeight:600, color: lsForm.use_manual_coach ? 'var(--brand-navy)' : 'var(--text-2)' }}
-                  onClick={() => setLsForm({...lsForm, use_manual_coach:true, coach_id:''})}>Manuel Giriş</button>
-              </div>
-              {lsForm.use_manual_coach ? (
-                <input style={{ width:'100%', border:'1.5px solid var(--border)', borderRadius:12, padding:'11px 12px', fontSize:15, color:'var(--text-1)', background:'var(--bg)', boxSizing:'border-box', marginBottom:16 }}
-                  placeholder="Antrenör adı" value={lsForm.manual_coach_name || ''}
-                  onChange={e => setLsForm({...lsForm, manual_coach_name:e.target.value})} />
-              ) : coachesList.length === 0 ? (
-                <div style={{ padding:16, borderRadius:12, background:'var(--bg)', border:'1px solid var(--border)', textAlign:'center', color:'var(--text-2)', fontSize:13, marginBottom:16 }}>Henüz antrenör eklenmemiş.</div>
-              ) : (
-                <div style={{ display:'flex', flexDirection:'column', gap:8, marginBottom:16 }}>
-                  {coachesList.map(c => (
-                    <div key={c.id}
-                      style={{ display:'flex', alignItems:'center', gap:10, padding:10, borderRadius:12, border: lsForm.coach_id === c.id ? '1.5px solid var(--brand-navy)' : '1.5px solid var(--border)', background: lsForm.coach_id === c.id ? '#EEF2FF' : 'var(--bg)', cursor:'pointer' }}
-                      onClick={() => setLsForm({...lsForm, coach_id:c.id})}>
-                      <div style={{ width:34, height:34, borderRadius:17, background:'rgba(0,51,153,0.12)', display:'grid', placeItems:'center', flexShrink:0 }}>
-                        <span style={{ fontSize:14, fontWeight:700, color:'var(--brand-navy)' }}>{c.full_name.charAt(0).toUpperCase()}</span>
-                      </div>
-                      <span style={{ flex:1, fontSize:14, color:'var(--text-1)', fontWeight: lsForm.coach_id === c.id ? 700 : 500 }}>{c.full_name}</span>
-                      {lsForm.coach_id === c.id && <span className="material-icons" style={{fontSize:18, color:'var(--brand-navy)'}}>check_circle</span>}
-                    </div>
-                  ))}
-                </div>
-              )}
-
-              {/* TARİH VE SAAT */}
-              <div style={{ fontSize:12, fontWeight:700, color:'var(--text-2)', marginBottom:8, letterSpacing:0.4 }}>TARİH VE SAAT</div>
-              <div style={{ display:'flex', gap:8, marginBottom:0 }}>
-                <input type="date" style={{ flex:2, border:'1.5px solid var(--border)', borderRadius:12, padding:'11px 12px', fontSize:15, color:'var(--text-1)', background:'var(--bg)', boxSizing:'border-box' }}
-                  value={lsForm.date || ''} onChange={e => setLsForm({...lsForm, date:e.target.value})} />
-                <input type="time" style={{ flex:1, border:'1.5px solid var(--border)', borderRadius:12, padding:'11px 8px', fontSize:14, color:'var(--text-1)', background:'var(--bg)', boxSizing:'border-box' }}
-                  value={lsForm.start_time || ''} onChange={e => setLsForm({...lsForm, start_time:e.target.value})} />
-                <input type="time" style={{ flex:1, border:'1.5px solid var(--border)', borderRadius:12, padding:'11px 8px', fontSize:14, color:'var(--text-1)', background:'var(--bg)', boxSizing:'border-box' }}
-                  value={lsForm.end_time || ''} onChange={e => setLsForm({...lsForm, end_time:e.target.value})} />
-              </div>
-
-              {/* SÜRE */}
-              <div style={{ fontSize:12, fontWeight:700, color:'var(--text-2)', marginBottom:8, letterSpacing:0.4, marginTop:14 }}>SÜRE (opsiyonel)</div>
-              <div style={{ display:'flex', flexWrap:'wrap', gap:8, marginBottom:16 }}>
-                {[{label:'30 dk',value:0.5},{label:'45 dk',value:0.75},{label:'1 saat',value:1},{label:'1.5 saat',value:1.5},{label:'2 saat',value:2}].map(d => (
-                  <div key={d.value}
-                    style={{ display:'flex', alignItems:'center', gap:5, padding:'10px 14px', borderRadius:12, border: lsForm.duration === d.value ? '1.5px solid var(--brand-navy)' : '1.5px solid var(--border)', background: lsForm.duration === d.value ? '#EEF2FF' : 'var(--bg)', cursor:'pointer' }}
-                    onClick={() => {
-                      const newDur = lsForm.duration === d.value ? null : d.value;
-                      if (newDur && lsForm.start_time) {
-                        const [sh, sm] = lsForm.start_time.split(':').map(Number);
-                        const totalMin = sh * 60 + sm + Math.round(newDur * 60);
-                        const eh = String(Math.floor(totalMin / 60) % 24).padStart(2,'0');
-                        const em = String(totalMin % 60).padStart(2,'0');
-                        setLsForm({...lsForm, duration: newDur, end_time:`${eh}:${em}`});
-                      } else {
-                        setLsForm({...lsForm, duration: newDur});
-                      }
-                    }}>
-                    <span style={{ fontSize:13, color: lsForm.duration === d.value ? 'var(--brand-navy)' : 'var(--text-2)', fontWeight: lsForm.duration === d.value ? 700 : 500 }}>{d.label}</span>
-                  </div>
-                ))}
-              </div>
-
-              {/* ÖĞRENCİ */}
-              <div style={{ fontSize:12, fontWeight:700, color:'var(--text-2)', marginBottom:8, letterSpacing:0.4 }}>ÖĞRENCİ (opsiyonel)</div>
-              {lsSelectedPlayer ? (
-                <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', border:'1.5px solid var(--brand-navy)', borderRadius:12, padding:'11px 12px', marginBottom:16, background:'#EEF2FF' }}>
+              {/* ÖĞRENCİ / MÜŞTERİ */}
+              <div style={{ fontSize:12, fontWeight:700, color:'var(--text-2)', marginBottom:8, letterSpacing:0.4 }}>OYUNCU</div>
+              {(lsSelectedPlayer || lsSelectedCustomer) ? (
+                /* Seçili kişi kartı */
+                <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', border:'1.5px solid var(--brand-navy)', borderRadius:12, padding:'11px 12px', marginBottom:12, background:'#EEF2FF' }}>
                   <div>
-                    <div style={{ fontSize:14, fontWeight:700, color:'var(--brand-navy)' }}>{lsSelectedPlayer.full_name}</div>
-                    <div style={{ fontSize:12, color:'var(--text-2)' }}>{lsSelectedPlayer.email}</div>
+                    <div style={{ display:'flex', alignItems:'center', gap:6 }}>
+                      <span style={{ fontSize:14, fontWeight:700, color:'var(--brand-navy)' }}>{lsSelectedCustomer?.full_name || lsSelectedPlayer?.full_name}</span>
+                      <span style={{ fontSize:10, fontWeight:700, color:'#fff', background: lsSelectedCustomer && !lsSelectedCustomer._kind?.includes('member') ? '#0891B2' : 'var(--brand-navy)', borderRadius:5, padding:'2px 6px', letterSpacing:0.2 }}>
+                        {lsSelectedCustomer && !lsSelectedPlayer ? 'Müşteri' : 'Üye'}
+                      </span>
+                    </div>
+                    <div style={{ fontSize:12, color:'var(--text-2)', marginTop:1 }}>{lsSelectedPlayer?.email || lsSelectedCustomer?.phone || lsSelectedCustomer?.email || ''}</div>
+                    {lsAutoCoachLoading && <div style={{ fontSize:11, color:'var(--brand-navy)', marginTop:2 }}>Paket kontrol ediliyor...</div>}
                   </div>
                   <button style={{ background:'none', border:'none', cursor:'pointer', padding:4 }}
-                    onClick={() => { setLsSelectedPlayer(null); setLsPlayerSearch(''); setLsPlayerResults([]); setLsForm(prev => ({...prev, student_name:'', player_id:null})); }}>
+                    onClick={() => {
+                      setLsSelectedPlayer(null); setLsPlayerSearch(''); setLsPlayerResults([]);
+                      setLsSelectedCustomer(null); setLsCustomerSearch(''); setLsCustomerResults([]);
+                      setLsForm(prev => ({...prev, student_name:'', player_id:null}));
+                      setLsPackages([]); setLsUsePkg(false); setLsSelectedPkgId(null);
+                    }}>
                     <span className="material-icons" style={{ fontSize:18, color:'var(--text-2)' }}>close</span>
                   </button>
                 </div>
               ) : (
-                <div style={{ position:'relative', marginBottom:16 }}>
-                  <input style={{ width:'100%', border:'1.5px solid var(--border)', borderRadius:12, padding:'11px 12px', fontSize:15, color:'var(--text-1)', background:'var(--bg)', boxSizing:'border-box' }}
-                    placeholder="Öğrenci adı yazın veya ara..." value={lsPlayerSearch}
-                    onChange={e => { const v=e.target.value; setLsPlayerSearch(v); setLsForm(prev=>({...prev,student_name:v,player_id:null})); searchLsPlayers(v); }} />
-                  {lsPlayerResults.length > 0 && (
+                /* Birleşik arama kutusu */
+                <div style={{ position:'relative', marginBottom:12 }}>
+                  <input style={{ width:'100%', border:'1.5px solid var(--border)', borderRadius:12, padding:'11px 12px', fontSize:14, color:'var(--text-1)', background:'var(--bg)', boxSizing:'border-box' }}
+                    placeholder="Ad, telefon veya e-posta ile ara..." value={lsPlayerSearch}
+                    onChange={e => searchLsPerson(e.target.value)} />
+                  {(lsPlayerResults.length > 0 || lsCustomerResults.length > 0) && (
                     <div style={{ position:'absolute', top:'100%', left:0, right:0, zIndex:999, background:'var(--surface)', border:'1.5px solid var(--border)', borderRadius:12, boxShadow:'0 4px 16px rgba(0,0,0,0.12)', overflow:'hidden' }}>
-                      {lsPlayerResults.map(p => (
-                        <div key={p.id} style={{ padding:'10px 14px', cursor:'pointer', borderBottom:'1px solid var(--border)' }}
-                          onMouseDown={() => { setLsSelectedPlayer(p); setLsForm(prev=>({...prev,student_name:p.full_name,player_id:p.id})); setLsPlayerSearch(p.full_name); setLsPlayerResults([]); }}>
-                          <div style={{ fontSize:14, fontWeight:600, color:'var(--text-1)' }}>{p.full_name}</div>
-                          <div style={{ fontSize:12, color:'var(--text-2)' }}>{p.email}</div>
+                      {lsPlayerResults.map((p, i) => (
+                        <div key={'m-'+p.id}
+                          style={{ padding:'10px 14px', cursor:'pointer', borderBottom:'1px solid var(--border)', display:'flex', alignItems:'center', justifyContent:'space-between' }}
+                          onMouseDown={() => {
+                            setLsSelectedPlayer(p);
+                            setLsForm(prev=>({...prev, student_name:p.full_name, player_id:p.id}));
+                            setLsPlayerSearch(''); setLsPlayerResults([]); setLsCustomerResults([]);
+                          }}>
+                          <div>
+                            <div style={{ fontSize:14, fontWeight:600, color:'var(--text-1)' }}>{p.full_name}</div>
+                            <div style={{ fontSize:12, color:'var(--text-2)' }}>{p.email}</div>
+                          </div>
+                          <span style={{ fontSize:10, fontWeight:700, color:'#fff', background:'var(--brand-navy)', borderRadius:5, padding:'2px 6px', flexShrink:0, marginLeft:8 }}>Üye</span>
+                        </div>
+                      ))}
+                      {lsCustomerResults.map((c) => (
+                        <div key={'c-'+c.id}
+                          style={{ padding:'10px 14px', cursor:'pointer', borderBottom:'1px solid var(--border)', display:'flex', alignItems:'center', justifyContent:'space-between' }}
+                          onMouseDown={() => {
+                            setLsSelectedCustomer(c);
+                            setLsForm(prev=>({...prev, student_name:c.full_name, player_id: c.user_id || null}));
+                            setLsPlayerSearch(''); setLsPlayerResults([]); setLsCustomerResults([]);
+                            if (c.user_id) setLsSelectedPlayer({ id: c.user_id, full_name: c.full_name, email: c.email });
+                          }}>
+                          <div>
+                            <div style={{ fontSize:14, fontWeight:600, color:'var(--text-1)' }}>{c.full_name}</div>
+                            <div style={{ fontSize:12, color:'var(--text-2)' }}>{c.phone || c.email || ''}</div>
+                          </div>
+                          <span style={{ fontSize:10, fontWeight:700, color:'#fff', background:'#0891B2', borderRadius:5, padding:'2px 6px', flexShrink:0, marginLeft:8 }}>Müşteri</span>
                         </div>
                       ))}
                     </div>
@@ -2585,16 +2746,49 @@ function MyProgramScreen({ clubId, setScreen }) {
                 </div>
               )}
 
+              {/* ANTRENÖR */}
+              <div style={{ fontSize:12, fontWeight:700, color:'var(--text-2)', marginBottom:8, letterSpacing:0.4 }}>ANTRENÖR</div>
+              <div style={{ display:'flex', gap:8, marginBottom:10 }}>
+                <button style={{ flex:1, padding:'9px', borderRadius:10, border: !lsForm.use_manual_coach ? '1.5px solid var(--brand-navy)' : '1.5px solid var(--border)', background: !lsForm.use_manual_coach ? '#EEF2FF' : 'var(--bg)', cursor:'pointer', fontSize:13, fontWeight:600, color: !lsForm.use_manual_coach ? 'var(--brand-navy)' : 'var(--text-2)' }}
+                  onClick={() => setLsForm({...lsForm, use_manual_coach:false, manual_coach_name:''})}>Listeden Seç</button>
+                <button style={{ flex:1, padding:'9px', borderRadius:10, border: lsForm.use_manual_coach ? '1.5px solid var(--brand-navy)' : '1.5px solid var(--border)', background: lsForm.use_manual_coach ? '#EEF2FF' : 'var(--bg)', cursor:'pointer', fontSize:13, fontWeight:600, color: lsForm.use_manual_coach ? 'var(--brand-navy)' : 'var(--text-2)' }}
+                  onClick={() => setLsForm({...lsForm, use_manual_coach:true, coach_id:''})}>Manuel Giriş</button>
+              </div>
+              {lsForm.use_manual_coach ? (
+                <input style={{ width:'100%', border:'1.5px solid var(--border)', borderRadius:12, padding:'11px 12px', fontSize:14, color:'var(--text-1)', background:'var(--bg)', boxSizing:'border-box', marginBottom:14 }}
+                  placeholder="Antrenör adı" value={lsForm.manual_coach_name || ''}
+                  onChange={e => setLsForm({...lsForm, manual_coach_name:e.target.value})} />
+              ) : coachesList.length === 0 ? (
+                <div style={{ padding:14, borderRadius:12, background:'var(--bg)', border:'1px solid var(--border)', textAlign:'center', color:'var(--text-2)', fontSize:13, marginBottom:14 }}>Henüz antrenör eklenmemiş.</div>
+              ) : (
+                <div style={{ display:'flex', flexDirection:'column', gap:6, marginBottom:14 }}>
+                  {coachesList.map(c => {
+                    const isAuto = lsAutoCoachLoading && !lsForm.coach_id;
+                    return (
+                      <div key={c.id}
+                        style={{ display:'flex', alignItems:'center', gap:10, padding:'9px 12px', borderRadius:12, border: lsForm.coach_id === c.id ? '1.5px solid var(--brand-navy)' : '1.5px solid var(--border)', background: lsForm.coach_id === c.id ? '#EEF2FF' : 'var(--bg)', cursor:'pointer', opacity: isAuto ? 0.6 : 1 }}
+                        onClick={() => setLsForm({...lsForm, coach_id:c.id})}>
+                        <div style={{ width:32, height:32, borderRadius:16, background:'rgba(0,51,153,0.12)', display:'grid', placeItems:'center', flexShrink:0 }}>
+                          <span style={{ fontSize:13, fontWeight:700, color:'var(--brand-navy)' }}>{c.full_name.charAt(0).toUpperCase()}</span>
+                        </div>
+                        <span style={{ flex:1, fontSize:13, color:'var(--text-1)', fontWeight: lsForm.coach_id === c.id ? 700 : 500 }}>{c.full_name}</span>
+                        {lsForm.coach_id === c.id && <span className="material-icons" style={{fontSize:16, color:'var(--brand-navy)'}}>check_circle</span>}
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+
               {/* PAKET */}
-              {lsSelectedPlayer && !lsForm.use_manual_coach && lsForm.coach_id && (
-                <div style={{ marginBottom:16 }}>
+              {(lsSelectedPlayer) && !lsForm.use_manual_coach && lsForm.coach_id && (
+                <div style={{ marginBottom:14 }}>
                   {lsLoadingPkgs ? (
-                    <div style={{ fontSize:13, color:'var(--text-2)', padding:'8px 0' }}>Paketler yükleniyor...</div>
+                    <div style={{ fontSize:13, color:'var(--text-2)', padding:'6px 0' }}>Paketler yükleniyor...</div>
                   ) : lsPackages.length > 0 ? (
                     <div style={{ border:'1.5px solid var(--border)', borderRadius:12, overflow:'hidden' }}>
-                      <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', padding:'12px 14px', background: lsUsePkg ? '#EEF2FF' : 'var(--bg)', borderBottom: lsUsePkg ? '1.5px solid var(--border)' : 'none' }}>
+                      <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', padding:'11px 14px', background: lsUsePkg ? '#EEF2FF' : 'var(--bg)', borderBottom: lsUsePkg ? '1.5px solid var(--border)' : 'none' }}>
                         <div style={{ display:'flex', alignItems:'center', gap:8 }}>
-                          <span className="material-icons" style={{ fontSize:18, color: lsUsePkg ? 'var(--brand-navy)' : 'var(--text-2)' }}>inventory_2</span>
+                          <span className="material-icons" style={{ fontSize:17, color: lsUsePkg ? 'var(--brand-navy)' : 'var(--text-2)' }}>inventory_2</span>
                           <div>
                             <div style={{ fontSize:13, fontWeight:700, color: lsUsePkg ? 'var(--brand-navy)' : 'var(--text-1)' }}>Paketten Kullan</div>
                             <div style={{ fontSize:11, color:'var(--text-2)' }}>{lsPackages.length} aktif paket mevcut</div>
@@ -2627,24 +2821,6 @@ function MyProgramScreen({ clubId, setScreen }) {
                       )}
                     </div>
                   ) : null}
-                </div>
-              )}
-
-              {/* KORT */}
-              <div style={{ fontSize:12, fontWeight:700, color:'var(--text-2)', marginBottom:8, letterSpacing:0.4 }}>KORT</div>
-              {courts.length === 0 ? (
-                <div style={{ padding:16, borderRadius:12, background:'var(--bg)', border:'1px solid var(--border)', textAlign:'center', color:'var(--text-2)', fontSize:13, marginBottom:16 }}>Henüz kort eklenmemiş.</div>
-              ) : (
-                <div style={{ display:'flex', flexWrap:'wrap', gap:8, marginBottom:16 }}>
-                  {courts.map(c => (
-                    <div key={c.id}
-                      style={{ display:'flex', alignItems:'center', gap:5, padding:'10px 14px', borderRadius:12, border: lsForm.court_id === c.id ? '1.5px solid var(--brand-navy)' : '1.5px solid var(--border)', background: lsForm.court_id === c.id ? '#EEF2FF' : 'var(--bg)', cursor:'pointer' }}
-                      onClick={() => setLsForm({...lsForm, court_id:c.id})}>
-                      <span className="material-icons" style={{fontSize:14, color: lsForm.court_id === c.id ? 'var(--brand-navy)' : 'var(--text-2)'}}>sports_tennis</span>
-                      <span style={{ fontSize:13, color: lsForm.court_id === c.id ? 'var(--brand-navy)' : 'var(--text-2)', fontWeight: lsForm.court_id === c.id ? 700 : 500 }}>Kort {c.court_number}</span>
-                      {lsForm.court_id === c.id && <span className="material-icons" style={{fontSize:14, color:'var(--brand-navy)'}}>check</span>}
-                    </div>
-                  ))}
                 </div>
               )}
 
@@ -2691,13 +2867,10 @@ function MyProgramScreen({ clubId, setScreen }) {
 
       {/* ── Grup Dersi Ekleme Modalı ── */}
       {grpModal && slotClickInfo && (
-        <div style={{ position:'fixed', inset:0, background:'rgba(0,0,0,0.45)', zIndex:1250, display:'flex', flexDirection:'column', justifyContent:'flex-end' }}
+        <div style={{ position:'fixed', inset:0, background:'rgba(0,0,0,0.45)', zIndex:1250, display:'flex', alignItems:'center', justifyContent:'center' }}
           onClick={e => { if (e.target === e.currentTarget && !grpSaving) { setGrpModal(null); setSlotClickInfo(null); } }}>
-          <div style={{ background:'#fff', borderTopLeftRadius:24, borderTopRightRadius:24, maxHeight:'90vh', display:'flex', flexDirection:'column' }}>
-            {/* Handle */}
-            <div style={{ display:'flex', justifyContent:'center', paddingTop:12, paddingBottom:4, flexShrink:0 }}>
-              <div style={{ width:40, height:4, borderRadius:2, background:'#E5E7EB' }} />
-            </div>
+          <div style={{ background:'#fff', borderRadius:20, width:'min(480px,95vw)', maxHeight:'85vh', display:'flex', flexDirection:'column', boxShadow:'0 8px 40px rgba(0,0,0,0.18)' }}>
+
             {/* Header */}
             <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', padding:'8px 20px 12px', borderBottom:'1px solid var(--border)', flexShrink:0 }}>
               <div>
@@ -2872,196 +3045,96 @@ function MyProgramScreen({ clubId, setScreen }) {
 
       {/* ── Inline Rezervasyon Modalı ── */}
       {bookingModal && (
-        <div style={{ position:'fixed', inset:0, background:'rgba(0,0,0,0.45)', zIndex:1200, display:'flex', flexDirection:'column', justifyContent:'flex-end' }}
+        <div style={{ position:'fixed', inset:0, background:'rgba(0,0,0,0.45)', zIndex:1200, display:'flex', alignItems:'center', justifyContent:'center' }}
           onClick={e => { if (e.target === e.currentTarget && !bookingSaving) { setBookingModal(false); setSlotClickInfo(null); } }}>
-          <div style={{ background:'#fff', borderTopLeftRadius:24, borderTopRightRadius:24, maxHeight:'90vh', display:'flex', flexDirection:'column' }}>
+          <div style={{ background:'#fff', borderRadius:20, width:'min(480px,95vw)', maxHeight:'85vh', display:'flex', flexDirection:'column', boxShadow:'0 8px 40px rgba(0,0,0,0.18)' }}>
 
             {/* Header */}
-            <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', padding:'20px 24px 16px', borderBottom:'1px solid var(--border)', flexShrink:0 }}>
-              <span style={{ fontSize:18, fontWeight:800, color:'var(--text-1)' }}>Yeni Rezervasyon</span>
-              <button onClick={() => { setBookingModal(false); setSlotClickInfo(null); }} disabled={bookingSaving}
-                style={{ background:'none', border:'none', cursor:'pointer', display:'grid', placeItems:'center' }}>
-                <span className="material-icons" style={{ fontSize:24, color:'var(--text-2)' }}>close</span>
-              </button>
+            <div style={{ padding:'16px 20px 12px', borderBottom:'1px solid var(--border)', flexShrink:0 }}>
+              <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between' }}>
+                <span style={{ fontSize:17, fontWeight:800, color:'var(--text-1)' }}>Yeni Rezervasyon</span>
+                <button onClick={() => { setBookingModal(false); setSlotClickInfo(null); }} disabled={bookingSaving}
+                  style={{ background:'none', border:'none', cursor:'pointer', display:'grid', placeItems:'center' }}>
+                  <span className="material-icons" style={{ fontSize:22, color:'var(--text-2)' }}>close</span>
+                </button>
+              </div>
+              {/* Read-only özet: saat + kort + tarih */}
+              <div style={{ display:'flex', flexWrap:'wrap', gap:6, marginTop:8 }}>
+                <span style={{ display:'inline-flex', alignItems:'center', gap:4, background:'#EEF2FF', color:'var(--brand-navy)', borderRadius:8, padding:'4px 10px', fontSize:12, fontWeight:700 }}>
+                  <span className="material-icons" style={{ fontSize:13 }}>schedule</span>
+                  {bookingForm.startTime} – {bookingForm.endTime}
+                </span>
+                {bookingForm.courtId && courts.find(c => c.id === bookingForm.courtId) && (
+                  <span style={{ display:'inline-flex', alignItems:'center', gap:4, background:'#EEF2FF', color:'var(--brand-navy)', borderRadius:8, padding:'4px 10px', fontSize:12, fontWeight:700 }}>
+                    <span className="material-icons" style={{ fontSize:13 }}>sports_tennis</span>
+                    Kort {courts.find(c => c.id === bookingForm.courtId).court_number}
+                  </span>
+                )}
+                <span style={{ display:'inline-flex', alignItems:'center', gap:4, background:'#F1F5F9', color:'var(--text-2)', borderRadius:8, padding:'4px 10px', fontSize:12, fontWeight:600 }}>
+                  <span className="material-icons" style={{ fontSize:13 }}>calendar_today</span>
+                  {new Date((bookingForm.date||'') + 'T12:00:00').toLocaleDateString('tr-TR', { day:'numeric', month:'short', year:'numeric' })}
+                </span>
+              </div>
             </div>
 
             {/* Scrollable body */}
-            <div style={{ overflowY:'auto', flex:1, padding:'20px 24px', display:'flex', flexDirection:'column', gap:20 }}>
+            <div style={{ overflowY:'auto', flex:1, padding:'16px 20px', display:'flex', flexDirection:'column', gap:16 }}>
 
-              {/* Seçim özeti */}
-              <div style={{ display:'flex', gap:8, flexWrap:'wrap' }}>
-                <div style={{ display:'flex', alignItems:'center', gap:6, background:'#EEF2FF', borderRadius:10, padding:'6px 12px' }}>
-                  <span className="material-icons" style={{ fontSize:15, color:'#6366F1' }}>calendar_today</span>
-                  <span style={{ fontSize:13, fontWeight:600, color:'#4338CA' }}>
-                    {new Date((bookingForm.date||'') + 'T12:00:00').toLocaleDateString('tr-TR', { weekday:'short', day:'numeric', month:'short' })}
-                  </span>
-                </div>
-                <div style={{ display:'flex', alignItems:'center', gap:6, background:'#EEF2FF', borderRadius:10, padding:'6px 12px' }}>
-                  <span className="material-icons" style={{ fontSize:15, color:'#6366F1' }}>schedule</span>
-                  <span style={{ fontSize:13, fontWeight:600, color:'#4338CA' }}>{bookingForm.startTime} – {bookingForm.endTime}</span>
-                </div>
-              </div>
-
-              {/* Süre */}
+              {/* Kişi seçimi — birleşik arama */}
               <div>
-                <div style={{ fontSize:12, fontWeight:700, color:'var(--text-2)', marginBottom:10, letterSpacing:0.4 }}>SÜRE</div>
-                <div style={{ display:'flex', gap:8, flexWrap:'wrap' }}>
-                  {[{d:0.75,l:'45 dk'},{d:1.0,l:'1 saat'},{d:1.5,l:'1,5 saat'},{d:2.0,l:'2 saat'}].map(({d,l}) => {
-                    const sel = bookingForm.duration === d;
-                    return (
-                      <button key={d} onClick={() => handleBookingDuration(d)}
-                        style={{ padding:'9px 18px', borderRadius:12, border: sel ? '1.5px solid var(--brand-navy)' : '1.5px solid var(--border)', background: sel ? '#EEF2FF' : 'var(--bg)', cursor:'pointer', fontSize:13, fontWeight: sel ? 700 : 500, color: sel ? 'var(--brand-navy)' : 'var(--text-2)', transition:'all 0.1s' }}>
-                        {l}
-                      </button>
-                    );
-                  })}
-                </div>
-              </div>
-
-              {/* Kort Seçimi */}
-              <div>
-                <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', marginBottom:10 }}>
-                  <div style={{ fontSize:12, fontWeight:700, color:'var(--text-2)', letterSpacing:0.4 }}>KORT</div>
-                  {bookingCourtsLoading && (
-                    <span style={{ fontSize:11, color:'var(--text-2)', display:'flex', alignItems:'center', gap:4 }}>
-                      <span className="material-icons" style={{ fontSize:13 }}>hourglass_empty</span>
-                      Müsaitlik kontrol ediliyor...
-                    </span>
-                  )}
-                </div>
-                {courts.length === 0 ? (
-                  <div style={{ padding:16, borderRadius:12, background:'var(--bg)', border:'1px solid var(--border)', textAlign:'center', color:'var(--text-2)', fontSize:13 }}>Kort bulunamadı.</div>
+                <div style={{ fontSize:12, fontWeight:700, color:'var(--text-2)', marginBottom:8, letterSpacing:0.4 }}>KİŞİ (OPSİYONEL)</div>
+                {(bookingMemberId || bookingCustomerId) ? (
+                  <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', border:'1.5px solid var(--brand-navy)', borderRadius:12, padding:'10px 12px', background:'#EEF2FF' }}>
+                    <div style={{ display:'flex', alignItems:'center', gap:6 }}>
+                      <span style={{ fontSize:14, fontWeight:700, color:'var(--brand-navy)' }}>{bookingMemberName || bookingCustomerName}</span>
+                      <span style={{ fontSize:10, fontWeight:700, color:'#fff', background: bookingCustomerId && !bookingMemberId ? '#0891B2' : 'var(--brand-navy)', borderRadius:5, padding:'2px 6px' }}>
+                        {bookingCustomerId && !bookingMemberId ? 'Müşteri' : 'Oyuncu'}
+                      </span>
+                    </div>
+                    <button type="button"
+                      onClick={() => { setBookingMemberId(null); setBookingMemberName(''); setBookingMemberQuery(''); setBookingMemberResults([]); setBookingCustomerId(null); setBookingCustomerName(''); setBookingCustomerQuery(''); setBookingCustomerResults([]); }}
+                      style={{ background:'none', border:'none', cursor:'pointer', padding:4, display:'grid', placeItems:'center' }}>
+                      <span className="material-icons" style={{ fontSize:18, color:'var(--text-2)' }}>close</span>
+                    </button>
+                  </div>
                 ) : (
-                  <div style={{ display:'flex', gap:10, flexWrap:'wrap' }}>
-                    {courts.map(court => {
-                      const avail = !bookingCourtsLoading && bookingAvailCourts.some(c => c.id === court.id);
-                      const sel   = bookingForm.courtId === court.id;
-                      return (
-                        <div key={court.id}
-                          onClick={() => !bookingCourtsLoading && avail && setBookingForm(f => ({...f, courtId: court.id}))}
-                          style={{
-                            padding:'12px 16px', borderRadius:14, minWidth:100, transition:'all 0.12s',
-                            border: sel ? '2px solid var(--brand-navy)' : `1.5px solid ${avail ? 'var(--border)' : '#FEE2E2'}`,
-                            background: sel ? '#EEF2FF' : avail ? 'var(--bg)' : '#FEF2F2',
-                            cursor: (!bookingCourtsLoading && avail) ? 'pointer' : 'not-allowed',
-                            opacity: bookingCourtsLoading ? 0.5 : 1,
-                          }}>
-                          <div style={{ display:'flex', alignItems:'center', gap:5, marginBottom:4 }}>
-                            <div style={{ width:6, height:6, borderRadius:'50%', background: avail ? '#22C55E' : '#EF4444', flexShrink:0 }} />
-                            <span style={{ fontSize:10, fontWeight:700, color: avail ? '#16A34A' : '#DC2626', letterSpacing:0.3 }}>
-                              {bookingCourtsLoading ? '...' : avail ? 'MÜSAİT' : 'DOLU'}
-                            </span>
+                  <div style={{ position:'relative' }}>
+                    <input placeholder="Ad, telefon veya e-posta ile ara..."
+                      value={bookingMemberQuery}
+                      onChange={e => searchBookingPerson(e.target.value)}
+                      style={{ width:'100%', border:'1.5px solid var(--border)', borderRadius:12, padding:'10px 12px', fontSize:14, boxSizing:'border-box', color:'var(--text-1)', background:'var(--bg)' }} />
+                    {(bookingMemberResults.length > 0 || bookingCustomerResults.length > 0) && (
+                      <div style={{ position:'absolute', top:'100%', left:0, right:0, zIndex:10, background:'var(--surface)', border:'1.5px solid var(--border)', borderRadius:12, boxShadow:'0 4px 16px rgba(0,0,0,0.12)', overflow:'hidden', marginTop:4 }}>
+                        {bookingMemberResults.map(m => (
+                          <div key={'p-'+m.id}
+                            style={{ padding:'10px 14px', cursor:'pointer', borderBottom:'1px solid var(--border)', display:'flex', alignItems:'center', justifyContent:'space-between' }}
+                            onMouseDown={() => { setBookingMemberId(m.id); setBookingMemberName(m.full_name); setBookingPersonMode('member'); setBookingMemberQuery(''); setBookingMemberResults([]); setBookingCustomerResults([]); }}>
+                            <div>
+                              <div style={{ fontSize:14, fontWeight:600, color:'var(--text-1)' }}>{m.full_name}</div>
+                              <div style={{ fontSize:12, color:'var(--text-2)' }}>{m.email}</div>
+                            </div>
+                            <span style={{ fontSize:10, fontWeight:700, color:'#fff', background:'var(--brand-navy)', borderRadius:5, padding:'2px 6px', flexShrink:0, marginLeft:8 }}>Oyuncu</span>
                           </div>
-                          <div style={{ fontSize:14, fontWeight:700, color: sel ? 'var(--brand-navy)' : 'var(--text-1)' }}>Kort {court.court_number}</div>
-                          <div style={{ fontSize:11, color:'var(--text-2)', marginTop:2 }}>{court.court_type} · {court.hourly_rate||'—'}₺/sa</div>
-                          {court.is_indoor !== undefined && (
-                            <div style={{ fontSize:10, color:'var(--text-2)', marginTop:1 }}>{court.is_indoor ? 'Kapalı' : 'Açık'}</div>
-                          )}
-                        </div>
-                      );
-                    })}
+                        ))}
+                        {bookingCustomerResults.map(c => (
+                          <div key={'c-'+c.id}
+                            style={{ padding:'10px 14px', cursor:'pointer', borderBottom:'1px solid var(--border)', display:'flex', alignItems:'center', justifyContent:'space-between' }}
+                            onMouseDown={() => {
+                              setBookingCustomerId(c.id); setBookingCustomerName(c.full_name); setBookingPersonMode('customer');
+                              if (c.user_id) { setBookingMemberId(c.user_id); setBookingMemberName(c.full_name); }
+                              setBookingMemberQuery(''); setBookingMemberResults([]); setBookingCustomerResults([]);
+                            }}>
+                            <div>
+                              <div style={{ fontSize:14, fontWeight:600, color:'var(--text-1)' }}>{c.full_name}</div>
+                              <div style={{ fontSize:12, color:'var(--text-2)' }}>{c.phone || c.email || ''}</div>
+                            </div>
+                            <span style={{ fontSize:10, fontWeight:700, color:'#fff', background:'#0891B2', borderRadius:5, padding:'2px 6px', flexShrink:0, marginLeft:8 }}>Müşteri</span>
+                          </div>
+                        ))}
+                      </div>
+                    )}
                   </div>
                 )}
-              </div>
-
-              {/* Kişi seçimi (Üye veya Müşteri) */}
-              <div>
-                <div style={{ fontSize:12, fontWeight:700, color:'var(--text-2)', marginBottom:10, letterSpacing:0.4 }}>KİŞİ (OPSİYONEL)</div>
-                {/* Toggle */}
-                <div style={{ display:'flex', gap:8, marginBottom:12 }}>
-                  {[{ key:'member', icon:'group', label:'Üye' }, { key:'customer', icon:'people_alt', label:'Müşteri' }].map(t => (
-                    <button key={t.key} type="button"
-                      style={{ flex:1, padding:'9px 0', borderRadius:10, cursor:'pointer', fontSize:13, fontWeight:600, display:'flex', alignItems:'center', justifyContent:'center', gap:6,
-                        border: bookingPersonMode === t.key ? '1.5px solid var(--brand-navy)' : '1.5px solid var(--border)',
-                        background: bookingPersonMode === t.key ? '#EEF2FF' : 'var(--bg)',
-                        color: bookingPersonMode === t.key ? 'var(--brand-navy)' : 'var(--text-2)' }}
-                      onClick={() => {
-                        setBookingPersonMode(t.key);
-                        if (t.key === 'member') { setBookingCustomerId(null); setBookingCustomerName(''); setBookingCustomerQuery(''); setBookingCustomerResults([]); }
-                        else { setBookingMemberId(null); setBookingMemberName(''); setBookingMemberQuery(''); setBookingMemberResults([]); }
-                      }}>
-                      <span className="material-icons" style={{ fontSize:14 }}>{t.icon}</span>
-                      {t.label}
-                    </button>
-                  ))}
-                </div>
-
-                {/* Üye arama */}
-                {bookingPersonMode === 'member' && (bookingMemberId ? (
-                  <div style={{ display:'flex', alignItems:'center', gap:8, background:'#EEF2FF', borderRadius:12, padding:'10px 14px' }}>
-                    <span className="material-icons" style={{ color:'var(--brand-navy)', fontSize:16 }}>person</span>
-                    <span style={{ flex:1, fontWeight:600, fontSize:13, color:'var(--text-1)' }}>{bookingMemberName}</span>
-                    <button type="button" onClick={() => { setBookingMemberId(null); setBookingMemberName(''); setBookingMemberQuery(''); setBookingMemberResults([]); }}
-                      style={{ background:'none', border:'none', cursor:'pointer', color:'var(--text-2)', padding:0, display:'grid', placeItems:'center' }}>
-                      <span className="material-icons" style={{ fontSize:16 }}>close</span>
-                    </button>
-                  </div>
-                ) : (
-                  <div style={{ position:'relative' }}>
-                    <div style={{ position:'relative' }}>
-                      <input placeholder="Üye adı ara..." value={bookingMemberQuery}
-                        onChange={e => searchBookingMembers(e.target.value)}
-                        style={{ width:'100%', border:'1.5px solid var(--border)', borderRadius:12, padding:'10px 12px 10px 36px', fontSize:14, boxSizing:'border-box', color:'var(--text-1)', background:'var(--bg)' }} />
-                      <span className="material-icons" style={{ position:'absolute', left:10, top:'50%', transform:'translateY(-50%)', fontSize:16, color:'var(--text-2)', pointerEvents:'none' }}>search</span>
-                      {bookingMemberLoading && (
-                        <span className="material-icons" style={{ position:'absolute', right:10, top:'50%', transform:'translateY(-50%)', fontSize:16, color:'var(--text-2)', animation:'spin 1s linear infinite' }}>refresh</span>
-                      )}
-                    </div>
-                    {bookingMemberResults.length > 0 && (
-                      <div style={{ position:'absolute', top:'100%', left:0, right:0, zIndex:10, background:'#fff', border:'1px solid var(--border)', borderRadius:12, boxShadow:'0 4px 16px rgba(0,0,0,0.12)', overflow:'hidden', marginTop:4 }}>
-                        {bookingMemberResults.map((m, idx) => (
-                          <div key={m.id}
-                            style={{ padding:'10px 14px', cursor:'pointer', borderBottom: idx < bookingMemberResults.length-1 ? '1px solid var(--border)' : 'none', fontSize:13, fontWeight:500, display:'flex', alignItems:'center', gap:8 }}
-                            onMouseDown={() => { setBookingMemberId(m.id); setBookingMemberName(m.full_name); setBookingMemberQuery(''); setBookingMemberResults([]); }}>
-                            <span className="material-icons" style={{ fontSize:15, color:'var(--brand-navy)' }}>person</span>
-                            <span style={{ flex:1 }}>{m.full_name}</span>
-                            {m.email && <span style={{ fontSize:11, color:'var(--text-2)' }}>{m.email}</span>}
-                          </div>
-                        ))}
-                      </div>
-                    )}
-                  </div>
-                ))}
-
-                {/* Müşteri arama */}
-                {bookingPersonMode === 'customer' && (bookingCustomerId ? (
-                  <div style={{ display:'flex', alignItems:'center', gap:8, background:'#EEF2FF', borderRadius:12, padding:'10px 14px' }}>
-                    <span className="material-icons" style={{ color:'var(--brand-navy)', fontSize:16 }}>people_alt</span>
-                    <span style={{ flex:1, fontWeight:600, fontSize:13, color:'var(--text-1)' }}>{bookingCustomerName}</span>
-                    <button type="button"
-                      onClick={() => { setBookingCustomerId(null); setBookingCustomerName(''); setBookingCustomerQuery(''); setBookingCustomerResults([]); setBookingMemberId(null); setBookingMemberName(''); }}
-                      style={{ background:'none', border:'none', cursor:'pointer', color:'var(--text-2)', padding:0, display:'grid', placeItems:'center' }}>
-                      <span className="material-icons" style={{ fontSize:16 }}>close</span>
-                    </button>
-                  </div>
-                ) : (
-                  <div style={{ position:'relative' }}>
-                    <div style={{ position:'relative' }}>
-                      <input placeholder="Müşteri adı veya telefon ara..." value={bookingCustomerQuery}
-                        onChange={e => searchBookingCustomers(e.target.value)}
-                        style={{ width:'100%', border:'1.5px solid var(--border)', borderRadius:12, padding:'10px 12px 10px 36px', fontSize:14, boxSizing:'border-box', color:'var(--text-1)', background:'var(--bg)' }} />
-                      <span className="material-icons" style={{ position:'absolute', left:10, top:'50%', transform:'translateY(-50%)', fontSize:16, color:'var(--text-2)', pointerEvents:'none' }}>search</span>
-                    </div>
-                    {bookingCustomerResults.length > 0 && (
-                      <div style={{ position:'absolute', top:'100%', left:0, right:0, zIndex:10, background:'#fff', border:'1px solid var(--border)', borderRadius:12, boxShadow:'0 4px 16px rgba(0,0,0,0.12)', overflow:'hidden', marginTop:4 }}>
-                        {bookingCustomerResults.map((c, idx) => (
-                          <div key={c.id}
-                            style={{ padding:'10px 14px', cursor:'pointer', borderBottom: idx < bookingCustomerResults.length-1 ? '1px solid var(--border)' : 'none', fontSize:13, fontWeight:500, display:'flex', alignItems:'center', gap:8 }}
-                            onMouseDown={() => {
-                              setBookingCustomerId(c.id); setBookingCustomerName(c.full_name);
-                              setBookingCustomerQuery(''); setBookingCustomerResults([]);
-                              if (c.user_id) { setBookingMemberId(c.user_id); setBookingMemberName(c.full_name); }
-                            }}>
-                            <span className="material-icons" style={{ fontSize:15, color:'var(--brand-navy)' }}>people_alt</span>
-                            <span style={{ flex:1 }}>{c.full_name}</span>
-                            <span style={{ fontSize:11, color:'var(--text-2)' }}>{c.phone}</span>
-                            {c.user_id && <span style={{ fontSize:10, fontWeight:700, background:'#EEF2FF', color:'var(--brand-navy)', padding:'1px 6px', borderRadius:20 }}>CC</span>}
-                          </div>
-                        ))}
-                      </div>
-                    )}
-                  </div>
-                ))}
               </div>
 
               {/* Özet */}
