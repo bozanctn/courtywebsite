@@ -50,7 +50,7 @@ function CoachesScreen({ clubId }) {
   const filtered = coaches.filter(c => showInactive || c.is_active);
 
   const openAdd = () => {
-    setForm({ is_active: true, full_name: '', email: '', phone: '', hourly_rate: '', experience_years: '', specialization: '', bio: '' });
+    setForm({ is_active: true, full_name: '', email: '', phone: '', hourly_rate: '', coach_pay_rate: '', experience_years: '', specialization: '', bio: '' });
     setModal('add');
   };
 
@@ -80,12 +80,19 @@ function CoachesScreen({ clubId }) {
         if (existing) throw new Error('Bu email adresi ile zaten bir hoca mevcut');
       }
 
+      if (form.coach_pay_rate) {
+        const pr = Number(form.coach_pay_rate);
+        if (pr < 0)   { alert('Hoca payı negatif olamaz.');          return; }
+        if (pr > 100) { alert("Hoca payı %100'den büyük olamaz.");   return; }
+      }
+
       const payload = {
         club_id:          clubId,
         full_name:        form.full_name.trim(),
         email:            email,
         phone:            form.phone?.trim() || null,
         hourly_rate:      Number(form.hourly_rate),
+        coach_pay_rate:   form.coach_pay_rate ? Number(form.coach_pay_rate) : null,
         experience_years: Number(form.experience_years) || 0,
         specialization:   form.specialization || null,
         bio:              form.bio?.trim() || null,
@@ -371,6 +378,11 @@ function CoachesScreen({ clubId }) {
                     <span className="material-icons" style={{ fontSize: 13 }}>payments</span> {fmtMoney(c.hourly_rate)}/saat
                   </span>
                 )}
+                {c.coach_pay_rate > 0 && (
+                  <span style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: 12, color: '#16A34A', background: '#DCFCE7', border: '1px solid #BBF7D0', borderRadius: 8, padding: '4px 9px', fontWeight: 600 }}>
+                    <span className="material-icons" style={{ fontSize: 13 }}>account_balance_wallet</span> Pay: {fmtMoney(c.coach_pay_rate)}/saat
+                  </span>
+                )}
                 {c.specialization && (
                   <span style={{ fontSize: 12, color: 'var(--brand-navy)', background: '#EEF2FF', border: '1px solid #C7D2FE', borderRadius: 8, padding: '4px 9px', fontWeight: 600 }}>
                     {c.specialization}
@@ -502,10 +514,17 @@ function CoachesScreen({ clubId }) {
                 <input type="number" min={0} value={form.hourly_rate || ''} placeholder="0"
                   onChange={e => setForm({ ...form, hourly_rate: e.target.value })} />
               </Field>
+              <Field label="Hoca Payı (%)">
+                <input type="number" min={0} max={100} value={form.coach_pay_rate || ''} placeholder="0"
+                  onChange={e => setForm({ ...form, coach_pay_rate: e.target.value })} />
+              </Field>
+            </div>
+            <div className="fields-2">
               <Field label="Deneyim (Yıl)">
                 <input type="number" min={0} value={form.experience_years || ''} placeholder="0"
                   onChange={e => setForm({ ...form, experience_years: e.target.value })} />
               </Field>
+              <div />
             </div>
             <Field label="Uzmanlık Alanı">
               <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, marginTop: 4 }}>
