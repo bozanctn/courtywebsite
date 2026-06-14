@@ -1431,14 +1431,32 @@ const CustomerSvc = {
       .map(b => ({ ...b, start_time: dbTimeToLocal(b.start_time), end_time: dbTimeToLocal(b.end_time) }));
   },
 
-  async getCustomerLessonPackages(customerId, clubId, customerUserId) {
-    if (!customerUserId) return [];
-    const { data, error } = await sb.from('player_lesson_packages')
-      .select('*, package:lesson_packages(name, total_lessons, price)')
-      .eq('player_id', customerUserId).eq('club_id', clubId)
-      .order('created_at', { ascending: false });
-    if (error) throw error;
-    return data ?? [];
+  async getCustomerLessonPackages(customerId, clubId, customerUserId, customerName) {
+    const sel = '*, package:lesson_packages(name, total_lessons, price)';
+    const results = [];
+
+    if (customerUserId) {
+      const { data, error } = await sb.from('player_lesson_packages')
+        .select(sel)
+        .eq('player_id', customerUserId)
+        .eq('club_id', clubId)
+        .order('created_at', { ascending: false });
+      if (error) throw error;
+      results.push(...(data ?? []));
+    }
+
+    if (customerName?.trim()) {
+      const { data, error } = await sb.from('player_lesson_packages')
+        .select(sel)
+        .is('player_id', null)
+        .eq('manual_player_name', customerName.trim())
+        .eq('club_id', clubId)
+        .order('created_at', { ascending: false });
+      if (error) throw error;
+      results.push(...(data ?? []));
+    }
+
+    return results;
   },
 
   async linkToProfile(customerId, userId) {

@@ -319,6 +319,10 @@ function ReservationsScreen({ clubId, setScreen }) {
   const [bkGuestName,       setBkGuestName]       = useState('');
   const [bkPriceOverride,   setBkPriceOverride]   = useState('');
 
+  // Misafir → müşteri ekleme prompt
+  const [guestCustModal,  setGuestCustModal]  = useState(null); // null | { bookingId, name, phone }
+  const [guestCustSaving, setGuestCustSaving] = useState(false);
+
   // Özel dersler state
   const [lessons,      setLessons]      = useState([]);
   const [coaches,      setCoaches]      = useState([]);
@@ -724,17 +728,34 @@ function ReservationsScreen({ clubId, setScreen }) {
         calculated_amount: calculatedAmount,
         club_customer_id:  bkCustomerId || null,
         player_name:       bkMemberName || bkCustomerName || bkGuestName.trim() || null,
-      }).select().single();
+      }).select('id').single();
       if (bkErr) throw bkErr;
 
       const playerIdToLink = bkMemberId || null;
-      if (playerIdToLink && bk?.id) {
+      const insertedBkId = bk?.id ?? null;
+      if (playerIdToLink && insertedBkId) {
         await sb.from('booking_players').insert({
-          booking_id:        bk.id,
+          booking_id:        insertedBkId,
           player_id:         playerIdToLink,
           is_primary_player: true,
           status:            'confirmed',
         });
+      }
+
+      // Misafir modunda isim varsa → müşteri ekleme promptu göster
+      if (bkPersonMode === 'guest' && bkGuestName.trim()) {
+        let bookingId = insertedBkId;
+        if (!bookingId) {
+          const { data: found } = await sb.from('bookings').select('id')
+            .eq('court_id', courtId).eq('start_time', startDb).eq('user_id', user.id)
+            .order('created_at', { ascending: false }).limit(1).maybeSingle();
+          bookingId = found?.id ?? null;
+        }
+        setBkModalVisible(false);
+        loadDay();
+        loadDotDates();
+        setGuestCustModal({ bookingId, name: bkGuestName.trim(), phone: '' });
+        return;
       }
 
       setBkModalVisible(false);
@@ -1423,6 +1444,23 @@ function ReservationsScreen({ clubId, setScreen }) {
       }
     }
     finally { setSaving(false); }
+  };
+
+  // ── Misafiri müşteri olarak kaydet ────────────────────────────
+  const saveGuestAsCustomer = async () => {
+    if (!guestCustModal?.phone?.trim()) { alert('Telefon numarası zorunludur.'); return; }
+    if (!guestCustModal?.bookingId)    { alert('Rezervasyon ID bulunamadı.');   return; }
+    setGuestCustSaving(true);
+    try {
+      const { data: customer, error: ce } = await sb.from('club_customers')
+        .insert({ club_id: clubId, full_name: guestCustModal.name, phone: guestCustModal.phone.trim() })
+        .select('id').single();
+      if (ce) throw ce;
+      await sb.from('bookings').update({ club_customer_id: customer.id }).eq('id', guestCustModal.bookingId);
+      setGuestCustModal(null);
+      alert('Rezervasyon oluşturuldu ve müşteri kaydedildi.');
+    } catch(e) { alert('Hata: ' + e.message); }
+    finally { setGuestCustSaving(false); }
   };
 
   const cancelLesson = async (lesson) => {
@@ -2368,6 +2406,61 @@ function ReservationsScreen({ clubId, setScreen }) {
                 onClick={saveLesson} disabled={saving}
               >
                 {saving ? 'Kaydediliyor...' : 'Dersi Kaydet'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ── Misafir → Müşteri Ekleme Modalı ─────────────────────── */}
+      {guestCustModal && (
+        <div style={{ position:'fixed', inset:0, background:'rgba(0,0,0,0.5)', zIndex:2000, display:'flex', alignItems:'center', justifyContent:'center', padding:20 }}>
+          <div style={{ background:'#fff', borderRadius:20, width:'100%', maxWidth:420, padding:28, boxShadow:'0 8px 40px rgba(0,0,0,0.18)' }}>
+            <div style={{ display:'flex', alignItems:'center', gap:10, marginBottom:16 }}>
+              <span className="material-icons" style={{ fontSize:24, color:'#D97706' }}>person_add</span>
+              <span style={{ fontSize:18, fontWeight:800, color:'var(--text-1)' }}>Müşteri Olarak Ekle?</span>
+            </div>
+            <p style={{ fontSize:13, color:'var(--text-2)', marginBottom:20, lineHeight:1.5 }}>
+              <strong>{guestCustModal.name}</strong> adlı misafiri müşteri olarak kaydetmek ister misiniz?
+              Kaydedilirse bu rezervasyon müşteri profiline bağlanır.
+            </p>
+
+            <div style={{ marginBottom:14 }}>
+              <label style={{ fontSize:12, fontWeight:700, color:'var(--text-2)', display:'block', marginBottom:6 }}>AD SOYAD</label>
+              <input
+                type="text"
+                value={guestCustModal.name}
+                onChange={e => setGuestCustModal(prev => ({ ...prev, name: e.target.value }))}
+                style={{ width:'100%', padding:'11px 14px', borderRadius:10, border:'1.5px solid var(--border)', fontSize:14, background:'var(--bg)', boxSizing:'border-box' }}
+              />
+            </div>
+
+            <div style={{ marginBottom:24 }}>
+              <label style={{ fontSize:12, fontWeight:700, color:'var(--text-2)', display:'block', marginBottom:6 }}>TELEFON <span style={{ color:'#EF4444' }}>*</span></label>
+              <input
+                type="tel"
+                placeholder="05XX XXX XX XX"
+                value={guestCustModal.phone}
+                onChange={e => setGuestCustModal(prev => ({ ...prev, phone: e.target.value }))}
+                autoFocus
+                style={{ width:'100%', padding:'11px 14px', borderRadius:10, border:'1.5px solid var(--border)', fontSize:14, background:'var(--bg)', boxSizing:'border-box' }}
+              />
+            </div>
+
+            <div style={{ display:'flex', gap:10 }}>
+              <button
+                onClick={() => { setGuestCustModal(null); alert('Rezervasyon başarıyla oluşturuldu.'); }}
+                disabled={guestCustSaving}
+                style={{ flex:1, padding:'12px', borderRadius:12, border:'1.5px solid var(--border)', background:'var(--bg)', cursor:'pointer', fontSize:14, fontWeight:700, color:'var(--text-2)' }}
+              >
+                Hayır, Geç
+              </button>
+              <button
+                onClick={saveGuestAsCustomer}
+                disabled={guestCustSaving}
+                style={{ flex:2, padding:'12px', borderRadius:12, border:'none', background:'#D97706', color:'#fff', cursor: guestCustSaving ? 'not-allowed' : 'pointer', fontSize:14, fontWeight:800, opacity: guestCustSaving ? 0.7 : 1 }}
+              >
+                {guestCustSaving ? 'Kaydediliyor...' : 'Evet, Müşteri Olarak Ekle'}
               </button>
             </div>
           </div>
