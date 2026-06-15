@@ -822,6 +822,9 @@ function LessonsScreen({ clubId }) {
       // Koç çakışması — yalnızca sistem koçu seçildiyse (kort seçiminden bağımsız)
       const coachId = !form.use_manual_coach ? (form.coach_id || null) : null;
       if (coachId) {
+        const startDb = localTimeToDb(`${dateStr}T${startHH}`);
+        const endDb   = localTimeToDb(`${dateStr}T${endHH}`);
+
         const { data: coachConflict } = await sb.from('club_manual_lessons')
           .select('id, start_time, end_time')
           .eq('coach_id', coachId)
@@ -832,6 +835,15 @@ function LessonsScreen({ clubId }) {
           return ls < endHH && le > startHH;
         });
         if (hasCoachConflict) { alert('Bu antrenörün seçilen saatte başka bir dersi var.'); return; }
+
+        // lessons tablosunda hoca çakışması (mobil app'ten eklenen dersler)
+        const { data: lessonCoachConflict } = await sb.from('lessons')
+          .select('id')
+          .or(`coach_id.eq.${coachId},club_coach_id.eq.${coachId}`)
+          .neq('status', 'cancelled')
+          .lt('start_time', endDb)
+          .gt('end_time', startDb);
+        if (lessonCoachConflict?.length > 0) { alert('Bu antrenörün seçilen saatte başka bir dersi var.'); return; }
       }
     }
     setSaving(true);

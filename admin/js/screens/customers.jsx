@@ -354,7 +354,7 @@ function CustomersScreen({ clubId, setScreen }) {
         } else {
           setEmailMatch(profile);
         }
-      } catch (e) { /* sessizce geç */ }
+      } catch (e) { setEmailChecking(false); alert('E-posta kontrolü sırasında hata oluştu. Lütfen tekrar deneyin.'); return; }
       finally { setEmailChecking(false); }
     }, 500);
     setEmailDebounce(t);
@@ -403,7 +403,7 @@ function CustomersScreen({ clubId, setScreen }) {
       // Zaten bağlı olanları filtrele
       const filtered = (data || []).filter(p => !linkedIds.includes(p.id));
       setCcResults(filtered.slice(0, 8));
-    } catch (e) { /* sessizce geç */ }
+    } catch (e) { console.error('Profil arama hatası:', e); setCcResults([]); }
   };
 
   return (

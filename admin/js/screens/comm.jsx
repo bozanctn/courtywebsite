@@ -30,26 +30,33 @@ function ChatScreen({ clubId, clubProfile }) {
 
   const loadChats = async () => {
     setLoading(true);
-    // Kulüp profil user_id'sini al
-    const clubUserId = clubProfile?.user_id;
+    // club_profiles.id = auth.users.id
+    const clubUserId = clubProfile?.id;
     if (!clubUserId) { setLoading(false); return; }
 
-    const { data } = await sb
+    const { data: msgs } = await sb
       .from('messages')
-      .select('*, sender:profiles!messages_sender_id_fkey(id,full_name,email), receiver:profiles!messages_receiver_id_fkey(id,full_name,email)')
+      .select('*')
       .or(`sender_id.eq.${clubUserId},receiver_id.eq.${clubUserId}`)
       .order('created_at', { ascending: false })
       .limit(200);
 
-    // Grup by other user
+    if (!msgs?.length) { setChats([]); setLoading(false); return; }
+
+    // Diğer kullanıcıların ID'lerini topla
+    const otherIds = [...new Set(msgs.map(m => m.sender_id === clubUserId ? m.receiver_id : m.sender_id))];
+    const { data: profs } = await sb.from('profiles').select('id,full_name,email').in('id', otherIds);
+    const profMap = Object.fromEntries((profs || []).map(p => [p.id, p]));
+
+    // Konuşmaya göre grupla
     const chatMap = {};
-    (data || []).forEach(m => {
-      const other = m.sender_id === clubUserId ? m.receiver : m.sender;
-      if (!other) return;
-      if (!chatMap[other.id] || new Date(m.created_at) > new Date(chatMap[other.id].lastMsg?.created_at || 0)) {
-        chatMap[other.id] = { user: other, lastMsg: m, unread: 0 };
+    msgs.forEach(m => {
+      const otherId = m.sender_id === clubUserId ? m.receiver_id : m.sender_id;
+      const other = profMap[otherId] || { id: otherId, full_name: 'Bilinmeyen', email: '' };
+      if (!chatMap[otherId] || new Date(m.created_at) > new Date(chatMap[otherId].lastMsg?.created_at || 0)) {
+        chatMap[otherId] = { user: other, lastMsg: m, unread: 0 };
       }
-      if (!m.is_read && m.receiver_id === clubUserId) chatMap[other.id].unread++;
+      if (!m.is_read && m.receiver_id === clubUserId) chatMap[otherId].unread++;
     });
     setChats(Object.values(chatMap).sort((a,b) => new Date(b.lastMsg?.created_at||0) - new Date(a.lastMsg?.created_at||0)));
     setLoading(false);
@@ -58,7 +65,7 @@ function ChatScreen({ clubId, clubProfile }) {
   const openChat = async (chat) => {
     setActive(chat);
     setLoadingMs(true);
-    const clubUserId = clubProfile?.user_id;
+    const clubUserId = clubProfile?.id;
     subRef.current?.unsubscribe();
 
     const { data } = await sb
@@ -89,7 +96,7 @@ function ChatScreen({ clubId, clubProfile }) {
 
   const sendMsg = async () => {
     if (!text.trim() || !active) return;
-    const clubUserId = clubProfile?.user_id;
+    const clubUserId = clubProfile?.id;
     const msg = text.trim();
     setText('');
     await sb.from('messages').insert({
@@ -112,7 +119,7 @@ function ChatScreen({ clubId, clubProfile }) {
            (c.user.email || '').toLowerCase().includes(search.toLowerCase());
   });
 
-  const clubUserId = clubProfile?.user_id;
+  const clubUserId = clubProfile?.id;
 
   return (
     <div className="page fade-in" style={{ padding: 0, flex: 1 }}>

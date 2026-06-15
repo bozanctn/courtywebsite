@@ -5,7 +5,8 @@ const { useState, useEffect, useCallback } = React;
 // ── Navigasyon tanımları ───────────────────────────────────────
 const ALL_NAV_ITEMS = [
   { key: 'dashboard',      icon: 'dashboard',              label: 'Dashboard',          section: 'GENEL',      employeeOk: true  },
-  { key: 'reservations',   icon: 'event_available',        label: 'Rezervasyonlar',     section: 'YÖNETİM',    employeeOk: true  },
+  { key: 'program',        icon: 'calendar_today',         label: 'Program',            section: 'YÖNETİM',    employeeOk: true  },
+  { key: 'reservations',   icon: 'event_available',        label: 'Rezervasyonlar',     section: null,         employeeOk: true  },
   { key: 'courts',         icon: 'sports_tennis',          label: 'Kortlar',            section: null,         employeeOk: true  },
   { key: 'members',        icon: 'group',                  label: 'Üyeler',             section: null,         employeeOk: true  },
   { key: 'coaches',        icon: 'person',                 label: 'Koçlar',             section: null,         employeeOk: true  },
@@ -13,11 +14,9 @@ const ALL_NAV_ITEMS = [
   { key: 'customers',      icon: 'people_alt',             label: 'Müşteriler',         section: null,         employeeOk: false },
   { key: 'lesson_requests',icon: 'mark_email_unread',      label: 'Ders Talepleri',     section: null,         employeeOk: true  },
   { key: 'packages',       icon: 'inventory_2',            label: 'Ders Paketleri',     section: null,         employeeOk: true  },
-  { key: 'student_notes',  icon: 'sticky_note_2',          label: 'Öğrenci Notları',    section: null,         employeeOk: true  },
   { key: 'tournaments',    icon: 'emoji_events',           label: 'Turnuvalar',         section: 'ETKİNLİKLER',employeeOk: true  },
   { key: 'groups',         icon: 'groups',                 label: 'Gruplar',            section: null,         employeeOk: true  },
   { key: 'group_players',  icon: 'sports_tennis',          label: 'Grup Oyuncuları',    section: null,         employeeOk: true  },
-  { key: 'program',        icon: 'calendar_today',         label: 'Program',            section: null,         employeeOk: true  },
   { key: 'cafe',           icon: 'local_cafe',             label: 'Kafe / Market',      section: null,         employeeOk: true  },
   { key: 'finance',        icon: 'account_balance_wallet', label: 'Finans',             section: 'ANALİZ',     employeeOk: false },
   { key: 'analytics',      icon: 'bar_chart',              label: 'Analitik',           section: null,         employeeOk: false },
@@ -117,6 +116,9 @@ function Topbar({ screen, clubProfile, setScreen, unread }) {
       </div>
       <div className="spread" />
       <div className="actions">
+        <button className="icon-btn" onClick={() => setScreen('chat')} title="Mesajlar" style={{ position:'relative' }}>
+          <span className="material-icons">chat</span>
+        </button>
         <button className="icon-btn" onClick={() => setScreen('notifications')} title="Bildirimler">
           <span className="material-icons">notifications</span>
           {unread > 0 && <span className="dot" />}

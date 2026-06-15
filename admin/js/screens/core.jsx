@@ -299,6 +299,8 @@ function ReservationsScreen({ clubId, setScreen }) {
   const [saving,    setSaving]    = useState(false);
 
   // Yeni rezervasyon bottom-sheet modalı
+  const [requiresApproval, setRequiresApproval] = useState(false);
+
   const [bkModalVisible,  setBkModalVisible]  = useState(false);
   const [bkForm,          setBkForm]          = useState({});
   const [bkAvailCourts,   setBkAvailCourts]   = useState([]);
@@ -340,8 +342,13 @@ function ReservationsScreen({ clubId, setScreen }) {
   const [lessonLoadingPackages,   setLessonLoadingPackages]   = useState(false);
   const [lessonPriceMode,         setLessonPriceMode]         = useState('normal'); // 'normal' | 'split'
 
-  useEffect(() => { if (clubId) { loadCourts(); loadDotDates(); } }, [clubId]);
-  useEffect(() => { if (clubId) loadDay(); }, [clubId, selDate]);
+  useEffect(() => {
+    if (!clubId) return;
+    loadCourts(); loadDotDates();
+    sb.from('club_profiles').select('requires_booking_approval').eq('id', clubId).maybeSingle()
+      .then(({ data }) => setRequiresApproval(data?.requires_booking_approval === true));
+  }, [clubId]);
+  useEffect(() => { if (clubId) loadDay(); }, [clubId, selDate, requiresApproval]);
   useEffect(() => { if (clubId && mainTab === 'lessons') loadLessons(); }, [clubId, mainTab, selDate]);
 
   // Kortlar ekranından slot tıklayarak gelen rezervasyon prefill
@@ -463,16 +470,18 @@ function ReservationsScreen({ clubId, setScreen }) {
         (custData || []).forEach(c => custNameMap.set(c.id, c.full_name));
       }
 
-      // Pending bookingleri otomatik onayla
-      const pendingIds = (data || []).filter(b => b.status === 'pending').map(b => b.id);
-      if (pendingIds.length > 0) {
-        sb.from('bookings').update({ status: 'confirmed' }).in('id', pendingIds)
-          .then(() => {}).catch(e => console.warn('Auto-confirm error:', e));
+      // Pending bookingleri otomatik onayla — sadece onay gerektirmeyen kulüplerde
+      if (!requiresApproval) {
+        const pendingIds = (data || []).filter(b => b.status === 'pending').map(b => b.id);
+        if (pendingIds.length > 0) {
+          sb.from('bookings').update({ status: 'confirmed' }).in('id', pendingIds)
+            .then(() => {}).catch(e => console.warn('Auto-confirm error:', e));
+        }
       }
       setBookings((data || []).map(b => ({
         ...b,
         _customerName: custNameMap.get(b.club_customer_id) || null,
-        status:     b.status === 'pending' ? 'confirmed' : b.status,
+        status:     (!requiresApproval && b.status === 'pending') ? 'confirmed' : b.status,
         start_time: dbTimeToLocal(b.start_time),
         end_time:   dbTimeToLocal(b.end_time),
       })));
@@ -866,15 +875,17 @@ function ReservationsScreen({ clubId, setScreen }) {
       const startHH = form.start_time.slice(11, 16);
       const endHH   = form.end_time.slice(11, 16);
 
-      const [{ data: bConflict }, { data: mConflict }, { data: closures }] = await Promise.all([
+      const [{ data: bConflict }, { data: mConflict }, { data: lConflict }, { data: closures }] = await Promise.all([
         sb.from('bookings').select('id').eq('court_id', form.court_id)
           .in('status', ['pending', 'confirmed']).lt('start_time', endDb).gt('end_time', startDb),
         sb.from('club_manual_lessons').select('id, start_time, end_time')
           .eq('court_id', form.court_id).eq('date', dateStr),
+        sb.from('lessons').select('id').eq('court_id', form.court_id)
+          .neq('status', 'cancelled').lt('start_time', endDb).gt('end_time', startDb),
         sb.from('court_closures').select('*').eq('court_id', form.court_id).eq('is_active', true),
       ]);
 
-      if (bConflict?.length > 0) { alert('Bu kort seçilen saatte zaten rezerve edilmiş.'); return; }
+      if (bConflict?.length > 0 || lConflict?.length > 0) { alert('Bu kort seçilen saatte zaten rezerve edilmiş.'); return; }
 
       const hasManualConflict = (mConflict || []).some(l => {
         const ls = (l.start_time || '').slice(0, 5);
@@ -1162,15 +1173,17 @@ function ReservationsScreen({ clubId, setScreen }) {
       const courtRow0 = lessonCourts.find(c => c.id === lessonForm.court_id);
       const locationStr = courtRow0 ? `Kort ${courtRow0.court_number}` : '';
 
-      const [{ data: bConflict }, { data: mConflict }, { data: closures }] = await Promise.all([
+      const [{ data: bConflict }, { data: mConflict }, { data: lConflict }, { data: closures }] = await Promise.all([
         sb.from('bookings').select('id').eq('court_id', lessonForm.court_id)
           .neq('status', 'cancelled').lt('start_time', endDb).gt('end_time', startDb),
         sb.from('club_manual_lessons').select('id,start_time,end_time,court_id,location')
           .eq('club_id', clubId).eq('date', dateStr),
+        sb.from('lessons').select('id').eq('court_id', lessonForm.court_id)
+          .neq('status', 'cancelled').lt('start_time', endDb).gt('end_time', startDb),
         sb.from('court_closures').select('*').eq('court_id', lessonForm.court_id).eq('is_active', true),
       ]);
 
-      if (bConflict?.length > 0) { alert('Bu kort seçilen saatte zaten rezerve edilmiş.'); return; }
+      if (bConflict?.length > 0 || lConflict?.length > 0) { alert('Bu kort seçilen saatte zaten rezerve edilmiş.'); return; }
 
       const hasManualConflict = (mConflict || [])
         .filter(l => l.court_id ? l.court_id === lessonForm.court_id : l.location === locationStr)
@@ -1211,6 +1224,15 @@ function ReservationsScreen({ clubId, setScreen }) {
         });
         if (hasCoachConflict) { alert('Bu antrenörün seçilen saatte başka bir dersi var.'); return; }
 
+        // lessons tablosunda hoca çakışması (mobil app'ten eklenen dersler)
+        const { data: lessonCoachConflict } = await sb.from('lessons')
+          .select('id')
+          .or(`coach_id.eq.${lessonForm.coach_id},club_coach_id.eq.${lessonForm.coach_id}`)
+          .neq('status', 'cancelled')
+          .lt('start_time', endDb)
+          .gt('end_time', startDb);
+        if (lessonCoachConflict?.length > 0) { alert('Bu antrenörün seçilen saatte başka bir dersi var.'); return; }
+
         // Grup dersi / program bloğu çakışması (court_closures.coach_id) — mobil ile aynı
         const { data: coachClosures } = await sb.from('court_closures')
           .select('closure_type, day_of_week, start_hour, end_hour, start_date, end_date, reason')
@@ -1245,7 +1267,7 @@ function ReservationsScreen({ clubId, setScreen }) {
           sb.from('bookings').select('id')
             .in('status', ['pending', 'confirmed']).lt('start_time', endDb).gt('end_time', startDb),
           sb.from('lessons').select('id').eq('student_id', lessonForm.player_id)
-            .neq('status', 'cancelled').lt('start_time', endDb).gt('end_time', startDb),
+            .neq('status', 'cancelled').lt('start_time', `${dateStr}T${endHH}:00+03:00`).gt('end_time', `${dateStr}T${startHH}:00+03:00`),
         ]);
 
         const conflictBookingIds = (allConflictBookings || []).map(b => b.id);
@@ -1648,14 +1670,29 @@ function ReservationsScreen({ clubId, setScreen }) {
                         ) : b.status !== 'cancelled' ? (
                           <Badge cls={paymentClass(b.payment_status)}>{paymentLabel(b.payment_status)}</Badge>
                         ) : null}
-                        {/* Tamamlandı */}
+                        {/* Onay gerektiren kulüp: pending → Onayla / Reddet */}
+                        {requiresApproval && b.status === 'pending' && (
+                          <>
+                            <button className="btn btn-pri btn-sm" style={{ display:'flex', alignItems:'center', gap:4, fontSize:11 }}
+                              onClick={() => updateStatus(b.id, 'confirmed', b)}>
+                              <span className="material-icons" style={{fontSize:13}}>check</span>
+                              Onayla
+                            </button>
+                            <button className="btn btn-danger btn-sm" style={{ display:'flex', alignItems:'center', gap:4, fontSize:11 }}
+                              onClick={() => updateStatus(b.id, 'cancelled', b)}>
+                              <span className="material-icons" style={{fontSize:13}}>close</span>
+                              Reddet
+                            </button>
+                          </>
+                        )}
+                        {/* Tamamlandı — confirmed durumda her iki kulüp tipi için */}
                         {b.status === 'confirmed' && (
                           <button className="btn btn-ghost btn-sm btn-icon" title="Tamamlandı" onClick={() => updateStatus(b.id, 'completed', b)}>
                             <span className="material-icons" style={{fontSize:15}}>done_all</span>
                           </button>
                         )}
-                        {/* İptal — mobilden kopyalandı */}
-                        {b.status !== 'cancelled' && b.status !== 'completed' && (
+                        {/* İptal */}
+                        {b.status !== 'cancelled' && b.status !== 'completed' && b.status !== 'pending' && (
                           <button className="btn btn-danger btn-sm" style={{ display:'flex', alignItems:'center', gap:4, fontSize:11 }}
                             onClick={() => updateStatus(b.id, 'cancelled', b)}>
                             <span className="material-icons" style={{fontSize:13}}>close</span>

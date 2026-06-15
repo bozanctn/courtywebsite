@@ -50,6 +50,7 @@ function ClubProfileScreen({ clubId, clubProfile: initialProfile }) {
       ...profile,
       opening_hours: oh, light_hours: lh, amenities: am,
       is_visible: profile.is_visible !== false,
+      requires_booking_approval: profile.requires_booking_approval === true,
       max_reservation_duration: profile.max_reservation_duration || 120,
       booking_open_hour: profile.booking_open_hour ?? 0,
     });
@@ -75,7 +76,8 @@ function ClubProfileScreen({ clubId, clubProfile: initialProfile }) {
         opening_hours:    form.opening_hours || null,
         light_hours:      form.light_hours   || null,
         amenities:        Array.isArray(form.amenities) ? form.amenities : [],
-        is_visible:       form.is_visible !== false,
+        is_visible:                form.is_visible !== false,
+        requires_booking_approval: form.requires_booking_approval === true,
         max_reservation_duration:            form.max_reservation_duration ? Number(form.max_reservation_duration) : 120,
         max_advance_booking_days:            form.max_advance_booking_days ? Number(form.max_advance_booking_days) : null,
         booking_open_hour:                   form.booking_open_hour != null ? Number(form.booking_open_hour) : 0,
@@ -295,6 +297,16 @@ function ClubProfileScreen({ clubId, clubProfile: initialProfile }) {
             </div>
 
             <div style={{ fontWeight:700, fontSize:12, color:'var(--text-2)', textTransform:'uppercase', letterSpacing:'.5px', borderBottom:'1px solid var(--border)', paddingBottom:6 }}>Rezervasyon Ayarları</div>
+
+            {/* Rezervasyon Onayı */}
+            <div style={{ background: form.requires_booking_approval ? '#FEFCE8' : '#F0FDF4', borderRadius:10, padding:'12px 14px', border: `1px solid ${form.requires_booking_approval ? '#FDE68A' : 'rgba(34,197,94,0.2)'}` }}>
+              <Switch on={form.requires_booking_approval === true} onChange={v => setForm({...form, requires_booking_approval: v})} label="Kulüp Onayı Gereksin" />
+              <p style={{ fontSize:11, color:'var(--text-2)', margin:'6px 0 0 0' }}>
+                {form.requires_booking_approval
+                  ? 'Yeni rezervasyonlar siz onaylayana kadar beklemede kalır.'
+                  : 'Yeni rezervasyonlar otomatik olarak onaylanır.'}
+              </p>
+            </div>
             <Field label="Maksimum Rezervasyon Süresi" hint="Bu süreden uzun seçenekler oyunculara gösterilmez.">
               <div style={{ display:'flex', gap:8, marginTop:4 }}>
                 {[60, 90, 120].map(m => (

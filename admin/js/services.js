@@ -238,7 +238,7 @@ const CoachSvc = {
 
     const { data: bookings, error: be } = await sb.from('bookings').select('*')
       .in('court_id', courtIds)
-      .gte('start_time', `${date}T00:00:00`).lt('start_time', `${date}T23:59:59`)
+      .gte('start_time', localTimeToDb(`${date}T00:00`)).lt('start_time', localTimeToDb(`${date}T23:59`))
       .order('start_time');
     if (be) throw be;
 
@@ -1315,7 +1315,7 @@ const ReservationSvc = {
       .select(`*, courts!bookings_court_id_fkey(court_number, court_type),
                booking_players!booking_players_booking_id_fkey(player_id, is_primary_player, profiles!booking_players_player_id_fkey(id, full_name, email))`)
       .in('court_id', courtIds)
-      .gte('start_time', `${dateStr}T00:00:00`).lte('start_time', `${dateStr}T23:59:59`)
+      .gte('start_time', localTimeToDb(`${dateStr}T00:00`)).lte('start_time', localTimeToDb(`${dateStr}T23:59`))
       .order('start_time', { ascending: true });
     if (error) throw error;
     return (data ?? []).map(b => ({
