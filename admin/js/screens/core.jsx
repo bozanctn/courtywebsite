@@ -1858,13 +1858,13 @@ function ReservationsScreen({ clubId, setScreen }) {
 
       {/* ── Yeni Rezervasyon Bottom-Sheet ── */}
       {bkModalVisible && (
-        <div style={{ position:'fixed', inset:0, background:'rgba(0,0,0,0.45)', zIndex:1000, display:'flex', flexDirection:'column', justifyContent:'flex-end' }}
+        <div style={{ position:'fixed', inset:0, background:'rgba(0,0,0,0.45)', zIndex:1000, display:'flex', alignItems:'center', justifyContent:'center' }}
           onClick={e => { if (e.target === e.currentTarget && !bkSaving) { setBkModalVisible(false); } }}>
-          <div style={{ background:'#fff', borderTopLeftRadius:24, borderTopRightRadius:24, maxHeight:'90vh', display:'flex', flexDirection:'column' }}>
+          <div style={{ background:'#fff', borderRadius:20, width:'min(480px,95vw)', maxHeight:'85vh', display:'flex', flexDirection:'column', boxShadow:'0 8px 40px rgba(0,0,0,0.18)' }}>
 
             {/* Header */}
-            <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', padding:'20px 24px 16px', borderBottom:'1px solid var(--border)', flexShrink:0 }}>
-              <span style={{ fontSize:18, fontWeight:800, color:'var(--text-1)' }}>Yeni Rezervasyon</span>
+            <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', padding:'16px 20px 12px', borderBottom:'1px solid var(--border)', flexShrink:0 }}>
+              <span style={{ fontSize:17, fontWeight:800, color:'var(--text-1)' }}>Yeni Rezervasyon</span>
               <button onClick={() => setBkModalVisible(false)} disabled={bkSaving}
                 style={{ background:'none', border:'none', cursor:'pointer', display:'grid', placeItems:'center' }}>
                 <span className="material-icons" style={{ fontSize:24, color:'var(--text-2)' }}>close</span>
@@ -1872,7 +1872,7 @@ function ReservationsScreen({ clubId, setScreen }) {
             </div>
 
             {/* Scrollable body */}
-            <div style={{ overflowY:'auto', flex:1, padding:'20px 24px', display:'flex', flexDirection:'column', gap:20 }}>
+            <div style={{ overflowY:'auto', flex:1, padding:'16px 20px', display:'flex', flexDirection:'column', gap:16 }}>
 
               {/* Seçim özeti */}
               <div style={{ display:'flex', gap:8, flexWrap:'wrap' }}>
@@ -2148,7 +2148,7 @@ function ReservationsScreen({ clubId, setScreen }) {
             </div>{/* end scrollable body */}
 
             {/* Footer */}
-            <div style={{ display:'flex', gap:10, padding:'16px 24px', borderTop:'1px solid var(--border)', flexShrink:0 }}>
+            <div style={{ display:'flex', gap:10, padding:'12px 20px', borderTop:'1px solid var(--border)', flexShrink:0 }}>
               <button onClick={() => setBkModalVisible(false)} disabled={bkSaving}
                 style={{ flex:1, padding:'13px', borderRadius:14, border:'1.5px solid var(--border)', background:'var(--bg)', cursor:'pointer', fontSize:14, fontWeight:700, color:'var(--text-2)' }}>
                 İptal
@@ -2166,20 +2166,20 @@ function ReservationsScreen({ clubId, setScreen }) {
 
       {/* Özel Ders Ekle / Düzenle Modalı — Mobil ile birebir aynı */}
       {lessonModal && (
-        <div style={{ position:'fixed', inset:0, background:'rgba(0,0,0,0.45)', zIndex:1000, display:'flex', flexDirection:'column', justifyContent:'flex-end' }}
+        <div style={{ position:'fixed', inset:0, background:'rgba(0,0,0,0.45)', zIndex:1000, display:'flex', alignItems:'center', justifyContent:'center' }}
           onClick={e => { if (e.target === e.currentTarget) setLessonModal(null); }}>
-          <div style={{ background:'#fff', borderTopLeftRadius:24, borderTopRightRadius:24, padding:20, maxHeight:'92vh', display:'flex', flexDirection:'column', gap:0 }}>
+          <div style={{ background:'#fff', borderRadius:20, width:'min(480px,95vw)', maxHeight:'85vh', display:'flex', flexDirection:'column', gap:0, boxShadow:'0 8px 40px rgba(0,0,0,0.18)' }}>
             {/* Header */}
-            <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', marginBottom:20 }}>
-              <span style={{ fontSize:18, fontWeight:800, color:'var(--text-1)' }}>
+            <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', padding:'16px 20px 12px', borderBottom:'1px solid var(--border)', flexShrink:0 }}>
+              <span style={{ fontSize:17, fontWeight:800, color:'var(--text-1)' }}>
                 {lessonModal.type === 'edit' ? 'Dersi Düzenle' : 'Ders Ekle'}
               </span>
               <button style={{ background:'none', border:'none', cursor:'pointer', display:'grid', placeItems:'center' }} onClick={() => setLessonModal(null)}>
-                <span className="material-icons" style={{ fontSize:24, color:'var(--text-2)' }}>close</span>
+                <span className="material-icons" style={{ fontSize:22, color:'var(--text-2)' }}>close</span>
               </button>
             </div>
 
-            <div style={{ overflowY:'auto', flex:1, display:'flex', flexDirection:'column', gap:0 }}>
+            <div style={{ overflowY:'auto', flex:1, padding:'16px 20px', display:'flex', flexDirection:'column', gap:0 }}>
               {/* ── Antrenör ─────────────────────────────────── */}
               <div style={{ fontSize:12, fontWeight:700, color:'var(--text-2)', marginBottom:8, letterSpacing:0.4 }}>ANTRENÖR</div>
               {/* Toggle butonları */}
