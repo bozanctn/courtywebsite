@@ -383,9 +383,9 @@ function MembersScreen({ clubId }) {
   const filtered = members.filter(m => {
     if (filter !== 'all' && m.status !== filter) return false;
     if (search) {
-      const q = search.toLowerCase();
-      return displayName(m).toLowerCase().includes(q) ||
-             (m.member_email || m.profile?.email || '').toLowerCase().includes(q);
+      const q = search.toLocaleLowerCase('tr-TR');
+      return displayName(m).toLocaleLowerCase('tr-TR').includes(q) ||
+             (m.member_email || m.profile?.email || '').toLocaleLowerCase('tr-TR').includes(q);
     }
     return true;
   });

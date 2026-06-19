@@ -574,7 +574,7 @@ function StudentNotesScreen({ clubId }) {
 // Mobil MyProgramScreen.tsx yapısının birebir kopyası:
 // Tüm veriler tek seferde çekilir, tarih filtresi JS'de useMemo ile yapılır.
 // ═══════════════════════════════════════════════════════════════
-function MyProgramScreen({ clubId, setScreen }) {
+function MyProgramScreen({ clubId, setScreen, clubProfile }) {
   const { useState, useEffect, useMemo } = React;
   const [selDate,    setSelDate]    = useState(todayISO());
   const [courts,     setCourts]     = useState([]);
@@ -607,6 +607,7 @@ function MyProgramScreen({ clubId, setScreen }) {
   const [bookingCustomerName,    setBookingCustomerName]    = useState('');
   const [bookingCustomerQuery,   setBookingCustomerQuery]   = useState('');
   const [bookingCustomerResults, setBookingCustomerResults] = useState([]);
+  const hasMembership = clubProfile?.has_membership_system !== false;
   const [bookingPersonMode,      setBookingPersonMode]      = useState('member'); // 'member' | 'customer' | 'guest'
   const [bookingGuestName,       setBookingGuestName]       = useState('');
   const [bookingPriceOverride,   setBookingPriceOverride]   = useState('');
@@ -655,6 +656,8 @@ function MyProgramScreen({ clubId, setScreen }) {
   const [lsCustomerResults, setLsCustomerResults] = useState([]);
   const [lsAutoCoachLoading,setLsAutoCoachLoading]= useState(false);
   const [lsPriceMode,       setLsPriceMode]       = useState('normal'); // 'normal' | 'split'
+  const [lsCoachAmount,     setLsCoachAmount]     = useState('');
+  const [lsClubAmount,      setLsClubAmount]      = useState('');
 
   // Grup dersi ekleme modalı (inline)
   const [grpModal,           setGrpModal]           = useState(null); // null | { type: 'add' }
@@ -684,37 +687,48 @@ function MyProgramScreen({ clubId, setScreen }) {
     };
   }, [clubId]);
 
-  // Paket yükleme — öğrenci + koç seçilince
+  // Paket yükleme — öğrenci seçilince (hoca filtresiz, tüm aktif paketler)
   React.useEffect(() => {
-    const playerId  = lsSelectedPlayer?.id;
-    const coachClubId = lsForm.coach_id;
-    if (!playerId || !coachClubId || lsForm.use_manual_coach) {
+    const playerId = lsSelectedPlayer?.id;
+    if (!playerId || lsForm.use_manual_coach) {
       setLsPackages([]); setLsUsePkg(false); setLsSelectedPkgId(null); return;
     }
     (async () => {
       setLsLoadingPkgs(true);
       try {
-        const coachRec = coachesList.find(c => c.id === coachClubId);
-        const individualCoachId = coachRec?.individual_coach_id;
-        if (!individualCoachId) { setLsPackages([]); return; }
         const now = new Date().toISOString();
         const { data } = await sb.from('player_lesson_packages')
           .select('*, lesson_packages(name, total_lessons, price, validity_days, coach_percentage)')
-          .eq('player_id', playerId).eq('coach_id', individualCoachId)
+          .eq('player_id', playerId)
           .eq('payment_status', 'paid').eq('status', 'active')
           .or(`expiry_date.is.null,expiry_date.gt.${now}`)
           .order('created_at', { ascending: false });
         const pkgs = (data || []).map(r => ({
-          ...r, package_name: r.lesson_packages?.name ?? '',
+          ...r, package_name: r.lesson_packages?.name || r.custom_name || 'Özel Paket',
           remaining: (r.total_lessons || 0) - (r.used_lessons || 0),
         }));
         setLsPackages(pkgs);
-        if (pkgs.length > 0) { setLsSelectedPkgId(pkgs[0].id); setLsUsePkg(true); setLsForm(prev => ({ ...prev, amount: '0', payment_status: 'paid' })); }
-        else { setLsUsePkg(false); setLsSelectedPkgId(null); }
+        if (pkgs.length > 0) {
+          setLsSelectedPkgId(pkgs[0].id);
+          setLsUsePkg(true);
+          // İlk paketin hocasını otomatik seç (form'da hoca yoksa)
+          if (!lsForm.coach_id && pkgs[0].coach_id) {
+            const autoCoach = coachesList.find(c => c.individual_coach_id === pkgs[0].coach_id);
+            if (autoCoach) {
+              setLsForm(prev => ({ ...prev, coach_id: autoCoach.id, amount: '0', payment_status: 'paid' }));
+            } else {
+              setLsForm(prev => ({ ...prev, amount: '0', payment_status: 'paid' }));
+            }
+          } else {
+            setLsForm(prev => ({ ...prev, amount: '0', payment_status: 'paid' }));
+          }
+        } else {
+          setLsUsePkg(false); setLsSelectedPkgId(null);
+        }
       } catch (e) { console.error('ls package load:', e); }
       finally { setLsLoadingPkgs(false); }
     })();
-  }, [lsSelectedPlayer, lsForm.coach_id, lsForm.use_manual_coach]);
+  }, [lsSelectedPlayer, lsForm.use_manual_coach]);
 
   // Grup seçilince üye + hoca listesini yükle
   React.useEffect(() => {
@@ -963,7 +977,8 @@ function MyProgramScreen({ clubId, setScreen }) {
         label: `${m.student_name || 'Öğrenci'} · ${coachName}`, sh, sm, eh, em, color: '#8B5CF6',
         paymentStatus: m.payment_status, amount: m.amount, coachName,
         studentName: m.student_name, source: 'manual', rawId: m.id,
-        lessonDate: m.date, coachId: m.coach_id, priceMode: m.price_mode || 'normal' });
+        lessonDate: m.date, coachId: m.coach_id, priceMode: m.price_mode || 'normal',
+        coachAmount: m.coach_amount ?? null, clubAmount: m.club_amount ?? null });
     });
 
     // Kapatmalar — aynı grup + saat + kort için hoca listesini tek event'ta birleştir
@@ -1439,17 +1454,38 @@ function MyProgramScreen({ clubId, setScreen }) {
   const handleLsDetailPaid = async () => {
     if (!lsDetail) return;
     const isSplitLesson = lsDetail.priceMode === 'split';
-    const court     = courts.find(c => c.id === lsDetail.courtId);
-    const durationH = Math.max(0, ((lsDetail.eh * 60 + lsDetail.em) - (lsDetail.sh * 60 + lsDetail.sm)) / 60);
-    const courtFee  = isSplitLesson ? 0 : Math.round((court?.hourly_rate || 0) * durationH * 100) / 100;
-    const coachAmt  = Math.round((Number(lsDetail.amount) || 0) * 100) / 100;
-    const total     = Math.round((courtFee + coachAmt) * 100) / 100;
-    const lines = [
-      `Hoca Hakedişi: ₺${coachAmt.toLocaleString('tr-TR')}`,
-      `Kort Ücreti:   ₺${courtFee.toLocaleString('tr-TR')}`,
-      `─────────────────────`,
-      `Toplam:        ₺${total.toLocaleString('tr-TR')}`,
-    ].join('\n');
+    // Yeni "Özel Fiyat" modu: coachAmount alanı dolu → iki alanlı yeni stil
+    const isNewNormal = !isSplitLesson && lsDetail.coachAmount != null;
+
+    let coachAmt, clubAmt, courtFee, total, lines;
+
+    if (isNewNormal) {
+      coachAmt  = Math.round((Number(lsDetail.coachAmount) || 0) * 100) / 100;
+      clubAmt   = Math.round((Number(lsDetail.clubAmount)  || 0) * 100) / 100;
+      courtFee  = 0;
+      total     = Math.round((coachAmt + clubAmt) * 100) / 100;
+      lines = [
+        `Hoca Hakedişi: ₺${coachAmt.toLocaleString('tr-TR')}`,
+        `Kulüp Payı:    ₺${clubAmt.toLocaleString('tr-TR')}`,
+        `─────────────────────`,
+        `Toplam:        ₺${total.toLocaleString('tr-TR')}`,
+      ].join('\n');
+    } else {
+      // Eski normal mod veya split mod
+      const court  = courts.find(c => c.id === lsDetail.courtId);
+      const durationH = Math.max(0, ((lsDetail.eh * 60 + lsDetail.em) - (lsDetail.sh * 60 + lsDetail.sm)) / 60);
+      courtFee  = isSplitLesson ? 0 : Math.round((court?.hourly_rate || 0) * durationH * 100) / 100;
+      coachAmt  = Math.round((Number(lsDetail.amount) || 0) * 100) / 100;
+      clubAmt   = 0;
+      total     = Math.round((courtFee + coachAmt) * 100) / 100;
+      lines = [
+        `Hoca Hakedişi: ₺${coachAmt.toLocaleString('tr-TR')}`,
+        `Kort Ücreti:   ₺${courtFee.toLocaleString('tr-TR')}`,
+        `─────────────────────`,
+        `Toplam:        ₺${total.toLocaleString('tr-TR')}`,
+      ].join('\n');
+    }
+
     if (!confirm(`Ödeme Al\n\n${lines}\n\nÖdeme alındı olarak işaretlensin mi?`)) return;
     setLsDetailSaving(true);
     try {
@@ -1460,27 +1496,55 @@ function MyProgramScreen({ clubId, setScreen }) {
         const { error } = await sb.from('club_manual_lessons').update({ payment_status: 'paid' }).eq('id', lsDetail.rawId);
         if (error) throw error;
       }
-      if (courtFee > 0) {
-        await sb.from('club_finances').insert({
-          club_id:     clubId, type: 'income', category: 'Rezervasyon Geliri',
-          amount:      courtFee,
-          description: `${lsDetail.coachName} - ${lsDetail.studentName || 'Öğrenci'} - Özel ders kort ücreti`,
-          date:        lsDetail.lessonDate,
-        });
-      }
-      if (coachAmt > 0) {
-        await sb.from('coach_earnings').insert({
-          club_id:        clubId,
-          coach_id:       lsDetail.coachId || null,
-          lesson_id:      lsDetail.source === 'lesson' ? lsDetail.rawId : null,
-          coach_name:     lsDetail.coachName,
-          student_name:   lsDetail.studentName || null,
-          amount:         coachAmt,
-          court_fee:      courtFee,
-          date:           lsDetail.lessonDate,
-          description:    `Özel ders - ${lsDetail.studentName || 'Öğrenci'} - ${String(lsDetail.sh).padStart(2,'0')}:${String(lsDetail.sm).padStart(2,'0')}`,
-          payment_status: 'unpaid',
-        });
+
+      if (isNewNormal) {
+        // Yeni stil: kulüp payı club_finances'a, hoca hakedişi coach_earnings'e
+        if (clubAmt > 0) {
+          await sb.from('club_finances').insert({
+            club_id:     clubId, type: 'income', category: 'Özel Ders Geliri',
+            amount:      clubAmt,
+            description: `${lsDetail.coachName} - ${lsDetail.studentName || 'Öğrenci'} - Özel Ders`,
+            date:        lsDetail.lessonDate,
+          });
+        }
+        if (coachAmt > 0) {
+          await sb.from('coach_earnings').insert({
+            club_id:        clubId,
+            coach_id:       lsDetail.coachId || null,
+            manual_lesson_id: lsDetail.rawId,
+            coach_name:     lsDetail.coachName,
+            student_name:   lsDetail.studentName || null,
+            amount:         coachAmt,
+            court_fee:      0,
+            date:           lsDetail.lessonDate,
+            description:    `Özel ders - ${lsDetail.studentName || 'Öğrenci'} - ${String(lsDetail.sh).padStart(2,'0')}:${String(lsDetail.sm).padStart(2,'0')}`,
+            payment_status: 'unpaid',
+          });
+        }
+      } else {
+        // Eski stil: kort ücreti ayrı, hoca tüm ders tutarını alır
+        if (courtFee > 0) {
+          await sb.from('club_finances').insert({
+            club_id:     clubId, type: 'income', category: 'Rezervasyon Geliri',
+            amount:      courtFee,
+            description: `${lsDetail.coachName} - ${lsDetail.studentName || 'Öğrenci'} - Özel ders kort ücreti`,
+            date:        lsDetail.lessonDate,
+          });
+        }
+        if (coachAmt > 0) {
+          await sb.from('coach_earnings').insert({
+            club_id:        clubId,
+            coach_id:       lsDetail.coachId || null,
+            lesson_id:      lsDetail.source === 'lesson' ? lsDetail.rawId : null,
+            coach_name:     lsDetail.coachName,
+            student_name:   lsDetail.studentName || null,
+            amount:         coachAmt,
+            court_fee:      courtFee,
+            date:           lsDetail.lessonDate,
+            description:    `Özel ders - ${lsDetail.studentName || 'Öğrenci'} - ${String(lsDetail.sh).padStart(2,'0')}:${String(lsDetail.sm).padStart(2,'0')}`,
+            payment_status: 'unpaid',
+          });
+        }
       }
       setLsDetail(null);
       load();
@@ -1797,7 +1861,11 @@ function MyProgramScreen({ clubId, setScreen }) {
       const coachId   = !lsForm.use_manual_coach ? (lsForm.coach_id || null) : null;
       const coachName = lsForm.use_manual_coach ? (lsForm.manual_coach_name || null) : null;
       const usingPkg  = !!(lsUsePkg && lsSelectedPkgId);
-      const amountVal = usingPkg ? 0 : (lsForm.amount ? parseFloat(String(lsForm.amount).replace(',', '.')) : null);
+      const normalCoachAmt = lsPriceMode === 'normal' ? (parseFloat(String(lsCoachAmount).replace(',','.')) || 0) : null;
+      const normalClubAmt  = lsPriceMode === 'normal' ? (parseFloat(String(lsClubAmount).replace(',','.'))  || 0) : null;
+      const amountVal = usingPkg ? 0
+        : lsPriceMode === 'normal' ? ((normalCoachAmt || 0) + (normalClubAmt || 0))
+        : (lsForm.amount ? parseFloat(String(lsForm.amount).replace(',', '.')) : null);
       const payStatus = usingPkg ? 'paid' : lsPriceMode === 'split' ? 'paid' : (lsForm.payment_status || 'unpaid');
 
       const payload = {
@@ -1814,6 +1882,8 @@ function MyProgramScreen({ clubId, setScreen }) {
         payment_status: payStatus,
         amount:         amountVal,
         price_mode:     lsPriceMode,
+        coach_amount:   lsPriceMode === 'normal' ? (normalCoachAmt || 0) : null,
+        club_amount:    lsPriceMode === 'normal' ? (normalClubAmt  || 0) : null,
       };
 
       const { data: inserted, error: insErr } = await sb.from('club_manual_lessons')
@@ -1854,8 +1924,8 @@ function MyProgramScreen({ clubId, setScreen }) {
               }).eq('id', lsSelectedPkgId);
               if (updErr) throw updErr;
               const pkgDef = pkg.lesson_packages || {};
-              const perSessionTotal = (pkgDef.price || 0) / (pkgDef.total_lessons || 1);
-              const coachPct     = pkgDef.coach_percentage ?? 70;
+              const perSessionTotal = (pkgDef.price ?? pkg.custom_price ?? 0) / (pkgDef.total_lessons || pkg.total_lessons || 1);
+              const coachPct     = pkgDef.coach_percentage ?? pkg.custom_coach_pct ?? 70;
               const coachEarning = perSessionTotal * (coachPct / 100);
               const clubEarning  = perSessionTotal - coachEarning;
               const coachRec = coachesList.find(c => c.id === coachId);
@@ -1881,6 +1951,43 @@ function MyProgramScreen({ clubId, setScreen }) {
           } catch (pkgErr) {
             alert(`Ders kaydedildi ancak paketten düşülemedi: ${pkgErr.message}`);
           }
+        }
+
+        // Özel fiyat modeli: paid seçildiyse anında finansal kayıt oluştur
+        if (!usingPkg && lsPriceMode === 'normal' && payStatus === 'paid' && inserted?.id) {
+          const cAmt = normalCoachAmt || 0;
+          const kAmt = normalClubAmt  || 0;
+          try {
+            const normalPromises = [];
+            if (cAmt > 0) {
+              normalPromises.push(sb.from('coach_earnings').insert({
+                club_id:            clubId,
+                coach_id:           coachId,
+                individual_coach_id: (coachId ? (coachesList.find(c => c.id === coachId)?.individual_coach_id || null) : null),
+                manual_lesson_id:   inserted.id,
+                coach_name:         lsForm.use_manual_coach ? (lsForm.manual_coach_name || null) : (coachesList.find(c => c.id === coachId)?.full_name || null),
+                student_name:       lsForm.student_name || null,
+                amount:             cAmt,
+                court_fee:          0,
+                date:               lsForm.date,
+                description:        `Özel ders - ${lsForm.student_name || 'Öğrenci'} - ${lsForm.start_time}`,
+                payment_status:     'unpaid',
+                collected_by_coach: false,
+                court_fee_settled:  false,
+              }));
+            }
+            if (kAmt > 0) {
+              normalPromises.push(sb.from('club_finances').insert({
+                club_id:     clubId,
+                type:        'income',
+                category:    'Özel Ders Geliri',
+                amount:      kAmt,
+                description: `${coachId ? (coachesList.find(c => c.id === coachId)?.full_name || 'Hoca') : (lsForm.manual_coach_name || 'Hoca')} - ${lsForm.student_name || 'Öğrenci'} - Özel Ders`,
+                date:        lsForm.date,
+              }));
+            }
+            await Promise.all(normalPromises);
+          } catch (normalErr) { console.warn('Finansal kayıt oluşturulamadı:', normalErr.message); }
         }
 
         // Pay modeli: komisyon kaydını ders eklendiği anda oluştur
@@ -1931,6 +2038,7 @@ function MyProgramScreen({ clubId, setScreen }) {
       setLsSelectedCustomer(null); setLsCustomerSearch(''); setLsCustomerResults([]);
       setLsPersonMode('member');
       setLsUsePkg(false); setLsSelectedPkgId(null); setLsPackages([]);
+      setLsCoachAmount(''); setLsClubAmount('');
       load();
     } catch (e) {
       if (e.message?.includes('no_overlapping_bookings') || e.code === '23P01') {
@@ -2036,13 +2144,20 @@ function MyProgramScreen({ clubId, setScreen }) {
     if (q.length < 2) { setBookingMemberResults([]); setBookingCustomerResults([]); return; }
     setBookingMemberLoading(true);
     try {
-      const [{ data: players }, { data: customers }] = await Promise.all([
-        sb.from('profiles').select('id, full_name, email').eq('user_type', 'player').ilike('full_name', `%${q}%`).limit(6),
-        sb.from('club_customers').select('id, full_name, phone, email, user_id').eq('club_id', clubId).eq('is_active', true)
-          .or(`full_name.ilike.%${q}%,phone.ilike.%${q}%,email.ilike.%${q}%`).limit(6),
-      ]);
-      setBookingMemberResults(players || []);
-      setBookingCustomerResults(customers || []);
+      if (hasMembership) {
+        const [{ data: players }, { data: customers }] = await Promise.all([
+          sb.from('profiles').select('id, full_name, email').eq('user_type', 'player').ilike('full_name', `%${q}%`).limit(6),
+          sb.from('club_customers').select('id, full_name, phone, email, user_id').eq('club_id', clubId).eq('is_active', true)
+            .or(`full_name.ilike.%${q}%,phone.ilike.%${q}%,email.ilike.%${q}%`).limit(6),
+        ]);
+        setBookingMemberResults(players || []);
+        setBookingCustomerResults(customers || []);
+      } else {
+        const { data: customers } = await sb.from('club_customers').select('id, full_name, phone, email, user_id').eq('club_id', clubId).eq('is_active', true)
+          .or(`full_name.ilike.%${q}%,phone.ilike.%${q}%,email.ilike.%${q}%`).limit(6);
+        setBookingMemberResults([]);
+        setBookingCustomerResults(customers || []);
+      }
     } catch(e) { console.error(e); }
     finally { setBookingMemberLoading(false); }
   };
@@ -2568,8 +2683,20 @@ function MyProgramScreen({ clubId, setScreen }) {
                 return <span style={{ fontSize:12, fontWeight:700, borderRadius:20, padding:'4px 10px', background:cfg.bg, color:cfg.color }}>{cfg.label}</span>;
               })()}
               {!lsDetail.isPackageLesson && (() => {
-                const ca = Math.round((Number(lsDetail.amount) || 0) * 100) / 100;
                 const isSplit = lsDetail.priceMode === 'split';
+                const isNewNormal = !isSplit && lsDetail.coachAmount != null;
+                if (isNewNormal) {
+                  const cAmt = Math.round((Number(lsDetail.coachAmount) || 0) * 100) / 100;
+                  const kAmt = Math.round((Number(lsDetail.clubAmount)  || 0) * 100) / 100;
+                  const total = cAmt + kAmt;
+                  if (total <= 0) return null;
+                  return (
+                    <span style={{ fontSize:12, fontWeight:700, borderRadius:20, padding:'4px 10px', background:'#F0FDF4', color:'#16A34A' }}>
+                      ₺{total.toLocaleString('tr-TR')} (Hoca ₺{cAmt.toLocaleString('tr-TR')} + Kulüp ₺{kAmt.toLocaleString('tr-TR')})
+                    </span>
+                  );
+                }
+                const ca = Math.round((Number(lsDetail.amount) || 0) * 100) / 100;
                 let total;
                 if (isSplit) {
                   total = ca;
@@ -2601,12 +2728,15 @@ function MyProgramScreen({ clubId, setScreen }) {
                   style={{ flex:1, display:'flex', alignItems:'center', justifyContent:'center', gap:6, padding:'13px', borderRadius:14, border:'none', cursor:lsDetailSaving?'not-allowed':'pointer', background:'#22C55E', color:'#fff', fontSize:14, fontWeight:700 }}>
                   <span className="material-icons" style={{fontSize:18}}>payments</span>
                   {(() => {
-                    const ca = Math.round((Number(lsDetail.amount) || 0) * 100) / 100;
                     const isSplit = lsDetail.priceMode === 'split';
+                    const isNewNormal = !isSplit && lsDetail.coachAmount != null;
                     let total;
-                    if (isSplit) {
-                      total = ca;
+                    if (isNewNormal) {
+                      total = Math.round(((Number(lsDetail.coachAmount) || 0) + (Number(lsDetail.clubAmount) || 0)) * 100) / 100;
+                    } else if (isSplit) {
+                      total = Math.round((Number(lsDetail.amount) || 0) * 100) / 100;
                     } else {
+                      const ca = Math.round((Number(lsDetail.amount) || 0) * 100) / 100;
                       const court = courts.find(c => c.id === lsDetail.courtId);
                       const dh = Math.max(0, ((lsDetail.eh * 60 + lsDetail.em) - (lsDetail.sh * 60 + lsDetail.sm)) / 60);
                       const cf = Math.round((court?.hourly_rate || 0) * dh * 100) / 100;
@@ -2908,7 +3038,13 @@ function MyProgramScreen({ clubId, setScreen }) {
                             const isSelected = lsSelectedPkgId === pkg.id;
                             const expiry = pkg.expiry_date ? new Date(pkg.expiry_date).toLocaleDateString('tr-TR') : null;
                             return (
-                              <div key={pkg.id} onClick={() => setLsSelectedPkgId(pkg.id)}
+                              <div key={pkg.id} onClick={() => {
+                                setLsSelectedPkgId(pkg.id);
+                                if (pkg.coach_id) {
+                                  const cr = coachesList.find(c => c.individual_coach_id === pkg.coach_id);
+                                  if (cr) setLsForm(prev => ({ ...prev, coach_id: cr.id }));
+                                }
+                              }}
                                 style={{ display:'flex', alignItems:'center', justifyContent:'space-between', padding:'10px 12px', borderRadius:10, border: isSelected ? '1.5px solid var(--brand-navy)' : '1.5px solid var(--border)', background: isSelected ? '#EEF2FF' : 'var(--bg)', cursor:'pointer' }}>
                                 <div>
                                   <div style={{ fontSize:13, fontWeight:700, color: isSelected ? 'var(--brand-navy)' : 'var(--text-1)' }}>{pkg.package_name || 'Ders Paketi'}</div>
@@ -2932,17 +3068,55 @@ function MyProgramScreen({ clubId, setScreen }) {
                 placeholder="Ders hakkında not..." value={lsForm.notes || ''}
                 onChange={e => setLsForm({...lsForm, notes:e.target.value})} />
 
-              {/* DERS ÜCRETİ */}
-              <div style={{ fontSize:12, fontWeight:700, color:'var(--text-2)', marginBottom:8, letterSpacing:0.4 }}>DERS ÜCRETİ (opsiyonel)</div>
-              <div style={{ display:'flex', alignItems:'center', border:`1.5px solid ${lsUsePkg ? '#86EFAC' : 'var(--border)'}`, borderRadius:12, background: lsUsePkg ? '#F0FDF4' : 'var(--bg)', paddingLeft:12, marginBottom:16, opacity: lsUsePkg ? 0.7 : 1 }}>
-                <span style={{ fontSize:16, fontWeight:700, color:'var(--text-2)', marginRight:4 }}>₺</span>
-                <input type="number" min="0" step="0.01" style={{ flex:1, border:'none', background:'transparent', padding:'11px 12px 11px 0', fontSize:15, color:'var(--text-1)', outline:'none' }}
-                  placeholder="0,00" value={lsForm.amount || ''} disabled={lsUsePkg}
-                  onChange={e => setLsForm({...lsForm, amount:e.target.value})} />
-                {lsUsePkg && <span className="material-icons" style={{ fontSize:16, color:'#059669', marginRight:10 }}>inventory_2</span>}
-              </div>
+              {/* DERS ÜCRETİ + ÖDEME MODELİ + ÖDEME DURUMU — paket aktifse gizlenir */}
+              {!lsUsePkg && lsPriceMode === 'normal' ? (
+                <div style={{ marginBottom:16, opacity: lsUsePkg ? 0.7 : 1, pointerEvents: lsUsePkg ? 'none' : 'auto' }}>
+                  <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:10, marginBottom:8 }}>
+                    <div>
+                      <div style={{ fontSize:12, fontWeight:700, color:'var(--text-2)', marginBottom:6, letterSpacing:0.4 }}>HOCA HAKEDİŞİ (₺)</div>
+                      <div style={{ display:'flex', alignItems:'center', border:'1.5px solid var(--border)', borderRadius:12, background:'var(--bg)', paddingLeft:10 }}>
+                        <span style={{ fontSize:14, fontWeight:700, color:'var(--text-2)', marginRight:3 }}>₺</span>
+                        <input type="number" min="0" step="0.01"
+                          style={{ flex:1, border:'none', background:'transparent', padding:'11px 8px 11px 0', fontSize:14, color:'var(--text-1)', outline:'none' }}
+                          placeholder="0,00" value={lsCoachAmount}
+                          onChange={e => setLsCoachAmount(e.target.value)} />
+                      </div>
+                    </div>
+                    <div>
+                      <div style={{ fontSize:12, fontWeight:700, color:'var(--text-2)', marginBottom:6, letterSpacing:0.4 }}>KULÜP PAYI (₺)</div>
+                      <div style={{ display:'flex', alignItems:'center', border:'1.5px solid var(--border)', borderRadius:12, background:'var(--bg)', paddingLeft:10 }}>
+                        <span style={{ fontSize:14, fontWeight:700, color:'var(--text-2)', marginRight:3 }}>₺</span>
+                        <input type="number" min="0" step="0.01"
+                          style={{ flex:1, border:'none', background:'transparent', padding:'11px 8px 11px 0', fontSize:14, color:'var(--text-1)', outline:'none' }}
+                          placeholder="0,00" value={lsClubAmount}
+                          onChange={e => setLsClubAmount(e.target.value)} />
+                      </div>
+                    </div>
+                  </div>
+                  {(() => {
+                    const total = (parseFloat(lsCoachAmount) || 0) + (parseFloat(lsClubAmount) || 0);
+                    if (total <= 0) return null;
+                    return (
+                      <div style={{ fontSize:12, fontWeight:600, color:'var(--text-2)', textAlign:'right' }}>
+                        Toplam: <span style={{ color:'var(--text-1)', fontWeight:800 }}>₺{total.toLocaleString('tr-TR', { minimumFractionDigits:2 })}</span>
+                      </div>
+                    );
+                  })()}
+                </div>
+              ) : !lsUsePkg ? (
+                <div>
+                  <div style={{ fontSize:12, fontWeight:700, color:'var(--text-2)', marginBottom:8, letterSpacing:0.4 }}>DERS ÜCRETİ (opsiyonel)</div>
+                  <div style={{ display:'flex', alignItems:'center', border:'1.5px solid var(--border)', borderRadius:12, background:'var(--bg)', paddingLeft:12, marginBottom:16 }}>
+                    <span style={{ fontSize:16, fontWeight:700, color:'var(--text-2)', marginRight:4 }}>₺</span>
+                    <input type="number" min="0" step="0.01" style={{ flex:1, border:'none', background:'transparent', padding:'11px 12px 11px 0', fontSize:15, color:'var(--text-1)', outline:'none' }}
+                      placeholder="0,00" value={lsForm.amount || ''}
+                      onChange={e => setLsForm({...lsForm, amount:e.target.value})} />
+                  </div>
+                </div>
+              ) : null}
 
-              {/* ÖDEME MODELİ */}
+              {/* ÖDEME MODELİ — paket aktifse gizlenir */}
+              {!lsUsePkg && <>
               <div style={{ fontSize:12, fontWeight:700, color:'var(--text-2)', marginBottom:8, letterSpacing:0.4 }}>ÖDEME MODELİ</div>
               <div style={{ display:'flex', gap:8, marginBottom:12 }}>
                 <button
@@ -2985,11 +3159,12 @@ function MyProgramScreen({ clubId, setScreen }) {
                   </div>
                 );
               })()}
+              </>}
 
-              {/* ÖDEME DURUMU */}
-              {lsPriceMode !== 'split' && <>
+              {/* ÖDEME DURUMU — paket aktifse gizlenir */}
+              {!lsUsePkg && lsPriceMode !== 'split' && <>
               <div style={{ fontSize:12, fontWeight:700, color:'var(--text-2)', marginBottom:8, letterSpacing:0.4 }}>ÖDEME DURUMU</div>
-              <div style={{ display:'flex', gap:10, marginBottom:20, opacity: lsUsePkg ? 0.6 : 1, pointerEvents: lsUsePkg ? 'none' : 'auto' }}>
+              <div style={{ display:'flex', gap:10, marginBottom:20 }}>
                 <button style={{ flex:1, display:'flex', alignItems:'center', justifyContent:'center', gap:6, padding:'11px', borderRadius:12, border: (lsForm.payment_status||'unpaid') === 'unpaid' ? '1.5px solid #F59E0B' : '1.5px solid var(--border)', background: (lsForm.payment_status||'unpaid') === 'unpaid' ? '#FEF3C7' : 'var(--bg)', cursor:'pointer' }}
                   onClick={() => setLsForm({...lsForm, payment_status:'unpaid'})}>
                   <span className="material-icons" style={{fontSize:16, color:(lsForm.payment_status||'unpaid')==='unpaid'?'#F59E0B':'var(--text-2)'}}>schedule</span>
@@ -3233,7 +3408,7 @@ function MyProgramScreen({ clubId, setScreen }) {
                 <div style={{ fontSize:12, fontWeight:700, color:'var(--text-2)', marginBottom:8, letterSpacing:0.4 }}>KİŞİ (OPSİYONEL)</div>
                 {/* Misafir modu toggle */}
                 <div style={{ display:'flex', gap:8, marginBottom:10 }}>
-                  {[{key:'search',label:'Üye / Müşteri'},{key:'guest',label:'Misafir'}].map(t => (
+                  {[{key:'search',label: hasMembership ? 'Üye / Müşteri' : 'Müşteri'},{key:'guest',label:'Misafir'}].map(t => (
                     <button key={t.key} type="button"
                       style={{ flex:1, padding:'7px 0', borderRadius:9, cursor:'pointer', fontSize:12, fontWeight:600,
                         border: bookingPersonMode === t.key || (t.key === 'search' && bookingPersonMode !== 'guest') ? '1.5px solid var(--brand-navy)' : '1.5px solid var(--border)',
@@ -3265,8 +3440,8 @@ function MyProgramScreen({ clubId, setScreen }) {
                   <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', border:'1.5px solid var(--brand-navy)', borderRadius:12, padding:'10px 12px', background:'#EEF2FF' }}>
                     <div style={{ display:'flex', alignItems:'center', gap:6 }}>
                       <span style={{ fontSize:14, fontWeight:700, color:'var(--brand-navy)' }}>{bookingMemberName || bookingCustomerName}</span>
-                      <span style={{ fontSize:10, fontWeight:700, color:'#fff', background: bookingCustomerId && !bookingMemberId ? '#0891B2' : 'var(--brand-navy)', borderRadius:5, padding:'2px 6px' }}>
-                        {bookingCustomerId && !bookingMemberId ? 'Müşteri' : 'Oyuncu'}
+                      <span style={{ fontSize:10, fontWeight:700, color:'#fff', background: (bookingCustomerId && !bookingMemberId) || !hasMembership ? '#0891B2' : 'var(--brand-navy)', borderRadius:5, padding:'2px 6px' }}>
+                        {(bookingCustomerId && !bookingMemberId) || !hasMembership ? 'Müşteri' : 'Oyuncu'}
                       </span>
                     </div>
                     <button type="button"
@@ -3283,7 +3458,7 @@ function MyProgramScreen({ clubId, setScreen }) {
                       style={{ width:'100%', border:'1.5px solid var(--border)', borderRadius:12, padding:'10px 12px', fontSize:14, boxSizing:'border-box', color:'var(--text-1)', background:'var(--bg)' }} />
                     {(bookingMemberResults.length > 0 || bookingCustomerResults.length > 0) && (
                       <div style={{ position:'absolute', top:'100%', left:0, right:0, zIndex:10, background:'var(--surface)', border:'1.5px solid var(--border)', borderRadius:12, boxShadow:'0 4px 16px rgba(0,0,0,0.12)', overflow:'hidden', marginTop:4 }}>
-                        {bookingMemberResults.map(m => (
+                        {hasMembership && bookingMemberResults.map(m => (
                           <div key={'p-'+m.id}
                             style={{ padding:'10px 14px', cursor:'pointer', borderBottom:'1px solid var(--border)', display:'flex', alignItems:'center', justifyContent:'space-between' }}
                             onMouseDown={() => { setBookingMemberId(m.id); setBookingMemberName(m.full_name); setBookingPersonMode('member'); setBookingMemberQuery(''); setBookingMemberResults([]); setBookingCustomerResults([]); }}>

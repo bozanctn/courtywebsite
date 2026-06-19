@@ -34,9 +34,10 @@ function Sidebar({ screen, setScreen, clubProfile, employeeProfile, userType, un
     ? (employeeProfile?.full_name || 'Çalışan')
     : (clubProfile?.club_name || 'Kulübüm');
   const abbr = initials(name);
-  const NAV_ITEMS = isEmployee
-    ? ALL_NAV_ITEMS.filter(i => i.employeeOk)
-    : ALL_NAV_ITEMS;
+  const hasMembership = clubProfile?.has_membership_system !== false;
+  const NAV_ITEMS = ALL_NAV_ITEMS
+    .filter(i => !isEmployee || i.employeeOk)
+    .filter(i => hasMembership || i.key !== 'members');
 
   return (
     <aside className={`side${collapsed ? ' side-collapsed' : ''}`}>
@@ -153,7 +154,9 @@ function ScreenRouter({ screen, setScreen, clubId, clubProfile, userType }) {
     case 'dashboard':       return <DashboardScreen            {...ctx} />;
     case 'reservations':    return <ReservationsScreen         {...ctx} />;
     case 'courts':          return <CourtsScreen               {...ctx} />;
-    case 'members':         return <MembersScreen              {...ctx} />;
+    case 'members':         return clubProfile?.has_membership_system === false
+                                    ? <CustomersScreen {...ctx} />
+                                    : <MembersScreen   {...ctx} />;
     case 'coaches':         return <CoachesScreen              {...ctx} />;
     case 'employees':       return <EmployeesScreen            {...ctx} />;
     case 'customers':       return <CustomersScreen            {...ctx} />;

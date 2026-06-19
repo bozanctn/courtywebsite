@@ -1159,6 +1159,28 @@ const LessonPackageSvc = {
   },
 
   async deletePackage(id) {
+    // Bağlı player_lesson_packages kayıtlarını bul
+    const { data: playerPkgs } = await sb
+      .from('player_lesson_packages')
+      .select('id')
+      .eq('package_id', id);
+    const playerPkgIds = (playerPkgs || []).map(p => p.id);
+
+    // lesson_package_sessions → player_lesson_packages → lesson_packages sırasıyla sil
+    if (playerPkgIds.length > 0) {
+      const { error: sessErr } = await sb
+        .from('lesson_package_sessions')
+        .delete()
+        .in('player_package_id', playerPkgIds);
+      if (sessErr) throw sessErr;
+
+      const { error: plpErr } = await sb
+        .from('player_lesson_packages')
+        .delete()
+        .in('id', playerPkgIds);
+      if (plpErr) throw plpErr;
+    }
+
     const { error } = await sb.from('lesson_packages').delete().eq('id', id);
     if (error) throw error;
   },
@@ -1284,6 +1306,52 @@ const LessonPackageSvc = {
       .update({ status: 'cancelled' })
       .eq('id', playerPackageId);
     if (error) throw error;
+  },
+
+  async enrollCustomerPackage({ clubId, customerUserId, customerName,
+                                 packageId, packageName, totalLessons,
+                                 customPrice, customCoachPct, validityDays,
+                                 coachId, paymentStatus, totalPaid, notes }) {
+    const isPaid = paymentStatus === 'paid';
+    let expiryDate = null;
+    if (isPaid && validityDays) {
+      const d = new Date();
+      d.setDate(d.getDate() + Number(validityDays));
+      expiryDate = d.toISOString();
+    }
+    const paid = isPaid ? (Number(totalPaid) || 0) : 0;
+    const displayName = customerName?.trim() || 'Müşteri';
+
+    const { data: plp, error } = await sb.from('player_lesson_packages').insert({
+      club_id:            clubId,
+      package_id:         packageId || null,
+      player_id:          customerUserId || null,
+      manual_player_name: customerUserId ? null : (customerName?.trim() || null),
+      coach_id:           coachId || null,
+      total_lessons:      Number(totalLessons),
+      used_lessons:       0,
+      payment_status:     isPaid ? 'paid' : 'pending',
+      status:             isPaid ? 'active' : 'pending',
+      total_paid:         paid,
+      expiry_date:        expiryDate,
+      custom_name:        packageId ? null : (packageName || null),
+      custom_price:       packageId ? null : (customPrice ? Number(customPrice) : null),
+      custom_coach_pct:   packageId ? null : (customCoachPct != null ? Number(customCoachPct) : 70),
+      notes:              notes || null,
+    }).select().single();
+    if (error) throw error;
+
+    if (isPaid && paid > 0) {
+      await sb.from('club_finances').insert({
+        club_id:     clubId,
+        type:        'income',
+        category:    'Ders Paketi Geliri',
+        amount:      paid,
+        description: `${packageName || 'Özel Paket'} - ${displayName}`,
+        date:        new Date().toISOString().split('T')[0],
+      });
+    }
+    return plp;
   },
 };
 

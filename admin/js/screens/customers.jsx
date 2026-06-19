@@ -10,6 +10,7 @@ function CustomerDetailModal({ customer, clubId, onClose, onReservation, onLinke
   const [bookings,   setBookings]   = useState([]);
   const [packages,   setPackages]   = useState([]);
   const [loading,    setLoading]    = useState(true);
+  const [addPkgOpen, setAddPkgOpen] = useState(false);
 
   // Eşleştir akışı
   const [linkStep,    setLinkStep]    = useState('idle'); // 'idle' | 'search' | 'confirm'
@@ -71,6 +72,7 @@ function CustomerDetailModal({ customer, clubId, onClose, onReservation, onLinke
   const pkgStatusColor = { active: '#22C55E', completed: '#6366F1', expired: '#F59E0B', cancelled: '#EF4444' };
 
   return (
+    <>
     <Modal
       title={customer.full_name}
       wide
@@ -193,13 +195,19 @@ function CustomerDetailModal({ customer, clubId, onClose, onReservation, onLinke
                 </span>
               </div>
             ))
-        ) : (
-          packages.length === 0
-            ? <EmptyState icon="inventory_2" title="Ders paketi yok" sub="Müşteri CourtyCLUB hesabına bağlı değilse paketler görüntülenemez." />
+        ) : (<>
+          <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: 10 }}>
+            <button className="btn btn-pri btn-sm" onClick={() => setAddPkgOpen(true)}>
+              <span className="material-icons" style={{ fontSize: 14 }}>add</span>
+              Ders Paketi Ekle
+            </button>
+          </div>
+          {packages.length === 0
+            ? <EmptyState icon="inventory_2" title="Ders paketi yok" sub="Yukarıdaki butona tıklayarak paket ekleyebilirsiniz." />
             : packages.map(p => (
               <div key={p.id} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '10px 0', borderBottom: '1px solid var(--border)' }}>
                 <div style={{ flex: 1 }}>
-                  <div style={{ fontWeight: 600, fontSize: 13 }}>{p.package?.name ?? 'Paket'}</div>
+                  <div style={{ fontWeight: 600, fontSize: 13 }}>{p.package?.name || p.custom_name || 'Özel Paket'}</div>
                   <div style={{ fontSize: 12, color: 'var(--text-2)', marginTop: 2 }}>
                     {p.used_lessons}/{p.total_lessons} ders
                     {p.total_paid > 0 && ` · ${fmtMoney(p.total_paid)}`}
@@ -212,9 +220,244 @@ function CustomerDetailModal({ customer, clubId, onClose, onReservation, onLinke
                 </span>
               </div>
             ))
-        )}
+          }
+        </>)}
       </div>
     </Modal>
+    {addPkgOpen && (
+      <AddPackageModal
+        customer={customer}
+        clubId={clubId}
+        onClose={() => setAddPkgOpen(false)}
+        onSaved={load}
+      />
+    )}
+    </>
+  );
+}
+
+// ── Ders Paketi Ekle Modalı ──────────────────────────────────
+function AddPackageModal({ customer, clubId, onClose, onSaved }) {
+  const { useState, useEffect } = React;
+  const [mode,        setMode]        = useState('predefined');
+  const [clubPkgs,    setClubPkgs]    = useState([]);
+  const [coaches,     setCoaches]     = useState([]);
+  const [loading,     setLoading]     = useState(true);
+  const [saving,      setSaving]      = useState(false);
+
+  const [selectedPkg, setSelectedPkg] = useState(null);
+
+  const [customName,     setCustomName]     = useState('');
+  const [customLessons,  setCustomLessons]  = useState('');
+  const [customPrice,    setCustomPrice]    = useState('');
+  const [customCoachPct, setCustomCoachPct] = useState('70');
+  const [customValidity, setCustomValidity] = useState('90');
+
+  const [coachId,        setCoachId]        = useState('');
+  const [paymentStatus,  setPaymentStatus]  = useState('paid');
+  const [totalPaid,      setTotalPaid]      = useState('');
+  const [notes,          setNotes]          = useState('');
+
+  useEffect(() => {
+    (async () => {
+      const [pkgs, coachs] = await Promise.all([
+        LessonPackageSvc.getClubPackages(clubId),
+        CoachSvc.getActiveClubCoaches(clubId),
+      ]);
+      setClubPkgs((pkgs || []).filter(p => p.is_active));
+      setCoaches(coachs || []);
+      setLoading(false);
+    })();
+  }, []);
+
+  const handlePkgSelect = (p) => {
+    setSelectedPkg(p);
+    setTotalPaid(String(p.price || ''));
+  };
+
+  const handleSave = async () => {
+    if (mode === 'predefined' && !selectedPkg) { alert('Lütfen bir paket seçin.'); return; }
+    if (mode === 'custom') {
+      if (!customName.trim())                { alert('Paket adı giriniz.'); return; }
+      if (!customLessons || +customLessons <= 0) { alert('Ders sayısı giriniz.'); return; }
+    }
+    if (paymentStatus === 'paid' && (!totalPaid || +totalPaid < 0)) {
+      alert('Ödenen tutarı giriniz.'); return;
+    }
+    setSaving(true);
+    try {
+      await LessonPackageSvc.enrollCustomerPackage({
+        clubId,
+        customerUserId: customer.user_id || null,
+        customerName:   customer.full_name,
+        packageId:      mode === 'predefined' ? selectedPkg.id : null,
+        packageName:    mode === 'predefined' ? selectedPkg.name : customName.trim(),
+        totalLessons:   mode === 'predefined' ? selectedPkg.total_lessons : +customLessons,
+        customPrice:    mode === 'custom' ? +customPrice : null,
+        customCoachPct: mode === 'custom' ? +customCoachPct : null,
+        validityDays:   mode === 'predefined' ? (selectedPkg.validity_days || 90) : +customValidity,
+        coachId:        coachId || null,
+        paymentStatus,
+        totalPaid:      +totalPaid,
+        notes:          notes.trim() || null,
+      });
+      onSaved();
+      onClose();
+    } catch (e) { alert(e.message); }
+    finally { setSaving(false); }
+  };
+
+  const inputStyle = { width: '100%', boxSizing: 'border-box' };
+  const labelStyle = { fontSize: 12, fontWeight: 700, color: 'var(--text-2)', display: 'block', marginBottom: 5, letterSpacing: 0.4 };
+  const tabBtn = (key, label) => (
+    <button key={key} type="button"
+      style={{ flex: 1, padding: '9px 0', borderRadius: 10, cursor: 'pointer', fontSize: 13, fontWeight: 600,
+        border:      mode === key ? '1.5px solid var(--brand-navy)' : '1.5px solid var(--border)',
+        background:  mode === key ? '#EEF2FF' : 'var(--bg)',
+        color:       mode === key ? 'var(--brand-navy)' : 'var(--text-2)' }}
+      onClick={() => setMode(key)}>
+      {label}
+    </button>
+  );
+  const payBtn = (key, label) => (
+    <button key={key} type="button"
+      style={{ flex: 1, padding: '9px 0', borderRadius: 10, cursor: 'pointer', fontSize: 13, fontWeight: 600,
+        border:      paymentStatus === key ? '1.5px solid var(--brand-navy)' : '1.5px solid var(--border)',
+        background:  paymentStatus === key ? '#EEF2FF' : 'var(--bg)',
+        color:       paymentStatus === key ? 'var(--brand-navy)' : 'var(--text-2)' }}
+      onClick={() => setPaymentStatus(key)}>
+      {label}
+    </button>
+  );
+
+  return (
+    <div style={{ position: 'fixed', inset: 0, zIndex: 1100, background: 'rgba(0,0,0,0.5)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}
+      onClick={e => e.target === e.currentTarget && onClose()}>
+      <div style={{ background: 'var(--surface)', borderRadius: 20, width: 'min(480px,95vw)', maxHeight: '85vh', display: 'flex', flexDirection: 'column', boxShadow: '0 8px 40px rgba(0,0,0,0.18)' }}>
+        {/* Header */}
+        <div style={{ padding: '16px 20px 12px', borderBottom: '1px solid var(--border)', display: 'flex', alignItems: 'center', gap: 10 }}>
+          <span className="material-icons" style={{ color: 'var(--brand-navy)', fontSize: 20 }}>inventory_2</span>
+          <span style={{ fontWeight: 800, fontSize: 17, flex: 1 }}>Ders Paketi Ekle</span>
+          <button onClick={onClose} style={{ background: 'none', border: 'none', cursor: 'pointer', padding: 4, display: 'grid', placeItems: 'center' }}>
+            <span className="material-icons" style={{ fontSize: 20, color: 'var(--text-2)' }}>close</span>
+          </button>
+        </div>
+
+        {/* Body */}
+        <div style={{ overflowY: 'auto', flex: 1, padding: '16px 20px', display: 'flex', flexDirection: 'column', gap: 16 }}>
+          {loading ? <Spinner /> : <>
+            {/* Mod seçimi */}
+            <div style={{ display: 'flex', gap: 8 }}>
+              {tabBtn('predefined', 'Tanımlı Paket')}
+              {tabBtn('custom', 'Özel Paket')}
+            </div>
+
+            {/* Tanımlı paket listesi */}
+            {mode === 'predefined' && (
+              <div>
+                <label style={labelStyle}>PAKET SEÇ</label>
+                {clubPkgs.length === 0
+                  ? <EmptyState icon="inventory_2" title="Aktif paket yok" sub="Ders paketleri ekranından önce paket oluşturun." />
+                  : clubPkgs.map(p => (
+                    <div key={p.id} onClick={() => handlePkgSelect(p)}
+                      style={{ padding: '12px 14px', borderRadius: 12, marginBottom: 8, cursor: 'pointer',
+                        border:      selectedPkg?.id === p.id ? '2px solid var(--brand-navy)' : '1.5px solid var(--border)',
+                        background:  selectedPkg?.id === p.id ? '#EEF2FF' : 'var(--bg)' }}>
+                      <div style={{ fontWeight: 700, fontSize: 14, color: 'var(--text-1)' }}>{p.name}</div>
+                      <div style={{ fontSize: 12, color: 'var(--text-2)', marginTop: 3 }}>
+                        {p.total_lessons} ders · {fmtMoney(p.price)}
+                        {p.validity_days ? ` · ${p.validity_days} gün geçerli` : ''}
+                      </div>
+                    </div>
+                  ))
+                }
+              </div>
+            )}
+
+            {/* Özel paket alanları */}
+            {mode === 'custom' && (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+                <div>
+                  <label style={labelStyle}>PAKET ADI</label>
+                  <input value={customName} onChange={e => setCustomName(e.target.value)}
+                    placeholder="Örn: 10 Seans Özel Paket" style={inputStyle} />
+                </div>
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
+                  <div>
+                    <label style={labelStyle}>TOPLAM DERS</label>
+                    <input type="number" min="1" value={customLessons}
+                      onChange={e => setCustomLessons(e.target.value)}
+                      placeholder="10" style={inputStyle} />
+                  </div>
+                  <div>
+                    <label style={labelStyle}>TOPLAM FİYAT (₺)</label>
+                    <input type="number" min="0" value={customPrice}
+                      onChange={e => { setCustomPrice(e.target.value); setTotalPaid(e.target.value); }}
+                      placeholder="2000" style={inputStyle} />
+                  </div>
+                  <div>
+                    <label style={labelStyle}>HOCA PAYI (%)</label>
+                    <input type="number" min="0" max="100" value={customCoachPct}
+                      onChange={e => setCustomCoachPct(e.target.value)}
+                      placeholder="70" style={inputStyle} />
+                  </div>
+                  <div>
+                    <label style={labelStyle}>GEÇERLİLİK (gün)</label>
+                    <input type="number" min="1" value={customValidity}
+                      onChange={e => setCustomValidity(e.target.value)}
+                      placeholder="90" style={inputStyle} />
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {/* Hoca seçimi */}
+            <div>
+              <label style={labelStyle}>HOCA (opsiyonel)</label>
+              <select value={coachId} onChange={e => setCoachId(e.target.value)} style={inputStyle}>
+                <option value="">Hoca seçin...</option>
+                {coaches.map(c => (
+                  <option key={c.id} value={c.individual_coach_id || ''}>{c.full_name}</option>
+                ))}
+              </select>
+            </div>
+
+            {/* Ödeme durumu */}
+            <div>
+              <label style={labelStyle}>ÖDEME DURUMU</label>
+              <div style={{ display: 'flex', gap: 8, marginBottom: paymentStatus === 'paid' ? 10 : 0 }}>
+                {payBtn('paid', 'Ödendi')}
+                {payBtn('pending', 'Bekliyor')}
+              </div>
+              {paymentStatus === 'paid' && (
+                <div>
+                  <label style={labelStyle}>ÖDENEN TUTAR (₺)</label>
+                  <input type="number" min="0" value={totalPaid}
+                    onChange={e => setTotalPaid(e.target.value)}
+                    placeholder="2000" style={inputStyle} />
+                </div>
+              )}
+            </div>
+
+            {/* Notlar */}
+            <div>
+              <label style={labelStyle}>NOTLAR (opsiyonel)</label>
+              <textarea value={notes} onChange={e => setNotes(e.target.value)}
+                placeholder="Not ekleyin..." rows={2}
+                style={{ ...inputStyle, resize: 'vertical' }} />
+            </div>
+          </>}
+        </div>
+
+        {/* Footer */}
+        <div style={{ padding: '12px 20px', borderTop: '1px solid var(--border)', display: 'flex', justifyContent: 'flex-end', gap: 10 }}>
+          <button className="btn btn-ghost btn-sm" onClick={onClose}>Vazgeç</button>
+          <button className="btn btn-pri btn-sm" onClick={handleSave} disabled={saving || loading}>
+            {saving ? 'Kaydediliyor…' : 'Paketi Ekle'}
+          </button>
+        </div>
+      </div>
+    </div>
   );
 }
 
@@ -483,7 +726,7 @@ function CustomersScreen({ clubId, setScreen }) {
                 </button>
                 <button className="btn btn-ghost btn-sm btn-icon" title="Profil / Geçmiş"
                   onClick={() => openDetail(c)}>
-                  <span className="material-icons" style={{ fontSize: 16 }}>open_in_new</span>
+                  <span className="material-icons" style={{ fontSize: 16 }}>account_circle</span>
                 </button>
                 <button className="btn btn-danger btn-sm btn-icon" title="Sil"
                   onClick={() => setConfirmDelete(c)}>

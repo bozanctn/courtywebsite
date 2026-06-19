@@ -51,6 +51,7 @@ function ClubProfileScreen({ clubId, clubProfile: initialProfile }) {
       opening_hours: oh, light_hours: lh, amenities: am,
       is_visible: profile.is_visible !== false,
       requires_booking_approval: profile.requires_booking_approval === true,
+      has_membership_system: profile.has_membership_system !== false,
       max_reservation_duration: profile.max_reservation_duration || 120,
       booking_open_hour: profile.booking_open_hour ?? 0,
     });
@@ -64,7 +65,6 @@ function ClubProfileScreen({ clubId, clubProfile: initialProfile }) {
         club_name:        form.club_name,
         description:      form.description      || null,
         address:          form.address          || null,
-        city:             form.city             || null,
         contact_phone:    form.contact_phone    || null,
         contact_email:    form.contact_email    || null,
         website:          form.website          || null,
@@ -78,6 +78,7 @@ function ClubProfileScreen({ clubId, clubProfile: initialProfile }) {
         amenities:        Array.isArray(form.amenities) ? form.amenities : [],
         is_visible:                form.is_visible !== false,
         requires_booking_approval: form.requires_booking_approval === true,
+        has_membership_system:     form.has_membership_system !== false,
         max_reservation_duration:            form.max_reservation_duration ? Number(form.max_reservation_duration) : 120,
         max_advance_booking_days:            form.max_advance_booking_days ? Number(form.max_advance_booking_days) : null,
         booking_open_hour:                   form.booking_open_hour != null ? Number(form.booking_open_hour) : 0,
@@ -294,6 +295,17 @@ function ClubProfileScreen({ clubId, clubProfile: initialProfile }) {
               <Field label="Işık Kapanış">
                 <input type="time" value={form.light_hours?.close || '22:00'} onChange={e => setForm({...form, light_hours: {...(form.light_hours || {}), close: e.target.value}})} />
               </Field>
+            </div>
+
+            <div style={{ fontWeight:700, fontSize:12, color:'var(--text-2)', textTransform:'uppercase', letterSpacing:'.5px', borderBottom:'1px solid var(--border)', paddingBottom:6 }}>Sistem Ayarları</div>
+
+            <div style={{ background: form.has_membership_system !== false ? '#F0FDF4' : '#FEF2F2', borderRadius:10, padding:'12px 14px', border: `1px solid ${form.has_membership_system !== false ? 'rgba(34,197,94,0.2)' : 'rgba(239,68,68,0.2)'}` }}>
+              <Switch on={form.has_membership_system !== false} onChange={v => setForm({...form, has_membership_system: v})} label="Üyelik Sistemi" />
+              <p style={{ fontSize:11, color:'var(--text-2)', margin:'6px 0 0 0' }}>
+                {form.has_membership_system !== false
+                  ? 'Üyeler sekmesi aktif, üyelik paketleri kullanılabilir.'
+                  : 'Üyeler sekmesi gizlenir, sistem tamamen müşteriler üzerinden çalışır.'}
+              </p>
             </div>
 
             <div style={{ fontWeight:700, fontSize:12, color:'var(--text-2)', textTransform:'uppercase', letterSpacing:'.5px', borderBottom:'1px solid var(--border)', paddingBottom:6 }}>Rezervasyon Ayarları</div>

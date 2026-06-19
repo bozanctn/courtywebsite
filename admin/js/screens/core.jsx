@@ -286,7 +286,7 @@ function lesson_court_row(lesson, courts) {
 // ═══════════════════════════════════════════════════════════════
 // REZERVASYONLAR
 // ═══════════════════════════════════════════════════════════════
-function ReservationsScreen({ clubId, setScreen }) {
+function ReservationsScreen({ clubId, setScreen, clubProfile }) {
   const { useState, useEffect } = React;
   const [mainTab,   setMainTab]   = useState('bookings'); // 'bookings' | 'lessons'
   const [selDate,   setSelDate]   = useState(todayISO());
@@ -317,6 +317,7 @@ function ReservationsScreen({ clubId, setScreen }) {
   const [bkCustomerName,    setBkCustomerName]    = useState('');
   const [bkCustomerQuery,   setBkCustomerQuery]   = useState('');
   const [bkCustomerResults, setBkCustomerResults] = useState([]);
+  const hasMembership = clubProfile?.has_membership_system !== false;
   const [bkPersonMode,      setBkPersonMode]      = useState('member'); // 'member' | 'customer' | 'guest'
   const [bkGuestName,       setBkGuestName]       = useState('');
   const [bkPriceOverride,   setBkPriceOverride]   = useState('');
@@ -557,7 +558,7 @@ function ReservationsScreen({ clubId, setScreen }) {
     setBkForm({ courtId: courts[0]?.id || '', date: selDate, startTime, endTime, duration: 1.0, status: 'confirmed' });
     setBkMemberId(null); setBkMemberName(''); setBkMemberQuery(''); setBkMemberResults([]);
     setBkCustomerId(null); setBkCustomerName(''); setBkCustomerQuery(''); setBkCustomerResults([]);
-    setBkPersonMode('member');
+    setBkPersonMode(hasMembership ? 'member' : 'customer');
     setBkGuestName('');
     setBkPriceOverride('');
     loadBkAvailCourts(selDate, startTime, endTime);
@@ -992,7 +993,7 @@ function ReservationsScreen({ clubId, setScreen }) {
           .order('created_at', { ascending: false });
         const pkgs = (data || []).map(r => ({
           ...r,
-          package_name: r.lesson_packages?.name ?? '',
+          package_name: r.lesson_packages?.name || r.custom_name || 'Özel Paket',
           remaining: (r.total_lessons || 0) - (r.used_lessons || 0),
         }));
         setLessonPackages(pkgs);
@@ -1372,8 +1373,8 @@ function ReservationsScreen({ clubId, setScreen }) {
 
                 // 3. Earnings / finans kayıtları (paket fiyatından per-session hesapla)
                 const pkgDef = pkg.lesson_packages || {};
-                const perSessionTotal = ((pkgDef.price || 0) / (pkgDef.total_lessons || 1));
-                const coachPct = pkgDef.coach_percentage ?? 70;
+                const perSessionTotal = (pkgDef.price ?? pkg.custom_price ?? 0) / (pkgDef.total_lessons || pkg.total_lessons || 1);
+                const coachPct = pkgDef.coach_percentage ?? pkg.custom_coach_pct ?? 70;
                 const coachEarning = perSessionTotal * (coachPct / 100);
                 const clubEarning  = perSessionTotal - coachEarning;
 
@@ -1993,7 +1994,7 @@ function ReservationsScreen({ clubId, setScreen }) {
                 <div style={{ fontSize:12, fontWeight:700, color:'var(--text-2)', marginBottom:10, letterSpacing:0.4 }}>KİŞİ (OPSİYONEL)</div>
                 {/* Toggle */}
                 <div style={{ display:'flex', gap:8, marginBottom:12 }}>
-                  {[{ key:'member', icon:'group', label:'Üye' }, { key:'customer', icon:'people_alt', label:'Müşteri' }, { key:'guest', icon:'person_outline', label:'Misafir' }].map(t => (
+                  {[{ key:'member', icon:'group', label:'Üye' }, { key:'customer', icon:'people_alt', label:'Müşteri' }, { key:'guest', icon:'person_outline', label:'Misafir' }].filter(t => hasMembership || t.key !== 'member').map(t => (
                     <button key={t.key} type="button"
                       style={{ flex:1, padding:'9px 0', borderRadius:10, cursor:'pointer', fontSize:13, fontWeight:600, display:'flex', alignItems:'center', justifyContent:'center', gap:6,
                         border: bkPersonMode === t.key ? '1.5px solid var(--brand-navy)' : '1.5px solid var(--border)',
