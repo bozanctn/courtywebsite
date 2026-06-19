@@ -16,7 +16,7 @@ const MONTH_NAMES = [
 // ═══════════════════════════════════════════════════════════════
 // FİNANS
 // ═══════════════════════════════════════════════════════════════
-function FinanceScreen({ clubId }) {
+function FinanceScreen({ clubId, clubProfile }) {
   const { useState, useEffect, useMemo } = React;
   const [records,        setRecords]        = useState([]);
   const [coachEarnings,  setCoachEarnings]  = useState([]);
@@ -487,7 +487,10 @@ function FinanceScreen({ clubId }) {
             {/* Category chips */}
             <Field label="KATEGORİ">
               <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, marginTop: 4 }}>
-                {(form.type === 'income' ? INCOME_CATEGORIES : EXPENSE_CATEGORIES).map(cat => (
+                {(form.type === 'income'
+                  ? INCOME_CATEGORIES.filter(c => clubProfile?.has_cafe_system !== false || c !== 'Kafetarya Geliri')
+                  : EXPENSE_CATEGORIES
+                ).map(cat => (
                   <button key={cat} type="button"
                     style={{ padding: '7px 14px', borderRadius: 999, fontSize: 13, fontWeight: form.category === cat ? 700 : 500, border: '1.5px solid', borderColor: form.category === cat ? 'var(--brand-navy)' : 'var(--border)', background: form.category === cat ? 'var(--brand-navy)' : 'var(--bg)', color: form.category === cat ? '#fff' : 'var(--text-2)', cursor: 'pointer' }}
                     onClick={() => setForm({ ...form, category: cat })}

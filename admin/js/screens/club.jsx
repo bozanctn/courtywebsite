@@ -52,6 +52,8 @@ function ClubProfileScreen({ clubId, clubProfile: initialProfile }) {
       is_visible: profile.is_visible !== false,
       requires_booking_approval: profile.requires_booking_approval === true,
       has_membership_system: profile.has_membership_system !== false,
+      has_cafe_system:       profile.has_cafe_system !== false,
+      has_employee_system:   profile.has_employee_system !== false,
       max_reservation_duration: profile.max_reservation_duration || 120,
       booking_open_hour: profile.booking_open_hour ?? 0,
     });
@@ -79,6 +81,8 @@ function ClubProfileScreen({ clubId, clubProfile: initialProfile }) {
         is_visible:                form.is_visible !== false,
         requires_booking_approval: form.requires_booking_approval === true,
         has_membership_system:     form.has_membership_system !== false,
+        has_cafe_system:           form.has_cafe_system !== false,
+        has_employee_system:       form.has_employee_system !== false,
         max_reservation_duration:            form.max_reservation_duration ? Number(form.max_reservation_duration) : 120,
         max_advance_booking_days:            form.max_advance_booking_days ? Number(form.max_advance_booking_days) : null,
         booking_open_hour:                   form.booking_open_hour != null ? Number(form.booking_open_hour) : 0,
@@ -305,6 +309,24 @@ function ClubProfileScreen({ clubId, clubProfile: initialProfile }) {
                 {form.has_membership_system !== false
                   ? 'Üyeler sekmesi aktif, üyelik paketleri kullanılabilir.'
                   : 'Üyeler sekmesi gizlenir, sistem tamamen müşteriler üzerinden çalışır.'}
+              </p>
+            </div>
+
+            <div style={{ background: form.has_cafe_system !== false ? '#F0FDF4' : '#FEF2F2', borderRadius:10, padding:'12px 14px', border: `1px solid ${form.has_cafe_system !== false ? 'rgba(34,197,94,0.2)' : 'rgba(239,68,68,0.2)'}` }}>
+              <Switch on={form.has_cafe_system !== false} onChange={v => setForm({...form, has_cafe_system: v})} label="Kafe / Market" />
+              <p style={{ fontSize:11, color:'var(--text-2)', margin:'6px 0 0 0' }}>
+                {form.has_cafe_system !== false
+                  ? 'Kafe / Market sekmesi aktif, kafetarya gelir kategorisi görünür.'
+                  : 'Kafe / Market sekmesi gizlenir, finans ekranından kafetarya kategorisi kaldırılır.'}
+              </p>
+            </div>
+
+            <div style={{ background: form.has_employee_system !== false ? '#F0FDF4' : '#FEF2F2', borderRadius:10, padding:'12px 14px', border: `1px solid ${form.has_employee_system !== false ? 'rgba(34,197,94,0.2)' : 'rgba(239,68,68,0.2)'}` }}>
+              <Switch on={form.has_employee_system !== false} onChange={v => setForm({...form, has_employee_system: v})} label="Çalışan Sistemi" />
+              <p style={{ fontSize:11, color:'var(--text-2)', margin:'6px 0 0 0' }}>
+                {form.has_employee_system !== false
+                  ? 'Çalışanlar sekmesi aktif.'
+                  : 'Çalışanlar sekmesi gizlenir.'}
               </p>
             </div>
 

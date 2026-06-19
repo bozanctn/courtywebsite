@@ -784,7 +784,7 @@ function MyProgramScreen({ clubId, setScreen, clubProfile }) {
           .is('lesson_id', null),
 
         sb.from('lessons')
-          .select('id,start_time,end_time,student_name,status,payment_status,amount,court_id,club_coach_id,price_mode')
+          .select('id,start_time,end_time,student_name,status,payment_status,amount,coach_amount,court_id,club_coach_id,price_mode')
           .in('court_id', courtIds)
           .neq('status', 'cancelled'),
 
@@ -962,7 +962,8 @@ function MyProgramScreen({ clubId, setScreen, clubProfile }) {
         studentName: l.student_name, source: 'lesson', rawId: l.id,
         lessonDate: dateStr, coachId: l.club_coach_id, isPackageLesson: !!l.is_package_lesson,
         pkgSessionId: l.pkg_session_id || null, playerPackageId: l.player_package_id || null,
-        priceMode: l.price_mode || 'normal' });
+        priceMode: l.price_mode || 'normal', coachAmount: l.coach_amount ?? null,
+        clubAmount: l.coach_amount != null ? (l.amount - l.coach_amount) : null });
     });
 
     // Manuel dersler — `date` alanı YYYY-MM-DD, start_time/end_time HH:MM
@@ -1454,8 +1455,8 @@ function MyProgramScreen({ clubId, setScreen, clubProfile }) {
   const handleLsDetailPaid = async () => {
     if (!lsDetail) return;
     const isSplitLesson = lsDetail.priceMode === 'split';
-    // Yeni "Özel Fiyat" modu: coachAmount alanı dolu → iki alanlı yeni stil
-    const isNewNormal = !isSplitLesson && lsDetail.coachAmount != null;
+    const isNewNormal   = lsDetail.priceMode === 'dual' ||
+                          (lsDetail.priceMode === 'normal' && lsDetail.coachAmount != null);
 
     let coachAmt, clubAmt, courtFee, total, lines;
 
@@ -1891,7 +1892,7 @@ function MyProgramScreen({ clubId, setScreen, clubProfile }) {
         notes:          lsForm.notes?.trim() || null,
         payment_status: payStatus,
         amount:         amountVal,
-        price_mode:     lsPriceMode,
+        price_mode:     lsPriceMode === 'normal' ? 'dual' : lsPriceMode,
         coach_amount:   lsPriceMode === 'normal' ? (normalCoachAmt || 0) : null,
         club_amount:    lsPriceMode === 'normal' ? (normalClubAmt  || 0) : null,
       };
@@ -2744,11 +2745,12 @@ function MyProgramScreen({ clubId, setScreen, clubProfile }) {
                   style={{ flex:1, display:'flex', alignItems:'center', justifyContent:'center', gap:6, padding:'13px', borderRadius:14, border:'none', cursor:lsDetailSaving?'not-allowed':'pointer', background:'#22C55E', color:'#fff', fontSize:14, fontWeight:700 }}>
                   <span className="material-icons" style={{fontSize:18}}>payments</span>
                   {(() => {
+                    const isDual  = lsDetail.priceMode === 'dual' ||
+                                    (lsDetail.priceMode === 'normal' && lsDetail.coachAmount != null);
                     const isSplit = lsDetail.priceMode === 'split';
-                    const isNewNormal = !isSplit && lsDetail.coachAmount != null;
                     let total;
-                    if (isNewNormal) {
-                      total = Math.round(((Number(lsDetail.coachAmount) || 0) + (Number(lsDetail.clubAmount) || 0)) * 100) / 100;
+                    if (isDual) {
+                      total = Math.round((Number(lsDetail.amount) || 0) * 100) / 100;
                     } else if (isSplit) {
                       total = Math.round((Number(lsDetail.amount) || 0) * 100) / 100;
                     } else {
@@ -3078,12 +3080,6 @@ function MyProgramScreen({ clubId, setScreen, clubProfile }) {
                 </div>
               )}
 
-              {/* NOT */}
-              <div style={{ fontSize:12, fontWeight:700, color:'var(--text-2)', marginBottom:8, letterSpacing:0.4 }}>NOT (opsiyonel)</div>
-              <textarea style={{ width:'100%', border:'1.5px solid var(--border)', borderRadius:12, padding:'11px 12px', fontSize:15, color:'var(--text-1)', background:'var(--bg)', boxSizing:'border-box', minHeight:72, resize:'vertical', marginBottom:16 }}
-                placeholder="Ders hakkında not..." value={lsForm.notes || ''}
-                onChange={e => setLsForm({...lsForm, notes:e.target.value})} />
-
               {/* DERS ÜCRETİ + ÖDEME MODELİ + ÖDEME DURUMU — paket aktifse gizlenir */}
               {!lsUsePkg && lsPriceMode === 'normal' ? (
                 <div style={{ marginBottom:16, opacity: lsUsePkg ? 0.7 : 1, pointerEvents: lsUsePkg ? 'none' : 'auto' }}>
@@ -3193,6 +3189,12 @@ function MyProgramScreen({ clubId, setScreen, clubProfile }) {
                 </button>
               </div>
               </>}
+
+              {/* NOT */}
+              <div style={{ fontSize:12, fontWeight:700, color:'var(--text-2)', marginBottom:8, letterSpacing:0.4 }}>NOT (opsiyonel)</div>
+              <textarea style={{ width:'100%', border:'1.5px solid var(--border)', borderRadius:12, padding:'11px 12px', fontSize:15, color:'var(--text-1)', background:'var(--bg)', boxSizing:'border-box', minHeight:72, resize:'vertical', marginBottom:16 }}
+                placeholder="Ders hakkında not..." value={lsForm.notes || ''}
+                onChange={e => setLsForm({...lsForm, notes:e.target.value})} />
 
               <button
                 style={{ width:'100%', background:'var(--brand-navy)', color:'#fff', border:'none', borderRadius:14, padding:'15px', fontSize:15, fontWeight:800, cursor: lsSaving ? 'not-allowed' : 'pointer', opacity: lsSaving ? 0.6 : 1 }}

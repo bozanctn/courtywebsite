@@ -9,22 +9,22 @@ const ALL_NAV_ITEMS = [
   { key: 'reservations',   icon: 'event_available',        label: 'Rezervasyonlar',     section: null,         employeeOk: true  },
   { key: 'courts',         icon: 'sports_tennis',          label: 'Kortlar',            section: null,         employeeOk: true  },
   { key: 'members',        icon: 'group',                  label: 'Üyeler',             section: null,         employeeOk: true  },
-  { key: 'coaches',        icon: 'person',                 label: 'Koçlar',             section: null,         employeeOk: true  },
+  { key: 'coaches',        icon: 'person',                 label: 'Antrenörler',        section: null,         employeeOk: true  },
   { key: 'employees',      icon: 'badge',                  label: 'Çalışanlar',         section: null,         employeeOk: false },
   { key: 'customers',      icon: 'people_alt',             label: 'Müşteriler',         section: null,         employeeOk: false },
-  { key: 'lesson_requests',icon: 'mark_email_unread',      label: 'Ders Talepleri',     section: null,         employeeOk: true  },
+  { key: 'cafe',           icon: 'local_cafe',             label: 'Kafe / Market',      section: null,         employeeOk: true  },
+  { key: 'groups',         icon: 'groups',                 label: 'Gruplar',            section: 'GRUP DERSLERİ', employeeOk: true  },
+  { key: 'group_players',  icon: 'sports_tennis',          label: 'Grup Oyuncuları',    section: null,         employeeOk: true  },
+  { key: 'lesson_requests',icon: 'mark_email_unread',      label: 'Ders Talepleri',     section: 'ÖZEL DERS',  employeeOk: true  },
   { key: 'packages',       icon: 'inventory_2',            label: 'Ders Paketleri',     section: null,         employeeOk: true  },
   { key: 'tournaments',    icon: 'emoji_events',           label: 'Turnuvalar',         section: 'ETKİNLİKLER',employeeOk: true  },
-  { key: 'groups',         icon: 'groups',                 label: 'Gruplar',            section: null,         employeeOk: true  },
-  { key: 'group_players',  icon: 'sports_tennis',          label: 'Grup Oyuncuları',    section: null,         employeeOk: true  },
-  { key: 'cafe',           icon: 'local_cafe',             label: 'Kafe / Market',      section: null,         employeeOk: true  },
   { key: 'finance',        icon: 'account_balance_wallet', label: 'Finans',             section: 'ANALİZ',     employeeOk: false },
   { key: 'analytics',      icon: 'bar_chart',              label: 'Analitik',           section: null,         employeeOk: false },
-  { key: 'reviews',        icon: 'star',                   label: 'Yorumlar',           section: null,         employeeOk: false },
   { key: 'chat',           icon: 'chat',                   label: 'Sohbet',             section: 'İLETİŞİM',   employeeOk: true  },
   { key: 'notifications',  icon: 'notifications',          label: 'Bildirimler',        section: null,         employeeOk: true  },
-  { key: 'notif_prefs',    icon: 'tune',                   label: 'Bildirim Tercihleri',section: null,         employeeOk: true  },
+  { key: 'reviews',        icon: 'star',                   label: 'Yorumlar',           section: null,         employeeOk: false },
   { key: 'profile',        icon: 'business',               label: 'Kulüp Profili',      section: 'AYARLAR',    employeeOk: false },
+  { key: 'notif_prefs',    icon: 'tune',                   label: 'Bildirim Tercihleri',section: null,         employeeOk: true  },
 ];
 
 // ── Sidebar ────────────────────────────────────────────────────
@@ -35,9 +35,13 @@ function Sidebar({ screen, setScreen, clubProfile, employeeProfile, userType, un
     : (clubProfile?.club_name || 'Kulübüm');
   const abbr = initials(name);
   const hasMembership = clubProfile?.has_membership_system !== false;
+  const hasCafe       = clubProfile?.has_cafe_system !== false;
+  const hasEmployee   = clubProfile?.has_employee_system !== false;
   const NAV_ITEMS = ALL_NAV_ITEMS
     .filter(i => !isEmployee || i.employeeOk)
-    .filter(i => hasMembership || i.key !== 'members');
+    .filter(i => hasMembership || i.key !== 'members')
+    .filter(i => hasCafe       || i.key !== 'cafe')
+    .filter(i => hasEmployee   || i.key !== 'employees');
 
   return (
     <aside className={`side${collapsed ? ' side-collapsed' : ''}`}>

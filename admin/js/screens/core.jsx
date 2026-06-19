@@ -1089,13 +1089,14 @@ function ReservationsScreen({ clubId, setScreen, clubProfile }) {
           pkg_session_id:   pkgInfo?.session_id || null,
           player_package_id: pkgInfo?.player_package_id || null,
           price_mode:       m.price_mode || 'normal',
+          coach_amount:     m.coach_amount ?? null,
         });
       });
 
       // 3) lessons tablosu — koçların oluşturduğu dersler
       if (myCoachIds.length > 0) {
         const { data: directLessons } = await sb.from('lessons')
-          .select('id, start_time, end_time, student_name, club_coach_id, court_id, amount, payment_status, price_mode, courts(court_number)')
+          .select('id, start_time, end_time, student_name, club_coach_id, court_id, amount, coach_amount, payment_status, price_mode, courts(court_number)')
           .in('club_coach_id', myCoachIds)
           .neq('status', 'cancelled')
           .gte('start_time', dbStart)
@@ -1131,6 +1132,7 @@ function ReservationsScreen({ clubId, setScreen, clubProfile }) {
             pkg_session_id:   pkgInfo?.session_id || null,
             player_package_id: pkgInfo?.player_package_id || null,
             price_mode:       l.price_mode || 'normal',
+            coach_amount:     l.coach_amount ?? null,
           });
         });
       }
@@ -1550,6 +1552,61 @@ function ReservationsScreen({ clubId, setScreen, clubProfile }) {
       return;
     }
 
+    const isDual = lesson.price_mode === 'dual';
+    const isSplit = lesson.price_mode === 'split';
+
+    // Dual mod: coach_amount ve (amount - coach_amount) ayrı ayrı kayıtlı
+    if (isDual) {
+      const dualCoachAmt = Math.round((Number(lesson.coach_amount) || 0) * 100) / 100;
+      const dualClubAmt  = Math.round((coachAmount - dualCoachAmt) * 100) / 100;
+      const lines = [
+        `Hoca Hakedişi: ₺${dualCoachAmt.toLocaleString('tr-TR')}`,
+        `Kulüp Payı:    ₺${dualClubAmt.toLocaleString('tr-TR')}`,
+        `─────────────────────`,
+        `Toplam:        ₺${coachAmount.toLocaleString('tr-TR')}`,
+      ].join('\n');
+      if (!confirm(`Ödeme Al\n\n${lines}\n\nÖdeme alındı olarak işaretlensin mi?`)) return;
+      setLessonMarkingId(lesson.id);
+      try {
+        if (lesson.source === 'lesson') {
+          const { error } = await sb.from('lessons').update({ payment_status: 'paid' }).eq('id', lesson.id);
+          if (error) throw error;
+        } else {
+          const { error } = await sb.from('club_manual_lessons').update({ payment_status: 'paid' }).eq('id', lesson.id);
+          if (error) throw error;
+        }
+        if (dualCoachAmt > 0) {
+          const { error } = await sb.from('coach_earnings').insert({
+            club_id:        clubId,
+            coach_id:       lesson.coach_id || null,
+            ...(lesson.source === 'manual' ? { manual_lesson_id: lesson.id } : { lesson_id: lesson.id }),
+            coach_name:     lesson.coach_name,
+            student_name:   lesson.student_name || null,
+            amount:         dualCoachAmt,
+            court_fee:      0,
+            date:           lesson.date,
+            description:    `Özel ders - ${lesson.student_name || 'Öğrenci'} - ${lesson.start_time}`,
+            payment_status: 'unpaid',
+          });
+          if (error) throw error;
+        }
+        if (dualClubAmt > 0) {
+          const { error } = await sb.from('club_finances').insert({
+            club_id:     clubId,
+            type:        'income',
+            category:    'Özel Ders Geliri',
+            amount:      dualClubAmt,
+            description: `${lesson.coach_name} - ${lesson.student_name || 'Öğrenci'} - Özel Ders`,
+            date:        lesson.date,
+          });
+          if (error) throw error;
+        }
+        loadLessons();
+      } catch (e) { alert(e.message); }
+      finally { setLessonMarkingId(null); }
+      return;
+    }
+
     // Ders kaynağı (manual / lesson) → detaylı özet göster + böl
     const lines = [
       `Hoca Hakedişi: ₺${coachAmount.toLocaleString('tr-TR')}`,
@@ -1769,9 +1826,28 @@ function ReservationsScreen({ clubId, setScreen, clubProfile }) {
                         </span>
                       )}
                       {(() => {
-                        const isSplit  = l.price_mode === 'split';
-                        const totalAmt = Math.round((Number(l.amount) || 0) * 100) / 100;
-                        if (isSplit) {
+                        const totalAmt     = Math.round((Number(l.amount) || 0) * 100) / 100;
+                        const isDualBadge  = l.price_mode === 'dual';
+                        const isSplitBadge = l.price_mode === 'split';
+                        if (isDualBadge) {
+                          const dualCoach = Math.round((Number(l.coach_amount) || 0) * 100) / 100;
+                          const dualClub  = Math.round((totalAmt - dualCoach) * 100) / 100;
+                          return (
+                            <>
+                              {dualCoach > 0 && (
+                                <span style={{ display:'flex', alignItems:'center', gap:4, background:'#EEF2FF', border:'1px solid #C7D2FE', borderRadius:8, padding:'4px 8px', fontSize:12, color:'var(--brand-navy)' }}>
+                                  <span className="material-icons" style={{fontSize:13}}>person</span>Hoca: ₺{dualCoach.toLocaleString('tr-TR')}
+                                </span>
+                              )}
+                              {dualClub > 0 && (
+                                <span style={{ display:'flex', alignItems:'center', gap:4, background:'#F0FDF4', border:'1px solid #BBF7D0', borderRadius:8, padding:'4px 8px', fontSize:12, color:'#16A34A' }}>
+                                  <span className="material-icons" style={{fontSize:13}}>account_balance</span>Kulüp: ₺{dualClub.toLocaleString('tr-TR')}
+                                </span>
+                              )}
+                            </>
+                          );
+                        }
+                        if (isSplitBadge) {
                           return totalAmt > 0 ? (
                             <span style={{ display:'flex', alignItems:'center', gap:4, background:'#F5F3FF', border:'1px solid #DDD6FE', borderRadius:8, padding:'4px 8px', fontSize:12, color:'#7C3AED' }}>
                               <span className="material-icons" style={{fontSize:13}}>account_balance_wallet</span>Toplam: ₺{totalAmt.toLocaleString('tr-TR')}
@@ -1827,6 +1903,7 @@ function ReservationsScreen({ clubId, setScreen, clubProfile }) {
                             {(() => {
                               if (lessonMarkingId === l.id) return 'İşleniyor...';
                               if (l.source === 'booking') return `Ödeme Al${l.amount > 0 ? ` · ₺${Number(l.amount).toLocaleString('tr-TR')}` : ''}`;
+                              if (l.price_mode === 'dual') return `Ödeme Al${l.amount > 0 ? ` · ₺${Number(l.amount).toLocaleString('tr-TR')}` : ''}`;
                               const lm = (l.location||'').match(/Kort\s*(\d+)/i);
                               const cr = lm ? lessonCourts.find(c => c.court_number === parseInt(lm[1])) : null;
                               const [sh2,sm2] = (l.start_time||'0:0').split(':').map(Number);
