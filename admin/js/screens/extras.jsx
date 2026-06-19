@@ -690,19 +690,27 @@ function MyProgramScreen({ clubId, setScreen, clubProfile }) {
   // Paket yükleme — öğrenci seçilince (hoca filtresiz, tüm aktif paketler)
   React.useEffect(() => {
     const playerId = lsSelectedPlayer?.id;
-    if (!playerId || lsForm.use_manual_coach) {
+    // user_id olmayan müşteri seçildiyse manual_player_name ile sorgula
+    const manualName = (!playerId && lsSelectedCustomer && !lsSelectedCustomer.user_id)
+      ? lsSelectedCustomer.full_name : null;
+    if ((!playerId && !manualName) || lsForm.use_manual_coach) {
       setLsPackages([]); setLsUsePkg(false); setLsSelectedPkgId(null); return;
     }
     (async () => {
       setLsLoadingPkgs(true);
       try {
         const now = new Date().toISOString();
-        const { data } = await sb.from('player_lesson_packages')
+        let q = sb.from('player_lesson_packages')
           .select('*, lesson_packages(name, total_lessons, price, validity_days, coach_percentage)')
-          .eq('player_id', playerId)
           .eq('payment_status', 'paid').eq('status', 'active')
           .or(`expiry_date.is.null,expiry_date.gt.${now}`)
           .order('created_at', { ascending: false });
+        if (playerId) {
+          q = q.eq('player_id', playerId);
+        } else {
+          q = q.is('player_id', null).eq('manual_player_name', manualName);
+        }
+        const { data } = await q;
         const pkgs = (data || []).map(r => ({
           ...r, package_name: r.lesson_packages?.name || r.custom_name || 'Özel Paket',
           remaining: (r.total_lessons || 0) - (r.used_lessons || 0),
@@ -728,7 +736,7 @@ function MyProgramScreen({ clubId, setScreen, clubProfile }) {
       } catch (e) { console.error('ls package load:', e); }
       finally { setLsLoadingPkgs(false); }
     })();
-  }, [lsSelectedPlayer, lsForm.use_manual_coach]);
+  }, [lsSelectedPlayer, lsSelectedCustomer, lsForm.use_manual_coach]);
 
   // Grup seçilince üye + hoca listesini yükle
   React.useEffect(() => {
@@ -1731,19 +1739,26 @@ function MyProgramScreen({ clubId, setScreen, clubProfile }) {
   // Öğrenci seçilince aktif paketi varsa hocanın otomatik seçilmesi
   React.useEffect(() => {
     const playerId = lsSelectedPlayer?.id;
-    if (!playerId || lsForm.use_manual_coach || coachesList.length === 0) return;
+    const manualName = (!playerId && lsSelectedCustomer && !lsSelectedCustomer.user_id)
+      ? lsSelectedCustomer.full_name : null;
+    if ((!playerId && !manualName) || lsForm.use_manual_coach || coachesList.length === 0) return;
     let cancelled = false;
     (async () => {
       setLsAutoCoachLoading(true);
       try {
         const now = new Date().toISOString();
-        const { data } = await sb.from('player_lesson_packages')
+        let q = sb.from('player_lesson_packages')
           .select('coach_id')
-          .eq('player_id', playerId)
           .eq('payment_status', 'paid').eq('status', 'active')
           .or(`expiry_date.is.null,expiry_date.gt.${now}`)
           .order('created_at', { ascending: false })
           .limit(1);
+        if (playerId) {
+          q = q.eq('player_id', playerId);
+        } else {
+          q = q.is('player_id', null).eq('manual_player_name', manualName);
+        }
+        const { data } = await q;
         if (!cancelled && data?.length > 0) {
           const matchedCoach = coachesList.find(c => c.individual_coach_id === data[0].coach_id);
           if (matchedCoach) setLsForm(prev => ({ ...prev, coach_id: matchedCoach.id }));
@@ -1752,7 +1767,7 @@ function MyProgramScreen({ clubId, setScreen, clubProfile }) {
       finally { if (!cancelled) setLsAutoCoachLoading(false); }
     })();
     return () => { cancelled = true; };
-  }, [lsSelectedPlayer, coachesList.length, lsForm.use_manual_coach]);
+  }, [lsSelectedPlayer, lsSelectedCustomer, coachesList.length, lsForm.use_manual_coach]);
 
   const saveNewLesson = async () => {
     // Zorunlu alan kontrolü
@@ -3030,18 +3045,19 @@ function MyProgramScreen({ clubId, setScreen, clubProfile }) {
               )}
 
               {/* PAKET */}
-              {(lsSelectedPlayer) && !lsForm.use_manual_coach && lsForm.coach_id && (
+              {(lsSelectedPlayer || (lsSelectedCustomer && !lsSelectedCustomer.user_id)) && !lsForm.use_manual_coach && lsForm.coach_id && (
                 <div style={{ marginBottom:14 }}>
                   {lsLoadingPkgs ? (
                     <div style={{ fontSize:13, color:'var(--text-2)', padding:'6px 0' }}>Paketler yükleniyor...</div>
                   ) : lsPackages.length > 0 ? (
-                    <div style={{ border:'1.5px solid var(--border)', borderRadius:12, overflow:'hidden' }}>
-                      <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', padding:'11px 14px', background: lsUsePkg ? '#EEF2FF' : 'var(--bg)', borderBottom: lsUsePkg ? '1.5px solid var(--border)' : 'none' }}>
+                    <div style={{ border:`1.5px solid ${lsUsePkg ? 'var(--brand-navy)' : 'var(--border)'}`, borderRadius:12, overflow:'hidden' }}>
+                      {/* Toggle satırı — her zaman görünür */}
+                      <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', padding:'11px 14px', background: lsUsePkg ? '#EEF2FF' : 'var(--bg)', borderBottom:'1.5px solid var(--border)' }}>
                         <div style={{ display:'flex', alignItems:'center', gap:8 }}>
                           <span className="material-icons" style={{ fontSize:17, color: lsUsePkg ? 'var(--brand-navy)' : 'var(--text-2)' }}>inventory_2</span>
                           <div>
-                            <div style={{ fontSize:13, fontWeight:700, color: lsUsePkg ? 'var(--brand-navy)' : 'var(--text-1)' }}>Paketten Kullan</div>
-                            <div style={{ fontSize:11, color:'var(--text-2)' }}>{lsPackages.length} aktif paket mevcut</div>
+                            <div style={{ fontSize:13, fontWeight:700, color: lsUsePkg ? 'var(--brand-navy)' : 'var(--text-1)' }}>Paketi Kullan</div>
+                            <div style={{ fontSize:11, color:'var(--text-2)' }}>{lsPackages.length} aktif paket · kapalıysa normal ders gibi kaydedilir</div>
                           </div>
                         </div>
                         <div style={{ width:44, height:24, borderRadius:12, background: lsUsePkg ? 'var(--brand-navy)' : '#CBD5E1', cursor:'pointer', position:'relative', transition:'background 0.2s', flexShrink:0 }}
@@ -3049,32 +3065,51 @@ function MyProgramScreen({ clubId, setScreen, clubProfile }) {
                           <div style={{ width:18, height:18, borderRadius:9, background:'#fff', position:'absolute', top:3, left: lsUsePkg ? 23 : 3, transition:'left 0.2s', boxShadow:'0 1px 3px rgba(0,0,0,0.3)' }} />
                         </div>
                       </div>
-                      {lsUsePkg && (
-                        <div style={{ padding:'12px 14px', background:'var(--surface)', display:'flex', flexDirection:'column', gap:8 }}>
-                          {lsPackages.map(pkg => {
-                            const remaining = (pkg.total_lessons||0) - (pkg.used_lessons||0);
-                            const isSelected = lsSelectedPkgId === pkg.id;
-                            const expiry = pkg.expiry_date ? new Date(pkg.expiry_date).toLocaleDateString('tr-TR') : null;
-                            return (
-                              <div key={pkg.id} onClick={() => {
+
+                      {/* Paket kartları — toggle açık/kapalı her zaman görünür */}
+                      <div style={{ padding:'12px 14px', background:'var(--surface)', display:'flex', flexDirection:'column', gap:8 }}>
+                        {lsPackages.map(pkg => {
+                          const remaining = (pkg.total_lessons||0) - (pkg.used_lessons||0);
+                          const isSelected = lsSelectedPkgId === pkg.id;
+                          const expiry = pkg.expiry_date ? new Date(pkg.expiry_date).toLocaleDateString('tr-TR') : null;
+                          return (
+                            <div key={pkg.id}
+                              onClick={() => {
+                                if (!lsUsePkg) return;
                                 setLsSelectedPkgId(pkg.id);
                                 if (pkg.coach_id) {
                                   const cr = coachesList.find(c => c.individual_coach_id === pkg.coach_id);
                                   if (cr) setLsForm(prev => ({ ...prev, coach_id: cr.id }));
                                 }
                               }}
-                                style={{ display:'flex', alignItems:'center', justifyContent:'space-between', padding:'10px 12px', borderRadius:10, border: isSelected ? '1.5px solid var(--brand-navy)' : '1.5px solid var(--border)', background: isSelected ? '#EEF2FF' : 'var(--bg)', cursor:'pointer' }}>
-                                <div>
-                                  <div style={{ fontSize:13, fontWeight:700, color: isSelected ? 'var(--brand-navy)' : 'var(--text-1)' }}>{pkg.package_name || 'Ders Paketi'}</div>
-                                  <div style={{ fontSize:11, color:'var(--text-2)' }}>{remaining} ders kaldı{expiry ? ` · Son: ${expiry}` : ''}</div>
+                              style={{
+                                display:'flex', alignItems:'center', justifyContent:'space-between',
+                                padding:'10px 12px', borderRadius:10,
+                                border: isSelected && lsUsePkg ? '1.5px solid var(--brand-navy)' : '1.5px solid var(--border)',
+                                background: isSelected && lsUsePkg ? '#EEF2FF' : 'var(--bg)',
+                                cursor: lsUsePkg ? 'pointer' : 'default',
+                                opacity: lsUsePkg ? 1 : 0.55,
+                              }}>
+                              <div>
+                                <div style={{ fontSize:13, fontWeight:700, color: isSelected && lsUsePkg ? 'var(--brand-navy)' : 'var(--text-1)' }}>
+                                  {pkg.package_name || 'Ders Paketi'}
                                 </div>
-                                {isSelected && <span className="material-icons" style={{ fontSize:18, color:'var(--brand-navy)' }}>check_circle</span>}
+                                <div style={{ fontSize:11, color:'var(--text-2)', marginTop:2 }}>
+                                  <span style={{ fontWeight:700, color: remaining <= 2 ? '#EF4444' : '#059669' }}>{remaining} ders kaldı</span>
+                                  {` / ${pkg.total_lessons} toplam`}
+                                  {expiry ? ` · Son: ${expiry}` : ''}
+                                </div>
                               </div>
-                            );
-                          })}
-                          <div style={{ fontSize:11, color:'#059669', fontWeight:600, paddingTop:4 }}>Ders ücreti 0 ₺ olarak kaydedilecek, ödemesi paket satışında alındı.</div>
-                        </div>
-                      )}
+                              {isSelected && lsUsePkg && <span className="material-icons" style={{ fontSize:18, color:'var(--brand-navy)' }}>check_circle</span>}
+                            </div>
+                          );
+                        })}
+                        {lsUsePkg && (
+                          <div style={{ fontSize:11, color:'#059669', fontWeight:600, paddingTop:2 }}>
+                            Ders ücreti 0 ₺ olarak kaydedilecek, ödemesi paket satışında alındı.
+                          </div>
+                        )}
+                      </div>
                     </div>
                   ) : null}
                 </div>
