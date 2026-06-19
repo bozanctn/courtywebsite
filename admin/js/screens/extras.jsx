@@ -1685,10 +1685,14 @@ function MyProgramScreen({ clubId, setScreen, clubProfile }) {
   // ── Yeni Ders Ekleme (Inline) ──────────────────────────────────
   const searchLsPlayers = async (query) => {
     if (!query || query.length < 2) { setLsPlayerResults([]); return; }
-    const { data } = await sb.from('profiles').select('id,full_name,email')
-      .eq('user_type', 'player')
-      .ilike('full_name', `%${query}%`).limit(8);
-    setLsPlayerResults(data || []);
+    const { data } = await sb.from('club_memberships')
+      .select('user_id, member_name, profile:profiles!club_memberships_user_id_fkey(id, full_name, email)')
+      .eq('club_id', clubId).eq('status', 'active').limit(30);
+    const lq = query.toLowerCase();
+    const filtered = (data || [])
+      .filter(m => (m.profile?.full_name || m.member_name || '').toLowerCase().includes(lq))
+      .map(m => ({ id: m.profile?.id || m.user_id, full_name: m.profile?.full_name || m.member_name, email: m.profile?.email }));
+    setLsPlayerResults(filtered);
   };
 
   const searchLsCustomers = async (query) => {
@@ -1708,12 +1712,18 @@ function MyProgramScreen({ clubId, setScreen, clubProfile }) {
     setLsPlayerSearch(query);
     setLsForm(prev => ({ ...prev, student_name: query, player_id: null }));
     if (!query || query.length < 2) { setLsPlayerResults([]); setLsCustomerResults([]); return; }
-    const [{ data: players }, { data: customers }] = await Promise.all([
-      sb.from('profiles').select('id,full_name,email').eq('user_type','player').ilike('full_name',`%${query}%`).limit(6),
+    const [{ data: memberships }, { data: customers }] = await Promise.all([
+      sb.from('club_memberships')
+        .select('user_id, member_name, profile:profiles!club_memberships_user_id_fkey(id, full_name, email)')
+        .eq('club_id', clubId).eq('status', 'active').limit(30),
       sb.from('club_customers').select('id,full_name,phone,email,user_id').eq('club_id',clubId).eq('is_active',true)
         .or(`full_name.ilike.%${query}%,phone.ilike.%${query}%,email.ilike.%${query}%`).limit(6),
     ]);
-    setLsPlayerResults((players || []).map(p => ({ ...p, _kind: 'member' })));
+    const lq = query.toLowerCase();
+    const players = (memberships || [])
+      .filter(m => (m.profile?.full_name || m.member_name || '').toLowerCase().includes(lq))
+      .map(m => ({ id: m.profile?.id || m.user_id, full_name: m.profile?.full_name || m.member_name, email: m.profile?.email, _kind: 'member' }));
+    setLsPlayerResults(players);
     setLsCustomerResults((customers || []).map(c => ({ ...c, _kind: 'customer' })));
   };
 
@@ -2145,12 +2155,18 @@ function MyProgramScreen({ clubId, setScreen, clubProfile }) {
     setBookingMemberLoading(true);
     try {
       if (hasMembership) {
-        const [{ data: players }, { data: customers }] = await Promise.all([
-          sb.from('profiles').select('id, full_name, email').eq('user_type', 'player').ilike('full_name', `%${q}%`).limit(6),
+        const [{ data: memberships }, { data: customers }] = await Promise.all([
+          sb.from('club_memberships')
+            .select('user_id, member_name, profile:profiles!club_memberships_user_id_fkey(id, full_name, email)')
+            .eq('club_id', clubId).eq('status', 'active').limit(20),
           sb.from('club_customers').select('id, full_name, phone, email, user_id').eq('club_id', clubId).eq('is_active', true)
             .or(`full_name.ilike.%${q}%,phone.ilike.%${q}%,email.ilike.%${q}%`).limit(6),
         ]);
-        setBookingMemberResults(players || []);
+        const lq = q.toLowerCase();
+        const players = (memberships || [])
+          .filter(m => (m.profile?.full_name || m.member_name || '').toLowerCase().includes(lq))
+          .map(m => ({ id: m.profile?.id || m.user_id, full_name: m.profile?.full_name || m.member_name, email: m.profile?.email }));
+        setBookingMemberResults(players);
         setBookingCustomerResults(customers || []);
       } else {
         const { data: customers } = await sb.from('club_customers').select('id, full_name, phone, email, user_id').eq('club_id', clubId).eq('is_active', true)
