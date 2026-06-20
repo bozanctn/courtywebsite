@@ -1479,11 +1479,28 @@ function MyProgramScreen({ clubId, setScreen, clubProfile }) {
         `─────────────────────`,
         `Toplam:        ₺${total.toLocaleString('tr-TR')}`,
       ].join('\n');
+    } else if (isSplitLesson) {
+      const coachRec = coachesList.find(c => c.id === lsDetail.coachId);
+      const payRate  = coachRec?.coach_pay_rate ?? 0;
+      const rawAmt   = Math.round((Number(lsDetail.amount) || 0) * 100) / 100;
+      courtFee = 0;
+      coachAmt = payRate > 0 ? Math.round(rawAmt * (payRate / 100) * 100) / 100 : rawAmt;
+      clubAmt  = payRate > 0 ? Math.round((rawAmt - coachAmt) * 100) / 100 : 0;
+      total    = rawAmt;
+      lines = payRate > 0
+        ? [
+            `Ders Ücreti:   ₺${rawAmt.toLocaleString('tr-TR')}`,
+            `Hoca Hakedişi: ₺${coachAmt.toLocaleString('tr-TR')} (%${payRate})`,
+            `Kulüp Payı:    ₺${clubAmt.toLocaleString('tr-TR')}`,
+            `─────────────────────`,
+            `Toplam:        ₺${total.toLocaleString('tr-TR')}`,
+          ].join('\n')
+        : `Pay oranı tanımlı değil. Tüm tutar (₺${rawAmt.toLocaleString('tr-TR')}) hocaya gidecek.`;
     } else {
-      // Eski normal mod veya split mod
+      // Eski normal mod
       const court  = courts.find(c => c.id === lsDetail.courtId);
       const durationH = Math.max(0, ((lsDetail.eh * 60 + lsDetail.em) - (lsDetail.sh * 60 + lsDetail.sm)) / 60);
-      courtFee  = isSplitLesson ? 0 : Math.round((court?.hourly_rate || 0) * durationH * 100) / 100;
+      courtFee  = Math.round((court?.hourly_rate || 0) * durationH * 100) / 100;
       coachAmt  = Math.round((Number(lsDetail.amount) || 0) * 100) / 100;
       clubAmt   = 0;
       total     = Math.round((courtFee + coachAmt) * 100) / 100;
@@ -1528,6 +1545,30 @@ function MyProgramScreen({ clubId, setScreen, clubProfile }) {
             date:           lsDetail.lessonDate,
             description:    `Özel ders - ${lsDetail.studentName || 'Öğrenci'} - ${String(lsDetail.sh).padStart(2,'0')}:${String(lsDetail.sm).padStart(2,'0')}`,
             payment_status: 'unpaid',
+          });
+        }
+      } else if (isSplitLesson) {
+        // Pay modeli: hoca payı coach_earnings'e, kulüp payı club_finances'a
+        if (coachAmt > 0) {
+          await sb.from('coach_earnings').insert({
+            club_id:          clubId,
+            coach_id:         lsDetail.coachId || null,
+            manual_lesson_id: lsDetail.rawId,
+            coach_name:       lsDetail.coachName,
+            student_name:     lsDetail.studentName || null,
+            amount:           coachAmt,
+            court_fee:        0,
+            date:             lsDetail.lessonDate,
+            description:      `Özel ders (pay) - ${lsDetail.studentName || 'Öğrenci'} - ${String(lsDetail.sh).padStart(2,'0')}:${String(lsDetail.sm).padStart(2,'0')}`,
+            payment_status:   'unpaid',
+          });
+        }
+        if (clubAmt > 0) {
+          await sb.from('club_finances').insert({
+            club_id:     clubId, type: 'income', category: 'Özel Ders Geliri',
+            amount:      clubAmt,
+            description: `${lsDetail.coachName} - ${lsDetail.studentName || 'Öğrenci'} - Özel Ders`,
+            date:        lsDetail.lessonDate,
           });
         }
       } else {
@@ -2741,7 +2782,7 @@ function MyProgramScreen({ clubId, setScreen, clubProfile }) {
                 if (total <= 0) return null;
                 return (
                   <span style={{ fontSize:12, fontWeight:700, borderRadius:20, padding:'4px 10px', background: isSplit ? '#F5F3FF' : '#F8FAFC', color: isSplit ? '#7C3AED' : 'var(--text-2)' }}>
-                    ₺{total.toLocaleString('tr-TR')}{isSplit ? ' (all-incl.)' : ''}
+                    ₺{total.toLocaleString('tr-TR')}
                   </span>
                 );
               })()}
