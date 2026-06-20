@@ -341,7 +341,9 @@ function ReservationsScreen({ clubId, setScreen, clubProfile }) {
   const [lessonUsePackage,        setLessonUsePackage]        = useState(false);
   const [lessonSelectedPackageId, setLessonSelectedPackageId] = useState(null);
   const [lessonLoadingPackages,   setLessonLoadingPackages]   = useState(false);
-  const [lessonPriceMode,         setLessonPriceMode]         = useState('normal'); // 'normal' | 'split'
+  const [lessonPriceMode,         setLessonPriceMode]         = useState('dual'); // 'dual' | 'split'
+  const [lessonCoachAmountInput,  setLessonCoachAmountInput]  = useState('');
+  const [lessonClubAmountInput,   setLessonClubAmountInput]   = useState('');
 
   useEffect(() => {
     if (!clubId) return;
@@ -1295,9 +1297,14 @@ function ReservationsScreen({ clubId, setScreen, clubProfile }) {
       const coachName = lessonForm.use_manual_coach ? (lessonForm.manual_coach_name || null) : null;
 
       // Paketten kullan → ücret 0, ödeme durumu ödendi
-      const usingPkg = !!(lessonUsePackage && lessonSelectedPackageId);
-      const amountVal = usingPkg ? 0 : (lessonForm.amount ? parseFloat(String(lessonForm.amount).replace(',', '.')) : null);
-      const payStatus = usingPkg ? 'paid' : lessonPriceMode === 'split' ? 'paid' : (lessonForm.payment_status || 'unpaid');
+      const usingPkg    = !!(lessonUsePackage && lessonSelectedPackageId);
+      const coachAmt    = parseFloat(String(lessonCoachAmountInput).replace(',', '.')) || 0;
+      const clubAmt     = parseFloat(String(lessonClubAmountInput).replace(',', '.'))  || 0;
+      const dualTotal   = coachAmt + clubAmt;
+      const isDual      = lessonPriceMode === 'dual';
+      const amountVal   = usingPkg ? 0 : isDual ? (dualTotal || null) : (lessonForm.amount ? parseFloat(String(lessonForm.amount).replace(',', '.')) : null);
+      const coachAmtVal = usingPkg ? null : isDual ? (coachAmt || null) : null;
+      const payStatus   = usingPkg ? 'paid' : lessonPriceMode === 'split' ? 'paid' : (lessonForm.payment_status || 'unpaid');
 
       const payload = {
         club_id:        clubId,
@@ -1312,6 +1319,7 @@ function ReservationsScreen({ clubId, setScreen, clubProfile }) {
         notes:          lessonForm.notes?.trim() || null,
         payment_status: payStatus,
         amount:         amountVal,
+        coach_amount:   coachAmtVal,
         price_mode:     lessonPriceMode,
       };
 
@@ -1674,7 +1682,7 @@ function ReservationsScreen({ clubId, setScreen, clubProfile }) {
         </div>
         {mainTab === 'bookings'
           ? <button className="btn btn-pri" onClick={openAdd}><span className="material-icons">add</span> Yeni Rezervasyon</button>
-          : <button className="btn btn-pri" onClick={() => { setLessonForm({ date: selDate, start_time:'09:00', end_time:'10:00', payment_status:'unpaid', use_manual_coach: false }); setLessonPriceMode('normal'); setLessonModal({ type:'add' }); }}>
+          : <button className="btn btn-pri" onClick={() => { setLessonForm({ date: selDate, start_time:'09:00', end_time:'10:00', payment_status:'unpaid', use_manual_coach: false }); setLessonPriceMode('dual'); setLessonCoachAmountInput(''); setLessonClubAmountInput(''); setLessonModal({ type:'add' }); }}>
               <span className="material-icons">add</span> Ders Ekle
             </button>
         }
@@ -2439,23 +2447,57 @@ function ReservationsScreen({ clubId, setScreen, clubProfile }) {
                 placeholder="Ders hakkında not..." value={lessonForm.notes || ''}
                 onChange={e => setLessonForm({...lessonForm, notes: e.target.value})} />
 
-              {/* ── Ders Ücreti ──────────────────────────────── */}
-              <div style={{ fontSize:12, fontWeight:700, color:'var(--text-2)', marginBottom:8, letterSpacing:0.4 }}>DERS ÜCRETİ (opsiyonel)</div>
-              <div style={{ display:'flex', alignItems:'center', border:`1.5px solid ${lessonUsePackage ? '#86EFAC' : 'var(--border)'}`, borderRadius:12, background: lessonUsePackage ? '#F0FDF4' : 'var(--bg)', paddingLeft:12, marginBottom:16, opacity: lessonUsePackage ? 0.7 : 1 }}>
-                <span style={{ fontSize:16, fontWeight:700, color:'var(--text-2)', marginRight:4 }}>₺</span>
-                <input type="number" min="0" step="0.01" style={{ flex:1, border:'none', background:'transparent', padding:'11px 12px 11px 0', fontSize:15, color:'var(--text-1)', outline:'none' }}
-                  placeholder="0,00" value={lessonForm.amount || ''}
-                  disabled={lessonUsePackage}
-                  onChange={e => setLessonForm({...lessonForm, amount: e.target.value})} />
-                {lessonUsePackage && <span className="material-icons" style={{ fontSize:16, color:'#059669', marginRight:10 }}>inventory_2</span>}
-              </div>
+              {/* ── Ders Ücreti (dual) ───────────────────────── */}
+              {!lessonUsePackage && lessonPriceMode === 'dual' && (() => {
+                const coachAmt_ = parseFloat(String(lessonCoachAmountInput).replace(',', '.')) || 0;
+                const clubAmt_  = parseFloat(String(lessonClubAmountInput).replace(',', '.'))  || 0;
+                const total_    = coachAmt_ + clubAmt_;
+                return (
+                  <div style={{ marginBottom:16 }}>
+                    <div style={{ display:'flex', gap:8, marginBottom:8 }}>
+                      <div style={{ flex:1 }}>
+                        <div style={{ fontSize:11, fontWeight:700, color:'var(--text-2)', marginBottom:4 }}>HOCA HAKEDİŞİ (₺)</div>
+                        <input type="number" min="0" step="0.01"
+                          style={{ width:'100%', border:'1.5px solid var(--border)', borderRadius:10, padding:'10px 12px', fontSize:14, color:'var(--text-1)', background:'var(--bg)', boxSizing:'border-box', outline:'none' }}
+                          placeholder="0" value={lessonCoachAmountInput}
+                          onChange={e => setLessonCoachAmountInput(e.target.value)} />
+                      </div>
+                      <div style={{ flex:1 }}>
+                        <div style={{ fontSize:11, fontWeight:700, color:'var(--text-2)', marginBottom:4 }}>KULÜP PAYI (₺)</div>
+                        <input type="number" min="0" step="0.01"
+                          style={{ width:'100%', border:'1.5px solid var(--border)', borderRadius:10, padding:'10px 12px', fontSize:14, color:'var(--text-1)', background:'var(--bg)', boxSizing:'border-box', outline:'none' }}
+                          placeholder="0" value={lessonClubAmountInput}
+                          onChange={e => setLessonClubAmountInput(e.target.value)} />
+                      </div>
+                    </div>
+                    {total_ > 0 && (
+                      <div style={{ display:'flex', gap:8, marginBottom:8 }}>
+                        <div style={{ flex:1, background:'#F0FDF4', borderRadius:10, padding:'8px 12px', border:'1px solid #BBF7D0' }}>
+                          <div style={{ fontSize:10, color:'var(--text-2)', fontWeight:600 }}>HOCA HAKEDİŞİ</div>
+                          <div style={{ fontSize:15, fontWeight:800, color:'#16A34A' }}>₺{coachAmt_.toLocaleString('tr-TR')}</div>
+                        </div>
+                        <div style={{ flex:1, background:'#EEF2FF', borderRadius:10, padding:'8px 12px', border:'1px solid #C7D2FE' }}>
+                          <div style={{ fontSize:10, color:'var(--text-2)', fontWeight:600 }}>KULÜP PAYI</div>
+                          <div style={{ fontSize:15, fontWeight:800, color:'var(--brand-navy)' }}>₺{clubAmt_.toLocaleString('tr-TR')}</div>
+                        </div>
+                      </div>
+                    )}
+                    {total_ > 0 && (
+                      <div style={{ background:'var(--bg-2,#F3F4F6)', borderRadius:10, padding:'8px 12px', textAlign:'center' }}>
+                        <div style={{ fontSize:10, color:'var(--text-2)', fontWeight:600 }}>TOPLAM</div>
+                        <div style={{ fontSize:18, fontWeight:800, color:'var(--text-1)' }}>₺{total_.toLocaleString('tr-TR')}</div>
+                      </div>
+                    )}
+                  </div>
+                );
+              })()}
 
               {/* ── Ödeme Modeli ─────────────────────────────── */}
               <div style={{ fontSize:12, fontWeight:700, color:'var(--text-2)', marginBottom:8, letterSpacing:0.4 }}>ÖDEME MODELİ</div>
               <div style={{ display:'flex', gap:8, marginBottom:12 }}>
                 <button
-                  style={{ flex:1, padding:'9px', borderRadius:10, border: lessonPriceMode === 'normal' ? '1.5px solid var(--brand-navy)' : '1.5px solid var(--border)', background: lessonPriceMode === 'normal' ? '#EEF2FF' : 'var(--bg)', cursor:'pointer', fontSize:13, fontWeight:600, color: lessonPriceMode === 'normal' ? 'var(--brand-navy)' : 'var(--text-2)' }}
-                  onClick={() => { setLessonPriceMode('normal'); setLessonForm(prev => ({...prev, payment_status:'unpaid'})); }}
+                  style={{ flex:1, padding:'9px', borderRadius:10, border: lessonPriceMode === 'dual' ? '1.5px solid var(--brand-navy)' : '1.5px solid var(--border)', background: lessonPriceMode === 'dual' ? '#EEF2FF' : 'var(--bg)', cursor:'pointer', fontSize:13, fontWeight:600, color: lessonPriceMode === 'dual' ? 'var(--brand-navy)' : 'var(--text-2)' }}
+                  onClick={() => { setLessonPriceMode('dual'); setLessonForm(prev => ({...prev, payment_status:'unpaid'})); }}
                 >Özel Fiyat</button>
                 <button
                   style={{ flex:1, padding:'9px', borderRadius:10, border: lessonPriceMode === 'split' ? '1.5px solid #7C3AED' : '1.5px solid var(--border)', background: lessonPriceMode === 'split' ? '#F5F3FF' : 'var(--bg)', cursor:'pointer', fontSize:13, fontWeight:600, color: lessonPriceMode === 'split' ? '#7C3AED' : 'var(--text-2)' }}
@@ -2495,7 +2537,7 @@ function ReservationsScreen({ clubId, setScreen, clubProfile }) {
               })()}
 
               {/* ── Ödeme Durumu ─────────────────────────────── */}
-              {lessonPriceMode !== 'split' && <>
+              {lessonPriceMode === 'dual' && <>
               <div style={{ fontSize:12, fontWeight:700, color:'var(--text-2)', marginBottom:8, letterSpacing:0.4 }}>ÖDEME DURUMU</div>
               <div style={{ display:'flex', gap:10, marginBottom:20, opacity: lessonUsePackage ? 0.6 : 1, pointerEvents: lessonUsePackage ? 'none' : 'auto' }}>
                 <button

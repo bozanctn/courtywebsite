@@ -5,9 +5,10 @@ const GENDER_LABELS_C = { male: 'Erkek', female: 'Kadın', other: 'Diğer' };
 // ── Detay Modalı ──────────────────────────────────────────────
 function CustomerDetailModal({ customer, clubId, onClose, onReservation, onLinked }) {
   const { useState, useEffect } = React;
-  const [tab,        setTab]        = useState('bookings');
+  const [tab,        setTab]        = useState('activities');
   const [stats,      setStats]      = useState(null);
   const [bookings,   setBookings]   = useState([]);
+  const [lessons,    setLessons]    = useState([]);
   const [packages,   setPackages]   = useState([]);
   const [loading,    setLoading]    = useState(true);
   const [addPkgOpen, setAddPkgOpen] = useState(false);
@@ -26,13 +27,15 @@ function CustomerDetailModal({ customer, clubId, onClose, onReservation, onLinke
   const load = async () => {
     setLoading(true);
     try {
-      const [s, b, p] = await Promise.all([
-        CustomerSvc.getCustomerStats(customer.id, clubId, customer.user_id),
+      const [s, b, l, p] = await Promise.all([
+        CustomerSvc.getCustomerStats(customer.id, clubId, customer.user_id, customer.full_name),
         CustomerSvc.getCustomerBookings(customer.id, clubId, customer.user_id),
+        CustomerSvc.getCustomerLessons(customer.user_id, clubId, customer.full_name),
         CustomerSvc.getCustomerLessonPackages(customer.id, clubId, customer.user_id, customer.full_name),
       ]);
       setStats(s);
       setBookings(b);
+      setLessons(l);
       setPackages(p);
     } catch (e) { console.error(e); }
     finally { setLoading(false); }
@@ -64,12 +67,13 @@ function CustomerDetailModal({ customer, clubId, onClose, onReservation, onLinke
   };
 
   const tabItems = [
-    { key: 'bookings', label: `Rezervasyonlar (${bookings.length})` },
-    { key: 'packages', label: `Ders Paketleri (${packages.length})` },
+    { key: 'activities', label: `Aktiviteler (${bookings.length + lessons.length})` },
+    { key: 'packages',   label: `Ders Paketleri (${packages.length})` },
   ];
 
-  const bkStatusColor = { confirmed: '#22C55E', completed: '#6366F1', cancelled: '#EF4444', pending: '#F59E0B' };
+  const bkStatusColor  = { confirmed: '#22C55E', completed: '#6366F1', cancelled: '#EF4444', pending: '#F59E0B' };
   const pkgStatusColor = { active: '#22C55E', completed: '#6366F1', expired: '#F59E0B', cancelled: '#EF4444' };
+  const lsPayColor     = { paid: '#22C55E', pending: '#F59E0B', waived: '#6366F1' };
 
   return (
     <>
@@ -174,28 +178,67 @@ function CustomerDetailModal({ customer, clubId, onClose, onReservation, onLinke
       {/* Sekmeler */}
       <Tabs items={tabItems} active={tab} onChange={setTab} />
       <div style={{ marginTop: 12 }}>
-        {loading ? <Spinner /> : tab === 'bookings' ? (
-          bookings.length === 0
-            ? <EmptyState icon="event_available" title="Henüz rezervasyon yok" />
-            : bookings.map(b => (
-              <div key={b.id} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '10px 0', borderBottom: '1px solid var(--border)' }}>
-                <div style={{ flex: 1 }}>
-                  <div style={{ fontWeight: 600, fontSize: 13 }}>
-                    Kort {b.court?.court_number ?? '?'} · {fmtDateTime(b.start_time)}
+        {loading ? <Spinner /> : tab === 'activities' ? (() => {
+          const items = [
+            ...bookings.map(b => ({ kind: 'booking', data: b })),
+            ...lessons.map(l => ({ kind: 'lesson',  data: l })),
+          ].sort((a, b) => new Date(b.data.start_time) - new Date(a.data.start_time));
+
+          if (items.length === 0) return <EmptyState icon="event_available" title="Henüz aktivite yok" />;
+
+          return items.map(item => {
+            if (item.kind === 'booking') {
+              const b = item.data;
+              const color = bkStatusColor[b.status] || '#6B7280';
+              return (
+                <div key={`bk-${b.id}`} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '10px 0', borderBottom: '1px solid var(--border)' }}>
+                  <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 2,
+                    background: '#EEF2FF', border: '1px solid #C7D2FE', borderRadius: 8, padding: '4px 7px', minWidth: 42, flexShrink: 0 }}>
+                    <span className="material-icons" style={{ fontSize: 13, color: 'var(--brand-navy)' }}>sports_tennis</span>
+                    <span style={{ fontSize: 10, fontWeight: 700, color: 'var(--brand-navy)' }}>Rez</span>
                   </div>
-                  <div style={{ fontSize: 12, color: 'var(--text-2)', marginTop: 2 }}>
-                    {statusLabel(b.status)} · {paymentLabel(b.payment_status)}
-                    {b.total_amount > 0 && ` · ${fmtMoney(b.total_amount)}`}
+                  <div style={{ flex: 1 }}>
+                    <div style={{ fontWeight: 600, fontSize: 13 }}>
+                      Kort {b.court?.court_number ?? '?'} · {fmtDateTime(b.start_time)}
+                    </div>
+                    <div style={{ fontSize: 12, color: 'var(--text-2)', marginTop: 2 }}>
+                      {paymentLabel(b.payment_status)}{b.total_amount > 0 ? ` · ${fmtMoney(b.total_amount)}` : ''}
+                    </div>
                   </div>
+                  <span style={{ fontSize: 11, fontWeight: 700, padding: '3px 8px', borderRadius: 20,
+                    background: color + '22', color }}>
+                    {statusLabel(b.status)}
+                  </span>
                 </div>
-                <span style={{ fontSize: 11, fontWeight: 700, padding: '3px 8px', borderRadius: 20,
-                  background: (bkStatusColor[b.status] || '#6B7280') + '22',
-                  color: bkStatusColor[b.status] || '#6B7280' }}>
-                  {statusLabel(b.status)}
-                </span>
-              </div>
-            ))
-        ) : (<>
+              );
+            } else {
+              const l = item.data;
+              const color = lsPayColor[l.payment_status] || '#6B7280';
+              const payLbl = l.payment_status === 'paid' ? 'Ödendi' : l.payment_status === 'waived' ? 'Muaf' : 'Bekliyor';
+              return (
+                <div key={`ls-${l.id}`} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '10px 0', borderBottom: '1px solid var(--border)' }}>
+                  <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 2,
+                    background: '#FFF7ED', border: '1px solid #FED7AA', borderRadius: 8, padding: '4px 7px', minWidth: 42, flexShrink: 0 }}>
+                    <span className="material-icons" style={{ fontSize: 13, color: '#EA580C' }}>school</span>
+                    <span style={{ fontSize: 10, fontWeight: 700, color: '#EA580C' }}>Ders</span>
+                  </div>
+                  <div style={{ flex: 1 }}>
+                    <div style={{ fontWeight: 600, fontSize: 13 }}>
+                      {l.coach_name ? `${l.coach_name} · ` : ''}{fmtDateTime(l.start_time)}
+                    </div>
+                    <div style={{ fontSize: 12, color: 'var(--text-2)', marginTop: 2 }}>
+                      {l.is_package_lesson ? 'Paketten · ' : ''}{l.amount > 0 ? fmtMoney(l.amount) : 'Ücretsiz'}
+                    </div>
+                  </div>
+                  <span style={{ fontSize: 11, fontWeight: 700, padding: '3px 8px', borderRadius: 20,
+                    background: color + '22', color }}>
+                    {payLbl}
+                  </span>
+                </div>
+              );
+            }
+          });
+        })() : (<>
           <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: 10 }}>
             <button className="btn btn-pri btn-sm" onClick={() => setAddPkgOpen(true)}>
               <span className="material-icons" style={{ fontSize: 14 }}>add</span>
@@ -204,22 +247,48 @@ function CustomerDetailModal({ customer, clubId, onClose, onReservation, onLinke
           </div>
           {packages.length === 0
             ? <EmptyState icon="inventory_2" title="Ders paketi yok" sub="Yukarıdaki butona tıklayarak paket ekleyebilirsiniz." />
-            : packages.map(p => (
-              <div key={p.id} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '10px 0', borderBottom: '1px solid var(--border)' }}>
-                <div style={{ flex: 1 }}>
-                  <div style={{ fontWeight: 600, fontSize: 13 }}>{p.package?.name || p.custom_name || 'Özel Paket'}</div>
-                  <div style={{ fontSize: 12, color: 'var(--text-2)', marginTop: 2 }}>
-                    {p.used_lessons}/{p.total_lessons} ders
-                    {p.total_paid > 0 && ` · ${fmtMoney(p.total_paid)}`}
+            : packages.map(p => {
+              const isCustom = !p.package_id;
+              const pkgName  = p.package?.name || p.custom_name || 'Özel Paket';
+              const stColor  = pkgStatusColor[p.status] || '#6B7280';
+              const psColor  = p.payment_status === 'paid' ? '#22C55E' : '#F59E0B';
+              const psLabel  = p.payment_status === 'paid' ? 'Ödendi' : 'Bekliyor';
+              const progress = p.total_lessons > 0 ? (p.used_lessons / p.total_lessons) : 0;
+              return (
+                <div key={p.id} style={{ background: 'var(--bg)', borderRadius: 12, border: '1px solid var(--border)', padding: '14px 16px', marginBottom: 10 }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8 }}>
+                    <span style={{ fontWeight: 700, fontSize: 14, flex: 1 }}>{pkgName}</span>
+                    {isCustom && (
+                      <span style={{ fontSize: 10, fontWeight: 700, padding: '2px 7px', borderRadius: 20, background: '#FFF7ED', color: '#EA580C', border: '1px solid #FED7AA' }}>Özel</span>
+                    )}
+                  </div>
+                  <div style={{ height: 6, borderRadius: 3, background: 'var(--border)', overflow: 'hidden', marginBottom: 4 }}>
+                    <div style={{ height: '100%', width: `${Math.round(progress * 100)}%`, background: 'var(--brand-navy)', borderRadius: 3 }} />
+                  </div>
+                  <div style={{ fontSize: 11, color: 'var(--text-2)', marginBottom: 10 }}>
+                    {p.used_lessons}/{p.total_lessons} ders kullanıldı
+                  </div>
+                  <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+                    <span style={{ fontSize: 11, fontWeight: 700, padding: '3px 8px', borderRadius: 20, background: stColor + '22', color: stColor }}>
+                      {statusLabel(p.status)}
+                    </span>
+                    <span style={{ fontSize: 11, fontWeight: 700, padding: '3px 8px', borderRadius: 20, background: psColor + '22', color: psColor }}>
+                      {psLabel}
+                    </span>
+                    {p.total_paid > 0 && (
+                      <span style={{ fontSize: 11, fontWeight: 700, padding: '3px 8px', borderRadius: 20, background: 'var(--border)', color: 'var(--text-2)' }}>
+                        {fmtMoney(p.total_paid)}
+                      </span>
+                    )}
+                    {p.expiry_date && (
+                      <span style={{ fontSize: 11, fontWeight: 700, padding: '3px 8px', borderRadius: 20, background: 'var(--border)', color: 'var(--text-2)' }}>
+                        Son: {fmtDate(p.expiry_date)}
+                      </span>
+                    )}
                   </div>
                 </div>
-                <span style={{ fontSize: 11, fontWeight: 700, padding: '3px 8px', borderRadius: 20,
-                  background: (pkgStatusColor[p.status] || '#6B7280') + '22',
-                  color: pkgStatusColor[p.status] || '#6B7280' }}>
-                  {statusLabel(p.status)}
-                </span>
-              </div>
-            ))
+              );
+            })
           }
         </>)}
       </div>

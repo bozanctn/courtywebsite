@@ -1444,33 +1444,86 @@ const CustomerSvc = {
     if (error) throw error;
   },
 
-  async getCustomerStats(customerId, clubId, customerUserId) {
+  async getCustomerStats(customerId, clubId, customerUserId, customerName) {
     const { data: courts } = await sb.from('courts').select('id').eq('club_id', clubId);
     const courtIds = (courts ?? []).map(c => c.id);
-    if (courtIds.length === 0) return { totalSpent: 0, bookingCount: 0, packageCount: 0 };
+    const { data: coaches } = await sb.from('club_coaches').select('id').eq('club_id', clubId);
+    const coachIds = (coaches ?? []).map(c => c.id);
 
-    const [bk1, bk2, pkgs] = await Promise.all([
-      sb.from('bookings').select('total_amount')
-        .eq('club_customer_id', customerId).in('court_id', courtIds).neq('status', 'cancelled'),
-      customerUserId
-        ? sb.from('bookings').select('total_amount')
-            .eq('user_id', customerUserId).in('court_id', courtIds)
-            .neq('status', 'cancelled').is('club_customer_id', null)
+    const [bk1, bk2, pkgs, pkgsManual, lessons, lessonsName] = await Promise.all([
+      courtIds.length > 0
+        ? sb.from('bookings').select('total_amount').eq('club_customer_id', customerId).in('court_id', courtIds).neq('status', 'cancelled')
+        : { data: [] },
+      customerUserId && courtIds.length > 0
+        ? sb.from('bookings').select('total_amount').eq('user_id', customerUserId).in('court_id', courtIds).neq('status', 'cancelled').is('club_customer_id', null)
         : { data: [] },
       customerUserId
-        ? sb.from('player_lesson_packages').select('total_paid')
-            .eq('player_id', customerUserId).eq('club_id', clubId).eq('payment_status', 'paid')
+        ? sb.from('player_lesson_packages').select('total_paid').eq('player_id', customerUserId).eq('club_id', clubId).eq('payment_status', 'paid')
+        : { data: [] },
+      customerName?.trim()
+        ? sb.from('player_lesson_packages').select('total_paid').is('player_id', null).eq('manual_player_name', customerName.trim()).eq('club_id', clubId).eq('payment_status', 'paid')
+        : { data: [] },
+      customerUserId && coachIds.length > 0
+        ? sb.from('lessons').select('amount').eq('student_id', customerUserId).in('club_coach_id', coachIds).neq('status', 'cancelled').eq('payment_status', 'paid')
+        : { data: [] },
+      customerName?.trim() && coachIds.length > 0
+        ? sb.from('lessons').select('amount').is('student_id', null).eq('student_name', customerName.trim()).in('club_coach_id', coachIds).neq('status', 'cancelled').eq('payment_status', 'paid')
         : { data: [] },
     ]);
-    const allBk = [...(bk1.data ?? []), ...(bk2.data ?? [])];
+    const allBk   = [...(bk1.data ?? []), ...(bk2.data ?? [])];
+    const allPkgs = [...(pkgs.data ?? []), ...(pkgsManual.data ?? [])];
+    const allLs   = [...(lessons.data ?? []), ...(lessonsName.data ?? [])];
     return {
-      totalSpent:   Math.round((
+      totalSpent: Math.round((
         allBk.reduce((s, b) => s + (b.total_amount || 0), 0) +
-        (pkgs.data ?? []).reduce((s, p) => s + (p.total_paid || 0), 0)
+        allPkgs.reduce((s, p) => s + (p.total_paid || 0), 0) +
+        allLs.reduce((s, l) => s + (l.amount || 0), 0)
       ) * 100) / 100,
       bookingCount: allBk.length,
-      packageCount: (pkgs.data ?? []).length,
+      packageCount: allPkgs.length,
     };
+  },
+
+  async getCustomerLessons(customerUserId, clubId, customerName) {
+    const { data: coaches } = await sb.from('club_coaches').select('id, individual_coach_id, profiles(full_name)').eq('club_id', clubId);
+    const coachIds = (coaches ?? []).map(c => c.id);
+    if (coachIds.length === 0) return [];
+
+    const coachNameMap = {};
+    for (const c of (coaches ?? [])) coachNameMap[c.id] = c.profiles?.full_name ?? '';
+
+    const sel = 'id, date, start_time, end_time, student_name, club_coach_id, location, amount, payment_status, status, lesson_package_sessions(id)';
+    const queries = [];
+    if (customerUserId) {
+      queries.push(sb.from('lessons').select(sel).eq('student_id', customerUserId).in('club_coach_id', coachIds).neq('status', 'cancelled').order('date', { ascending: false }).limit(50));
+    }
+    if (customerName?.trim()) {
+      queries.push(sb.from('lessons').select(sel).is('student_id', null).eq('student_name', customerName.trim()).in('club_coach_id', coachIds).neq('status', 'cancelled').order('date', { ascending: false }).limit(50));
+    }
+
+    const results = await Promise.all(queries);
+    const seen = new Set();
+    const rows = [];
+    for (const res of results) {
+      for (const row of (res.data ?? [])) {
+        if (!seen.has(row.id)) {
+          seen.add(row.id);
+          rows.push({
+            id:               row.id,
+            start_time:       row.start_time ?? row.date ?? '',
+            end_time:         row.end_time ?? null,
+            date:             row.date ?? null,
+            student_name:     row.student_name ?? null,
+            coach_name:       coachNameMap[row.club_coach_id] ?? null,
+            location:         row.location ?? null,
+            amount:           row.amount ?? 0,
+            payment_status:   row.payment_status ?? 'pending',
+            is_package_lesson: Array.isArray(row.lesson_package_sessions) && row.lesson_package_sessions.length > 0,
+          });
+        }
+      }
+    }
+    return rows.sort((a, b) => new Date(b.start_time) - new Date(a.start_time));
   },
 
   async getCustomerBookings(customerId, clubId, customerUserId) {
