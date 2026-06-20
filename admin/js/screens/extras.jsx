@@ -3209,7 +3209,7 @@ function MyProgramScreen({ clubId, setScreen, clubProfile }) {
               </>}
 
               {/* ÖDEME DURUMU — paket aktifse gizlenir */}
-              {!lsUsePkg && lsPriceMode !== 'split' && <>
+              {!lsUsePkg && <>
               <div style={{ fontSize:12, fontWeight:700, color:'var(--text-2)', marginBottom:8, letterSpacing:0.4 }}>ÖDEME DURUMU</div>
               <div style={{ display:'flex', gap:10, marginBottom:20 }}>
                 <button style={{ flex:1, display:'flex', alignItems:'center', justifyContent:'center', gap:6, padding:'11px', borderRadius:12, border: (lsForm.payment_status||'unpaid') === 'unpaid' ? '1.5px solid #F59E0B' : '1.5px solid var(--border)', background: (lsForm.payment_status||'unpaid') === 'unpaid' ? '#FEF3C7' : 'var(--bg)', cursor:'pointer' }}
