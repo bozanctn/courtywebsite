@@ -477,19 +477,17 @@ function AddPackageModal({ customer, clubId, onClose, onSaved }) {
                       placeholder="90" style={inputStyle} />
                   </div>
                 </div>
+                <div>
+                  <label style={labelStyle}>HOCA (opsiyonel — boş bırakılırsa tüm hoçalarda geçerli)</label>
+                  <select value={coachId} onChange={e => setCoachId(e.target.value)} style={inputStyle}>
+                    <option value="">Tüm antrenörler</option>
+                    {coaches.map(c => (
+                      <option key={c.id} value={c.individual_coach_id || ''}>{c.full_name}</option>
+                    ))}
+                  </select>
+                </div>
               </div>
             )}
-
-            {/* Hoca seçimi */}
-            <div>
-              <label style={labelStyle}>HOCA (opsiyonel)</label>
-              <select value={coachId} onChange={e => setCoachId(e.target.value)} style={inputStyle}>
-                <option value="">Hoca seçin...</option>
-                {coaches.map(c => (
-                  <option key={c.id} value={c.individual_coach_id || ''}>{c.full_name}</option>
-                ))}
-              </select>
-            </div>
 
             {/* Ödeme durumu */}
             <div>

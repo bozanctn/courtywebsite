@@ -2391,9 +2391,9 @@ function LessonPackagesScreen({ clubId }) {
             )}
 
             {/* Ortak alanlar */}
-            <Field label="Antrenör (isteğe bağlı)">
+            <Field label="Antrenör (opsiyonel — boş bırakılırsa tüm antrenörlerde geçerli)">
               <select value={enrollCoachId} onChange={e => setEnrollCoachId(e.target.value)}>
-                <option value="">Antrenör seçin…</option>
+                <option value="">Tüm antrenörler</option>
                 {coaches.map(c => <option key={c.id} value={c.id}>{c.full_name}</option>)}
               </select>
             </Field>
@@ -2480,13 +2480,6 @@ function LessonPackagesScreen({ clubId }) {
                 )}
               </div>
             )}
-
-            <Field label="Antrenör (isteğe bağlı)">
-              <select value={form.coach_id || ''} onChange={e => setForm({...form, coach_id: e.target.value})}>
-                <option value="">Antrenör seçin…</option>
-                {coaches.map(c => <option key={c.id} value={c.id}>{c.full_name}</option>)}
-              </select>
-            </Field>
 
             <Switch on={form.is_active !== false} onChange={v => setForm({...form, is_active: v})} label="Aktif Paket" />
           </div>
