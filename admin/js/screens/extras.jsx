@@ -1892,7 +1892,7 @@ function MyProgramScreen({ clubId, setScreen, clubProfile }) {
       const amountVal = usingPkg ? 0
         : lsPriceMode === 'normal' ? ((normalCoachAmt || 0) + (normalClubAmt || 0))
         : (lsForm.amount ? parseFloat(String(lsForm.amount).replace(',', '.')) : null);
-      const payStatus = usingPkg ? 'paid' : lsPriceMode === 'split' ? 'paid' : (lsForm.payment_status || 'unpaid');
+      const payStatus = usingPkg ? 'paid' : (lsForm.payment_status || 'unpaid');
 
       const payload = {
         club_id:        clubId,
