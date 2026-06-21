@@ -637,6 +637,7 @@ function MyProgramScreen({ clubId, setScreen, clubProfile }) {
   const [clDetailSaving, setClDetailSaving] = useState(false);
   const [clEditMode,     setClEditMode]     = useState(false);
   const [clEditForm,     setClEditForm]     = useState({ start_time: '', end_time: '' });
+  const [clDeleteChoice, setClDeleteChoice] = useState(false);
 
   // Yeni ders ekleme modalı (inline — ayrı ekrana yönlendirme yok)
   const [coachesList,       setCoachesList]       = useState([]);
@@ -811,7 +812,17 @@ function MyProgramScreen({ clubId, setScreen, clubProfile }) {
       if (manualRes.error) console.error('manual_lessons error:', manualRes.error);
       if (closureRes.error)console.error('closures error:',       closureRes.error);
 
-      // 3. Kapatmaları ±90 günlük aralıkta olaya dönüştür
+      // 3. Grup dersi istisna kayıtlarını yükle
+      const groupIds = [...new Set((closureRes.data || []).filter(c => c.group_id).map(c => c.group_id))];
+      let exceptionsData = [];
+      if (groupIds.length > 0) {
+        const { data: exData } = await sb.from('group_lesson_exceptions')
+          .select('group_id, exception_date, start_hour, start_minute')
+          .in('group_id', groupIds);
+        exceptionsData = exData ?? [];
+      }
+
+      // 4. Kapatmaları ±90 günlük aralıkta olaya dönüştür
       const today_ = new Date();
       const closureEvents = [];
       (closureRes.data || []).forEach(cl => {
@@ -829,6 +840,15 @@ function MyProgramScreen({ clubId, setScreen, clubProfile }) {
             applies = cl.day_of_week === dow;
             if (applies && cl.start_date && cl.start_date > dateStr) applies = false;
             if (applies && cl.end_date   && cl.end_date   < dateStr) applies = false;
+            if (applies && cl.group_id) {
+              const isExc = exceptionsData.some(
+                ex => ex.group_id === cl.group_id &&
+                      ex.exception_date === dateStr &&
+                      ex.start_hour === cl.start_hour &&
+                      (ex.start_minute ?? 0) === (cl.start_minute ?? 0)
+              );
+              if (isExc) applies = false;
+            }
           } else {
             applies = (!cl.start_date || cl.start_date <= dateStr) && (!cl.end_date || cl.end_date >= dateStr);
           }
@@ -1672,6 +1692,11 @@ function MyProgramScreen({ clubId, setScreen, clubProfile }) {
   // ── Blok / Kapatma Detay Aksiyonları ─────────────────────────
   const deleteBlockClosure = async () => {
     if (!clDetail) return;
+    // Haftalık tekrarlayan grup dersi → seçim modalı aç
+    if (clDetail.groupId && clDetail.closureType === 'recurring_weekly') {
+      setClDeleteChoice(true);
+      return;
+    }
     const label = clDetail.groupId ? `"${clDetail.label}" grup dersini` : 'bu kapatmayı';
     if (!confirm(`${label} silmek istediğinize emin misiniz?`)) return;
     setClDetailSaving(true);
@@ -1693,6 +1718,42 @@ function MyProgramScreen({ clubId, setScreen, clubProfile }) {
         const { error } = await sb.from('court_closures').delete().eq('id', clDetail.rawId);
         if (error) throw error;
       }
+      setClDetail(null);
+      await load();
+    } catch (e) { alert('Hata: ' + e.message); }
+    finally { setClDetailSaving(false); }
+  };
+
+  const deleteThisSession = async () => {
+    if (!clDetail) return;
+    setClDetailSaving(true);
+    try {
+      const { error } = await sb.from('group_lesson_exceptions').upsert({
+        group_id:       clDetail.groupId,
+        exception_date: clDetail.closureDate,
+        start_hour:     clDetail.sh,
+        start_minute:   clDetail.sm ?? 0,
+      });
+      if (error) throw error;
+      await sb.from('group_attendance').delete()
+        .eq('group_id',     clDetail.groupId)
+        .eq('session_date', clDetail.closureDate)
+        .eq('start_hour',   clDetail.sh);
+      setClDeleteChoice(false);
+      setClDetail(null);
+      await load();
+    } catch (e) { alert('Hata: ' + e.message); }
+    finally { setClDetailSaving(false); }
+  };
+
+  const deleteEntireSeries = async () => {
+    if (!clDetail) return;
+    if (!confirm(`"${clDetail.label}" grubunun tüm haftalık serisini silmek istediğinize emin misiniz?`)) return;
+    setClDetailSaving(true);
+    try {
+      const { error } = await sb.from('court_closures').delete().eq('id', clDetail.rawId);
+      if (error) throw error;
+      setClDeleteChoice(false);
       setClDetail(null);
       await load();
     } catch (e) { alert('Hata: ' + e.message); }
@@ -1922,6 +1983,28 @@ function MyProgramScreen({ clubId, setScreen, clubProfile }) {
       }
     }
 
+    // Paket kullanılıyorsa kaydetmeden önce hoca/kulüp payı özetini göster
+    if (lsUsePkg && lsSelectedPkgId) {
+      const preCoachId  = !lsForm.use_manual_coach ? (lsForm.coach_id || null) : null;
+      const preCoachRec = coachesList.find(c => c.id === preCoachId);
+      const prePkg      = lsPackages.find(p => p.id === lsSelectedPkgId);
+      if (prePkg) {
+        const pkgDef_    = prePkg.lesson_packages || {};
+        const perSession = (pkgDef_.price ?? prePkg.custom_price ?? 0) / (pkgDef_.total_lessons || prePkg.total_lessons || 1);
+        const pct_       = preCoachRec?.coach_pay_rate || prePkg.custom_coach_pct || 0;
+        const coachEarn_ = Math.round(perSession * (pct_ / 100) * 100) / 100;
+        const clubEarn_  = Math.round((perSession - coachEarn_) * 100) / 100;
+        const summaryLines = [`Ders başı tutar: ₺${perSession.toLocaleString('tr-TR')}`];
+        if (preCoachRec && pct_ > 0) {
+          summaryLines.push(`Hoca Hakedişi:   ₺${coachEarn_.toLocaleString('tr-TR')} (%${pct_})`);
+          summaryLines.push(`Kulüp Payı:      ₺${clubEarn_.toLocaleString('tr-TR')}`);
+        } else {
+          summaryLines.push(`Kulüp Payı:      ₺${perSession.toLocaleString('tr-TR')} (hoca pay oranı tanımlı değil)`);
+        }
+        if (!confirm(`Ders Paketi Oturumu\n\n${summaryLines.join('\n')}\n\nKaydedilsin mi?`)) return;
+      }
+    }
+
     setLsSaving(true);
     try {
       const courtRow  = courts.find(c => c.id === lsForm.court_id);
@@ -1992,10 +2075,10 @@ function MyProgramScreen({ clubId, setScreen, clubProfile }) {
               if (updErr) throw updErr;
               const pkgDef = pkg.lesson_packages || {};
               const perSessionTotal = (pkgDef.price ?? pkg.custom_price ?? 0) / (pkgDef.total_lessons || pkg.total_lessons || 1);
-              const coachPct     = pkgDef.coach_percentage ?? pkg.custom_coach_pct ?? 70;
+              const coachRec = coachesList.find(c => c.id === coachId);
+              const coachPct     = coachRec?.coach_pay_rate || pkg.custom_coach_pct || 0;
               const coachEarning = perSessionTotal * (coachPct / 100);
               const clubEarning  = perSessionTotal - coachEarning;
-              const coachRec = coachesList.find(c => c.id === coachId);
               const earningPromises = [];
               if (coachRec && coachEarning > 0) {
                 earningPromises.push(sb.from('coach_earnings').insert({
@@ -2890,7 +2973,10 @@ function MyProgramScreen({ clubId, setScreen, clubProfile }) {
             {clDetail.closureType === 'recurring_weekly' && (
               <div style={{ margin:'0 20px 12px', padding:'10px 14px', borderRadius:10, background:'#EFF6FF', border:'1px solid #BFDBFE', fontSize:12, color:'#1E40AF', display:'flex', gap:8, alignItems:'flex-start' }}>
                 <span className="material-icons" style={{ fontSize:15, flexShrink:0, marginTop:1 }}>info</span>
-                <span>Bu haftalık tekrarlayan bir kapatma. Düzenleme veya silme <b>tüm haftaları</b> etkiler.</span>
+                <span>{clDetail.groupId
+                  ? 'Bu haftalık tekrarlayan bir grup dersi. Sil butonuna basınca sadece bu seansı mı yoksa tüm seriyi mi silmek istediğiniz sorulacak.'
+                  : 'Bu haftalık tekrarlayan bir kapatma. Düzenleme veya silme tüm haftaları etkiler.'
+                }</span>
               </div>
             )}
 
@@ -2945,6 +3031,36 @@ function MyProgramScreen({ clubId, setScreen, clubProfile }) {
                   </button>
                 </>
               )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ── Grup Dersi Silme Kapsam Seçimi ── */}
+      {clDeleteChoice && clDetail && (
+        <div style={{ position:'fixed', inset:0, background:'rgba(0,0,0,0.5)', zIndex:1350, display:'flex', alignItems:'center', justifyContent:'center' }}>
+          <div style={{ background:'#fff', borderRadius:20, width:'min(400px,92vw)', padding:'28px 24px', boxShadow:'0 8px 40px rgba(0,0,0,0.2)' }}>
+            <div style={{ fontSize:16, fontWeight:800, color:'var(--text-1)', marginBottom:8 }}>Silme Kapsamı</div>
+            <div style={{ fontSize:13, color:'var(--text-2)', marginBottom:24 }}>
+              <b>"{clDetail.label}"</b> grubunun{' '}
+              {new Date((clDetail.closureDate || selDate) + 'T12:00:00').toLocaleDateString('tr-TR', { weekday:'long', day:'numeric', month:'long' })}
+              {' '}tarihli seansı için ne yapmak istiyorsunuz?
+            </div>
+            <div style={{ display:'flex', flexDirection:'column', gap:10 }}>
+              <button onClick={deleteThisSession} disabled={clDetailSaving}
+                style={{ padding:'13px', borderRadius:14, border:'1.5px solid #EF4444', background:'#FEF2F2', color:'#DC2626', fontWeight:700, fontSize:14, cursor:clDetailSaving?'not-allowed':'pointer', textAlign:'left' }}>
+                <span className="material-icons" style={{ fontSize:16, verticalAlign:'middle', marginRight:6 }}>event_busy</span>
+                Sadece bu seans ({new Date((clDetail.closureDate || selDate) + 'T12:00:00').toLocaleDateString('tr-TR', { day:'numeric', month:'short' })})
+              </button>
+              <button onClick={deleteEntireSeries} disabled={clDetailSaving}
+                style={{ padding:'13px', borderRadius:14, border:'none', background:'#EF4444', color:'#fff', fontWeight:700, fontSize:14, cursor:clDetailSaving?'not-allowed':'pointer', textAlign:'left' }}>
+                <span className="material-icons" style={{ fontSize:16, verticalAlign:'middle', marginRight:6 }}>delete_forever</span>
+                Tüm seriyi sil
+              </button>
+              <button onClick={() => setClDeleteChoice(false)} disabled={clDetailSaving}
+                style={{ padding:'11px', borderRadius:14, border:'1.5px solid var(--border)', background:'var(--bg)', color:'var(--text-2)', fontWeight:600, fontSize:14, cursor:clDetailSaving?'not-allowed':'pointer' }}>
+                İptal
+              </button>
             </div>
           </div>
         </div>

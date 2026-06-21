@@ -1872,7 +1872,7 @@ function LessonPackagesScreen({ clubId }) {
   };
 
   const loadCoaches = async () => {
-    const { data } = await sb.from('club_coaches').select('id,full_name,individual_coach_id').eq('club_id', clubId).eq('is_active', true);
+    const { data } = await sb.from('club_coaches').select('id,full_name,individual_coach_id,coach_pay_rate').eq('club_id', clubId).eq('is_active', true);
     setCoaches(data || []);
   };
 
@@ -1889,7 +1889,7 @@ function LessonPackagesScreen({ clubId }) {
   };
 
   const openCreate = () => {
-    setForm({ name: '', description: '', total_lessons: 10, price: '', validity_days: 90, coach_percentage: 70, coach_id: '', is_active: true });
+    setForm({ name: '', description: '', total_lessons: 10, price: '', validity_days: 90, coach_id: '', is_active: true });
     setPkgModal({ type: 'add' });
   };
 
@@ -1912,7 +1912,6 @@ function LessonPackagesScreen({ clubId }) {
         total_lessons:    Number(form.total_lessons),
         price:            Number(form.price),
         validity_days:    Number(form.validity_days) || 90,
-        coach_percentage: Number(form.coach_percentage) || 70,
         coach_id:         coachProfileId(form.coach_id) || null,
         is_active:        form.is_active !== false,
       };
@@ -1941,11 +1940,14 @@ function LessonPackagesScreen({ clubId }) {
   const doConfirmPayment = async () => {
     const pp  = confirmModal.playerPkg;
     const pkg = pp.package;
+    const coachRec = coaches.find(c => c.individual_coach_id === pp.coach_id);
+    const coachPayRate = coachRec?.coach_pay_rate || 0;
     setConfirming(true);
     try {
       await LessonPackageSvc.confirmPayment(
         pp.id, pkg?.validity_days, pkg?.price,
-        pp.player?.full_name || 'Öğrenci', pkg?.name || 'Ders Paketi', clubId
+        pp.player?.full_name || 'Öğrenci', pkg?.name || 'Ders Paketi', clubId,
+        coachRec ? { clubCoachId: coachRec.id, coachName: coachRec.full_name, coachPayRate } : null
       );
       setConfirmModal(null);
       loadPlayerPackages(); loadStats();
@@ -2000,6 +2002,7 @@ function LessonPackagesScreen({ clubId }) {
     if (enrollMode === 'manual'   && !enrollName.trim())      { alert('Ad Soyad zorunludur.'); return; }
     const used = parseInt(enrollUsed, 10) || 0;
     if (used >= pkg.total_lessons) { alert(`Tamamlanan ders sayısı ${pkg.total_lessons - 1} veya daha az olmalı.`); return; }
+    const enrollCoachRec = enrollCoachId ? coaches.find(c => c.id === enrollCoachId) : null;
     setEnrollSaving(true);
     try {
       const customer = enrollSelectedCustomer;
@@ -2007,6 +2010,9 @@ function LessonPackagesScreen({ clubId }) {
         package_id:          pkg.id,
         club_id:             clubId,
         coach_id:            enrollCoachId ? coachProfileId(enrollCoachId) : null,
+        coach_db_id:         enrollCoachRec?.id || null,
+        coach_name:          enrollCoachRec?.full_name || null,
+        coach_pay_rate:      enrollCoachRec?.coach_pay_rate || 0,
         player_id:           enrollMode === 'app'      ? enrollSelectedPlayer.id
                            : enrollMode === 'customer' ? (customer.user_id || null)
                            : null,
@@ -2136,11 +2142,6 @@ function LessonPackagesScreen({ clubId }) {
                   <span style={{ fontSize:12, background:'var(--bg)', color:'var(--text-2)', border:'1px solid var(--border)', borderRadius:8, padding:'4px 9px' }}>
                     {pkg.validity_days} gün geçerli
                   </span>
-                  {pkg.coach_percentage < 100 && (
-                    <span style={{ fontSize:12, background:'#F5F3FF', color:'#7C3AED', border:'1px solid #DDD6FE', borderRadius:8, padding:'4px 9px' }}>
-                      Koç %{pkg.coach_percentage}
-                    </span>
-                  )}
                   {coachName(pkg.coach_id) && (
                     <span style={{ fontSize:12, background:'#EEF2FF', color:'var(--brand-navy)', border:'1px solid #C7D2FE', borderRadius:8, padding:'4px 9px', fontWeight:600 }}>
                       {coachName(pkg.coach_id)}
@@ -2150,9 +2151,6 @@ function LessonPackagesScreen({ clubId }) {
 
                 <div style={{ fontSize:12, color:'var(--text-2)' }}>
                   Ders başı: <strong>{fmtMoney(perLesson(pkg))}</strong>
-                  {pkg.coach_percentage < 100 && (
-                    <> · Koç payı: <strong>{fmtMoney(perLesson(pkg) * pkg.coach_percentage / 100)}</strong>/ders</>
-                  )}
                 </div>
 
                 <div style={{ height:1, background:'var(--border)' }} />
@@ -2461,23 +2459,14 @@ function LessonPackagesScreen({ clubId }) {
               </Field>
             </div>
 
-            <div className="fields-2">
-              <Field label="Geçerlilik Süresi (gün)">
-                <input type="number" min={1} placeholder="90" value={form.validity_days ?? ''}
-                  onChange={e => setForm({...form, validity_days: e.target.value})} />
-              </Field>
-              <Field label="Koç Payı (%)">
-                <input type="number" min={0} max={100} placeholder="70" value={form.coach_percentage ?? ''}
-                  onChange={e => setForm({...form, coach_percentage: e.target.value})} />
-              </Field>
-            </div>
+            <Field label="Geçerlilik Süresi (gün)">
+              <input type="number" min={1} placeholder="90" value={form.validity_days ?? ''}
+                onChange={e => setForm({...form, validity_days: e.target.value})} />
+            </Field>
 
             {Number(form.total_lessons) > 0 && Number(form.price) > 0 && (
               <div style={{ background:'#F5F3FF', border:'1px solid #DDD6FE', borderRadius:8, padding:'8px 12px', fontSize:12, color:'#7C3AED' }}>
                 Ders başı: {fmtMoney(Number(form.price) / Number(form.total_lessons))}
-                {Number(form.coach_percentage) > 0 && Number(form.coach_percentage) < 100 && (
-                  <> · Koç payı/ders: {fmtMoney(Number(form.price) * Number(form.coach_percentage) / 100 / Number(form.total_lessons))}</>
-                )}
               </div>
             )}
 

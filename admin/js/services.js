@@ -1199,7 +1199,7 @@ const LessonPackageSvc = {
     return data ?? [];
   },
 
-  async confirmPayment(playerPackageId, validityDays, price, playerName, packageName, clubId) {
+  async confirmPayment(playerPackageId, validityDays, price, playerName, packageName, clubId, coachInfo) {
     const today = new Date().toISOString().split('T')[0];
     const expiry = new Date();
     expiry.setDate(expiry.getDate() + (validityDays || 90));
@@ -1208,10 +1208,29 @@ const LessonPackageSvc = {
       .update({ payment_status: 'paid', status: 'active', total_paid: price, expiry_date: expiry.toISOString() })
       .eq('id', playerPackageId);
     if (error) throw error;
-    await sb.from('club_finances').insert([{
-      club_id: clubId, type: 'income', category: 'Ders Paketi Geliri',
-      amount: price, description: `${packageName} - ${playerName}`, date: today,
-    }]);
+    const coachPct   = coachInfo?.coachPayRate || 0;
+    const coachAmt   = coachPct > 0 ? Math.round((price || 0) * (coachPct / 100) * 100) / 100 : 0;
+    const clubAmt    = Math.round(((price || 0) - coachAmt) * 100) / 100;
+    const promises   = [];
+    if (clubAmt > 0) {
+      promises.push(sb.from('club_finances').insert({
+        club_id: clubId, type: 'income', category: 'Ders Paketi Geliri',
+        amount: clubAmt, description: `${packageName} - ${playerName}`, date: today,
+      }));
+    }
+    if (coachInfo && coachAmt > 0) {
+      promises.push(sb.from('coach_earnings').insert({
+        club_id:    clubId,
+        coach_id:   coachInfo.clubCoachId || null,
+        coach_name: coachInfo.coachName,
+        amount:     coachAmt,
+        court_fee:  0,
+        date:       today,
+        description: `Ders Paketi - ${packageName} - ${playerName}`,
+        payment_status: 'unpaid',
+      }));
+    }
+    await Promise.all(promises);
   },
 
   async assignCoach(playerPackageId, coachId) {
@@ -1288,14 +1307,31 @@ const LessonPackageSvc = {
       const displayName = enrollData.player_id
         ? (enrollData.player_name ?? 'Üye')
         : (enrollData.manual_player_name?.trim() ?? 'Üye');
-      await sb.from('club_finances').insert({
-        club_id: enrollData.club_id,
-        type: 'income',
-        category: 'Ders Paketi Geliri',
-        amount: totalPaid,
-        description: `${pkg.name} - ${displayName}`,
-        date: new Date().toISOString().split('T')[0],
-      });
+      const today      = new Date().toISOString().split('T')[0];
+      const coachPct   = enrollData.coach_pay_rate || 0;
+      const coachAmt   = (coachPct > 0 && enrollData.coach_id)
+        ? Math.round(totalPaid * (coachPct / 100) * 100) / 100 : 0;
+      const clubAmt    = Math.round((totalPaid - coachAmt) * 100) / 100;
+      const promises   = [];
+      if (clubAmt > 0) {
+        promises.push(sb.from('club_finances').insert({
+          club_id: enrollData.club_id, type: 'income', category: 'Ders Paketi Geliri',
+          amount: clubAmt, description: `${pkg.name} - ${displayName}`, date: today,
+        }));
+      }
+      if (coachAmt > 0 && enrollData.coach_name) {
+        promises.push(sb.from('coach_earnings').insert({
+          club_id:    enrollData.club_id,
+          coach_id:   enrollData.coach_db_id || null,
+          coach_name: enrollData.coach_name,
+          amount:     coachAmt,
+          court_fee:  0,
+          date:       today,
+          description: `Ders Paketi - ${pkg.name} - ${displayName}`,
+          payment_status: 'unpaid',
+        }));
+      }
+      await Promise.all(promises);
     }
     return plp;
   },
