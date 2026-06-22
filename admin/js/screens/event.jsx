@@ -1941,8 +1941,8 @@ function LessonPackagesScreen({ clubId }) {
     setConfirming(true);
     try {
       await LessonPackageSvc.confirmPayment(
-        pp.id, pkg?.validity_days, pkg?.price,
-        pp.player?.full_name || 'Öğrenci', pkg?.name || 'Ders Paketi', clubId,
+        pp.id, pkg?.validity_days, pp.total_paid ?? pkg?.price,
+        pp.player?.full_name || pp.manual_player_name || 'Öğrenci', pkg?.name || 'Ders Paketi', clubId,
         coachRec ? { clubCoachId: coachRec.id, coachName: coachRec.full_name, coachPayRate } : null
       );
       setConfirmModal(null);
@@ -2014,7 +2014,7 @@ function LessonPackagesScreen({ clubId }) {
                            : null,
         used_lessons:        used,
         payment_status:      enrollPayStatus,
-        total_paid:          enrollPayStatus === 'paid' ? (parseFloat(enrollPaid) || pkg.price) : null,
+        total_paid:          parseFloat(enrollPaid) || pkg.price,
         notes:               enrollNotes.trim() || null,
       });
       setEnrollModal(null);
@@ -2235,7 +2235,7 @@ function LessonPackagesScreen({ clubId }) {
                     </div>
                   </div>
                   <div style={{ display:'flex', flexDirection:'column', alignItems:'flex-end', gap:8, flexShrink:0 }}>
-                    <div style={{ fontWeight:800, fontSize:18, color:'#22C55E' }}>{fmtMoney(pkg?.price)}</div>
+                    <div style={{ fontWeight:800, fontSize:18, color:'#22C55E' }}>{fmtMoney(pp.total_paid ?? pkg?.price)}</div>
                     <button className="btn btn-pri btn-sm" onClick={() => setConfirmModal({ playerPkg: pp })}>
                       <span className="material-icons" style={{fontSize:14}}>check_circle</span>
                       Ödemeyi Onayla
@@ -2365,11 +2365,9 @@ function LessonPackagesScreen({ clubId }) {
               </Field>
             </div>
 
-            {enrollPayStatus === 'paid' && (
-              <Field label="Tahsil Edilen Tutar (₺)">
-                <input type="number" min={0} value={enrollPaid} onChange={e => setEnrollPaid(e.target.value)} />
-              </Field>
-            )}
+            <Field label={enrollPayStatus === 'paid' ? 'Tahsil Edilen Tutar (₺)' : 'Tahsil Edilecek Tutar (₺)'}>
+              <input type="number" min={0} value={enrollPaid} onChange={e => setEnrollPaid(e.target.value)} />
+            </Field>
 
             <Field label="Notlar (isteğe bağlı)">
               <textarea rows={2} value={enrollNotes} onChange={e => setEnrollNotes(e.target.value)}
@@ -2453,7 +2451,7 @@ function LessonPackagesScreen({ clubId }) {
             </div>
             <div style={{ background:'#F0FDF4', border:'1px solid #BBF7D0', borderRadius:10, padding:'12px 16px' }}>
               <div style={{ fontSize:13, color:'#22C55E', fontWeight:600 }}>Tahsil edilecek tutar</div>
-              <div style={{ fontSize:26, fontWeight:800, color:'#22C55E' }}>{fmtMoney(confirmModal.playerPkg.package?.price)}</div>
+              <div style={{ fontSize:26, fontWeight:800, color:'#22C55E' }}>{fmtMoney(confirmModal.playerPkg.total_paid ?? confirmModal.playerPkg.package?.price)}</div>
             </div>
             <div style={{ fontSize:13, color:'var(--text-2)' }}>
               Onayladığınızda bu tutar finanslara "Ders Paketi Geliri" olarak kaydedilecek ve öğrencinin paketi aktif hale gelecektir.
