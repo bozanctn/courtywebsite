@@ -1977,9 +1977,16 @@ function LessonPackagesScreen({ clubId }) {
           .or(`full_name.ilike.%${q}%,phone.ilike.%${q}%,email.ilike.%${q}%`)
           .limit(8),
       ]);
-      const appResults  = (players || []).map(p => ({ ...p, _type: 'app' }));
-      const custResults = (custRes.data || []).map(c => ({ ...c, _type: 'customer' }));
-      setEnrollResults([...appResults, ...custResults]);
+      const appList  = players || [];
+      const custList = custRes.data || [];
+      const matchedAppIds = new Set();
+      const merged = custList.map(c => {
+        const appMatch = appList.find(p => p.id === c.user_id);
+        if (appMatch) { matchedAppIds.add(appMatch.id); return { ...c, _type: 'both' }; }
+        return { ...c, _type: 'customer' };
+      });
+      appList.forEach(p => { if (!matchedAppIds.has(p.id)) merged.push({ ...p, _type: 'app' }); });
+      setEnrollResults(merged);
     } catch { setEnrollResults([]); }
     finally { setEnrollSearching(false); }
   };
@@ -1994,9 +2001,9 @@ function LessonPackagesScreen({ clubId }) {
     const enrollCoachRec = enrollCoachId ? coaches.find(c => c.id === enrollCoachId) : null;
     setEnrollSaving(true);
     try {
-      const sel        = enrollSelected;
-      const isCust     = sel?._type === 'customer';
-      const hasAppUser = isCust ? !!sel?.user_id : true;
+      const sel    = enrollSelected;
+      const isCust = sel?._type === 'customer';
+      const isBoth = sel?._type === 'both';
       await LessonPackageSvc.manualEnrollPlayer({
         package_id:          pkg.id,
         club_id:             clubId,
@@ -2004,7 +2011,9 @@ function LessonPackagesScreen({ clubId }) {
         coach_db_id:         enrollCoachRec?.id || null,
         coach_name:          enrollCoachRec?.full_name || null,
         coach_pay_rate:      enrollCoachRec?.coach_pay_rate || 0,
-        player_id:           enrollMode === 'search' ? (isCust ? (sel.user_id || null) : sel.id) : null,
+        player_id:           enrollMode === 'search'
+                               ? (isBoth ? sel.user_id : isCust ? (sel.user_id || null) : sel.id)
+                               : null,
         player_name:         enrollMode === 'search' ? sel.full_name : null,
         manual_player_name:  enrollMode === 'manual' ? enrollName.trim()
                            : (isCust && !sel.user_id) ? sel.full_name
@@ -2281,17 +2290,19 @@ function LessonPackagesScreen({ clubId }) {
 
             {/* Birleşik üye + müşteri arama */}
             {enrollMode === 'search' && (
-              <Field label="Oyuncu Ara *">
+              <Field label="Kişi Ara *">
                 {enrollSelected ? (
                   <div style={{ display:'flex', alignItems:'center', gap:10, padding:'8px 12px', background:'#EEF2FF', borderRadius:8, border:'1px solid #C7D2FE' }}>
                     <span style={{ flex:1, fontWeight:600 }}>{enrollSelected.full_name}</span>
                     <span style={{ fontSize:12, color:'var(--text-2)' }}>{enrollSelected.email || enrollSelected.phone || ''}</span>
-                    <span style={{ fontSize:10, fontWeight:700,
-                      background: enrollSelected._type === 'app' ? '#EEF2FF' : '#E0F7FA',
-                      color:      enrollSelected._type === 'app' ? 'var(--brand-navy)' : '#00796B',
-                      padding:'1px 6px', borderRadius:20 }}>
-                      {enrollSelected._type === 'app' ? 'CourtyCLUB Kullanıcısı' : 'Müşteri'}
-                    </span>
+                    <div style={{ display:'flex', gap:4 }}>
+                      {(enrollSelected._type === 'customer' || enrollSelected._type === 'both') && (
+                        <span style={{ fontSize:10, fontWeight:700, background:'#E0F7FA', color:'#00796B', padding:'1px 6px', borderRadius:20 }}>Müşteri</span>
+                      )}
+                      {(enrollSelected._type === 'app' || enrollSelected._type === 'both') && (
+                        <span style={{ fontSize:10, fontWeight:700, background:'#EEF2FF', color:'var(--brand-navy)', padding:'1px 6px', borderRadius:20 }}>CourtyCLUB Kullanıcısı</span>
+                      )}
+                    </div>
                     <button className="btn btn-ghost btn-sm btn-icon" onClick={() => { setEnrollSelected(null); setEnrollSearch(''); }}>
                       <span className="material-icons" style={{fontSize:14}}>close</span>
                     </button>
@@ -2315,12 +2326,12 @@ function LessonPackagesScreen({ clubId }) {
                             onMouseDown={() => { setEnrollSelected(r); setEnrollSearch(r.full_name); setEnrollResults([]); }}>
                             <div style={{ display:'flex', alignItems:'center', gap:6 }}>
                               <span style={{ fontWeight:600, fontSize:14 }}>{r.full_name}</span>
-                              <span style={{ fontSize:10, fontWeight:700,
-                                background: r._type === 'app' ? '#EEF2FF' : '#E0F7FA',
-                                color:      r._type === 'app' ? 'var(--brand-navy)' : '#00796B',
-                                padding:'1px 6px', borderRadius:20 }}>
-                                {r._type === 'app' ? 'CourtyCLUB Kullanıcısı' : 'Müşteri'}
-                              </span>
+                              {(r._type === 'customer' || r._type === 'both') && (
+                                <span style={{ fontSize:10, fontWeight:700, background:'#E0F7FA', color:'#00796B', padding:'1px 6px', borderRadius:20 }}>Müşteri</span>
+                              )}
+                              {(r._type === 'app' || r._type === 'both') && (
+                                <span style={{ fontSize:10, fontWeight:700, background:'#EEF2FF', color:'var(--brand-navy)', padding:'1px 6px', borderRadius:20 }}>CourtyCLUB Kullanıcısı</span>
+                              )}
                             </div>
                             <span style={{ fontSize:12, color:'var(--text-2)' }}>{r.email || r.phone || ''}</span>
                           </div>
