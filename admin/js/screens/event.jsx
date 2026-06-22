@@ -1842,24 +1842,20 @@ function LessonPackagesScreen({ clubId }) {
   const [confirming,   setConfirming]   = useState(false);
 
   // Üye kayıt modalı
-  const [enrollModal,         setEnrollModal]         = useState(null); // { pkg }
-  const [enrollMode,          setEnrollMode]          = useState('app'); // 'app' | 'manual'
-  const [enrollSearch,        setEnrollSearch]        = useState('');
-  const [enrollResults,       setEnrollResults]       = useState([]);
-  const [enrollSearching,     setEnrollSearching]     = useState(false);
-  const [enrollSelectedPlayer,setEnrollSelectedPlayer]= useState(null);
-  const [enrollName,          setEnrollName]          = useState('');
-  const [enrollPhone,         setEnrollPhone]         = useState('');
-  const [enrollCoachId,       setEnrollCoachId]       = useState('');
-  const [enrollUsed,          setEnrollUsed]          = useState('0');
-  const [enrollPayStatus,     setEnrollPayStatus]     = useState('paid');
-  const [enrollPaid,          setEnrollPaid]          = useState('');
-  const [enrollNotes,         setEnrollNotes]         = useState('');
-  const [enrollSaving,        setEnrollSaving]        = useState(false);
-  const [enrollCustomerSearch,   setEnrollCustomerSearch]   = useState('');
-  const [enrollCustomerResults,  setEnrollCustomerResults]  = useState([]);
-  const [enrollCustomerSearching,setEnrollCustomerSearching]= useState(false);
-  const [enrollSelectedCustomer, setEnrollSelectedCustomer] = useState(null);
+  const [enrollModal,    setEnrollModal]    = useState(null); // { pkg }
+  const [enrollMode,     setEnrollMode]     = useState('search'); // 'search' | 'manual'
+  const [enrollSearch,   setEnrollSearch]   = useState('');
+  const [enrollResults,  setEnrollResults]  = useState([]);
+  const [enrollSearching,setEnrollSearching]= useState(false);
+  const [enrollSelected, setEnrollSelected] = useState(null); // { ...data, _type: 'app'|'customer' }
+  const [enrollName,     setEnrollName]     = useState('');
+  const [enrollPhone,    setEnrollPhone]    = useState('');
+  const [enrollCoachId,  setEnrollCoachId]  = useState('');
+  const [enrollUsed,     setEnrollUsed]     = useState('0');
+  const [enrollPayStatus,setEnrollPayStatus]= useState('pending');
+  const [enrollPaid,     setEnrollPaid]     = useState('');
+  const [enrollNotes,    setEnrollNotes]    = useState('');
+  const [enrollSaving,   setEnrollSaving]   = useState(false);
 
   useEffect(() => { if (clubId) { loadPackages(); loadCoaches(); loadStats(); } }, [clubId]);
   useEffect(() => { if (clubId && tab !== 'packages') loadPlayerPackages(); }, [tab, clubId]);
@@ -1957,55 +1953,50 @@ function LessonPackagesScreen({ clubId }) {
 
   const openEnrollModal = (pkg) => {
     setEnrollModal({ pkg });
-    setEnrollMode('app');
-    setEnrollSearch(''); setEnrollResults([]); setEnrollSelectedPlayer(null);
-    setEnrollCustomerSearch(''); setEnrollCustomerResults([]); setEnrollSelectedCustomer(null);
+    setEnrollMode('search');
+    setEnrollSearch(''); setEnrollResults([]); setEnrollSelected(null);
     setEnrollName(''); setEnrollPhone('');
     setEnrollCoachId(coachProfileId(coaches.find(c => c.individual_coach_id === pkg.coach_id || c.id === pkg.coach_id)?.id || '') || '');
     setEnrollUsed('0');
-    setEnrollPayStatus('paid');
+    setEnrollPayStatus('pending');
     setEnrollPaid(String(pkg.price));
     setEnrollNotes('');
   };
 
   const handleEnrollSearch = async (q) => {
     setEnrollSearch(q);
-    setEnrollSelectedPlayer(null);
+    setEnrollSelected(null);
     if (q.trim().length < 2) { setEnrollResults([]); return; }
     setEnrollSearching(true);
-    try { setEnrollResults(await LessonPackageSvc.searchPlayers(q)); }
-    catch { setEnrollResults([]); }
-    finally { setEnrollSearching(false); }
-  };
-
-  const handleEnrollCustomerSearch = async (q) => {
-    setEnrollCustomerSearch(q);
-    setEnrollSelectedCustomer(null);
-    if (q.trim().length < 2) { setEnrollCustomerResults([]); return; }
-    setEnrollCustomerSearching(true);
     try {
-      const { data } = await sb.from('club_customers')
-        .select('id, full_name, phone, email, user_id')
-        .eq('club_id', clubId).eq('is_active', true)
-        .or(`full_name.ilike.%${q}%,phone.ilike.%${q}%,email.ilike.%${q}%`)
-        .limit(8);
-      setEnrollCustomerResults(data || []);
-    } catch { setEnrollCustomerResults([]); }
-    finally { setEnrollCustomerSearching(false); }
+      const [players, custRes] = await Promise.all([
+        LessonPackageSvc.searchPlayers(q),
+        sb.from('club_customers')
+          .select('id, full_name, phone, email, user_id')
+          .eq('club_id', clubId).eq('is_active', true)
+          .or(`full_name.ilike.%${q}%,phone.ilike.%${q}%,email.ilike.%${q}%`)
+          .limit(8),
+      ]);
+      const appResults  = (players || []).map(p => ({ ...p, _type: 'app' }));
+      const custResults = (custRes.data || []).map(c => ({ ...c, _type: 'customer' }));
+      setEnrollResults([...appResults, ...custResults]);
+    } catch { setEnrollResults([]); }
+    finally { setEnrollSearching(false); }
   };
 
   const doEnroll = async () => {
     if (!enrollModal) return;
     const pkg = enrollModal.pkg;
-    if (enrollMode === 'app'      && !enrollSelectedPlayer)  { alert('Bir oyuncu seçin.'); return; }
-    if (enrollMode === 'customer' && !enrollSelectedCustomer) { alert('Bir müşteri seçin.'); return; }
-    if (enrollMode === 'manual'   && !enrollName.trim())      { alert('Ad Soyad zorunludur.'); return; }
+    if (enrollMode === 'search' && !enrollSelected)   { alert('Bir kişi seçin.'); return; }
+    if (enrollMode === 'manual' && !enrollName.trim()) { alert('Ad Soyad zorunludur.'); return; }
     const used = parseInt(enrollUsed, 10) || 0;
     if (used >= pkg.total_lessons) { alert(`Tamamlanan ders sayısı ${pkg.total_lessons - 1} veya daha az olmalı.`); return; }
     const enrollCoachRec = enrollCoachId ? coaches.find(c => c.id === enrollCoachId) : null;
     setEnrollSaving(true);
     try {
-      const customer = enrollSelectedCustomer;
+      const sel        = enrollSelected;
+      const isCust     = sel?._type === 'customer';
+      const hasAppUser = isCust ? !!sel?.user_id : true;
       await LessonPackageSvc.manualEnrollPlayer({
         package_id:          pkg.id,
         club_id:             clubId,
@@ -2013,17 +2004,13 @@ function LessonPackagesScreen({ clubId }) {
         coach_db_id:         enrollCoachRec?.id || null,
         coach_name:          enrollCoachRec?.full_name || null,
         coach_pay_rate:      enrollCoachRec?.coach_pay_rate || 0,
-        player_id:           enrollMode === 'app'      ? enrollSelectedPlayer.id
-                           : enrollMode === 'customer' ? (customer.user_id || null)
+        player_id:           enrollMode === 'search' ? (isCust ? (sel.user_id || null) : sel.id) : null,
+        player_name:         enrollMode === 'search' ? sel.full_name : null,
+        manual_player_name:  enrollMode === 'manual' ? enrollName.trim()
+                           : (isCust && !sel.user_id) ? sel.full_name
                            : null,
-        player_name:         enrollMode === 'app'      ? enrollSelectedPlayer.full_name
-                           : enrollMode === 'customer' ? customer.full_name
-                           : null,
-        manual_player_name:  enrollMode === 'manual'   ? enrollName.trim()
-                           : enrollMode === 'customer' && !customer.user_id ? customer.full_name
-                           : null,
-        manual_player_phone: enrollMode === 'manual'   ? (enrollPhone.trim() || null)
-                           : enrollMode === 'customer' && !customer.user_id ? (customer.phone || null)
+        manual_player_phone: enrollMode === 'manual' ? (enrollPhone.trim() || null)
+                           : (isCust && !sel.user_id) ? (sel.phone || null)
                            : null,
         used_lessons:        used,
         payment_status:      enrollPayStatus,
@@ -2156,8 +2143,8 @@ function LessonPackagesScreen({ clubId }) {
                 <div style={{ height:1, background:'var(--border)' }} />
 
                 <div style={{ display:'flex', gap:6 }}>
-                  <button className="btn btn-pri btn-sm" title="Üye Kaydet" onClick={() => openEnrollModal(pkg)}>
-                    <span className="material-icons" style={{fontSize:15}}>person_add</span> Üye Kaydet
+                  <button className="btn btn-pri btn-sm" title="Müşteri Kaydet" onClick={() => openEnrollModal(pkg)}>
+                    <span className="material-icons" style={{fontSize:15}}>person_add</span> Müşteri Kaydet
                   </button>
                   <button className="btn btn-ghost btn-sm btn-icon" title="Düzenle" onClick={() => openEdit(pkg)}>
                     <span className="material-icons" style={{fontSize:15}}>edit</span>
@@ -2264,7 +2251,7 @@ function LessonPackagesScreen({ clubId }) {
       {/* ══ ÜYE KAYIT MODALI ══ */}
       {enrollModal && (
         <Modal
-          title={`Üye Kaydet — ${enrollModal.pkg.name}`}
+          title={`Müşteri Kaydet — ${enrollModal.pkg.name}`}
           wide
           onClose={() => setEnrollModal(null)}
           footer={
@@ -2279,94 +2266,63 @@ function LessonPackagesScreen({ clubId }) {
           <div className="fields" style={{ gap:14 }}>
             {/* Mod seçimi */}
             <div style={{ display:'flex', gap:8 }}>
-              {[{key:'app',label:'Oyuncu'},{key:'customer',label:'Müşteri'},{key:'manual',label:'Manuel'}].map(m => (
+              {[{key:'search',label:'Oyuncu Ara'},{key:'manual',label:'Manuel'}].map(m => (
                 <button key={m.key}
                   className={'btn btn-sm ' + (enrollMode === m.key ? 'btn-pri' : 'btn-ghost')}
                   onClick={() => {
                     setEnrollMode(m.key);
-                    setEnrollSearch(''); setEnrollResults([]); setEnrollSelectedPlayer(null);
-                    setEnrollCustomerSearch(''); setEnrollCustomerResults([]); setEnrollSelectedCustomer(null);
+                    setEnrollSearch(''); setEnrollResults([]); setEnrollSelected(null);
+                    setEnrollName(''); setEnrollPhone('');
                   }}>
                   {m.label}
                 </button>
               ))}
             </div>
 
-            {/* Uygulama kullanıcısı arama */}
-            {enrollMode === 'app' && (
+            {/* Birleşik üye + müşteri arama */}
+            {enrollMode === 'search' && (
               <Field label="Oyuncu Ara *">
-                {enrollSelectedPlayer ? (
+                {enrollSelected ? (
                   <div style={{ display:'flex', alignItems:'center', gap:10, padding:'8px 12px', background:'#EEF2FF', borderRadius:8, border:'1px solid #C7D2FE' }}>
-                    <span style={{ flex:1, fontWeight:600 }}>{enrollSelectedPlayer.full_name}</span>
-                    <span style={{ fontSize:12, color:'var(--text-2)' }}>{enrollSelectedPlayer.email}</span>
-                    <button className="btn btn-ghost btn-sm btn-icon" onClick={() => { setEnrollSelectedPlayer(null); setEnrollSearch(''); }}>
+                    <span style={{ flex:1, fontWeight:600 }}>{enrollSelected.full_name}</span>
+                    <span style={{ fontSize:12, color:'var(--text-2)' }}>{enrollSelected.email || enrollSelected.phone || ''}</span>
+                    <span style={{ fontSize:10, fontWeight:700,
+                      background: enrollSelected._type === 'app' ? '#EEF2FF' : '#E0F7FA',
+                      color:      enrollSelected._type === 'app' ? 'var(--brand-navy)' : '#00796B',
+                      padding:'1px 6px', borderRadius:20 }}>
+                      {enrollSelected._type === 'app' ? 'CourtyCLUB Kullanıcısı' : 'Müşteri'}
+                    </span>
+                    <button className="btn btn-ghost btn-sm btn-icon" onClick={() => { setEnrollSelected(null); setEnrollSearch(''); }}>
                       <span className="material-icons" style={{fontSize:14}}>close</span>
                     </button>
                   </div>
                 ) : (
                   <div style={{ position:'relative' }}>
                     <input
-                      placeholder="İsimle ara… (en az 2 karakter)"
+                      placeholder="İsim, telefon veya e-posta (en az 2 karakter)"
                       value={enrollSearch}
                       onChange={e => handleEnrollSearch(e.target.value)}
                     />
                     {(enrollSearching || enrollResults.length > 0) && (
-                      <div style={{ position:'absolute', top:'100%', left:0, right:0, background:'#fff', border:'1px solid var(--border)', borderRadius:8, zIndex:50, maxHeight:200, overflowY:'auto', boxShadow:'0 4px 12px rgba(0,0,0,.1)' }}>
+                      <div style={{ position:'absolute', top:'100%', left:0, right:0, background:'#fff', border:'1px solid var(--border)', borderRadius:8, zIndex:50, maxHeight:220, overflowY:'auto', boxShadow:'0 4px 12px rgba(0,0,0,.1)' }}>
                         {enrollSearching && <div style={{ padding:'10px 14px', color:'var(--text-2)', fontSize:13 }}>Aranıyor…</div>}
                         {!enrollSearching && enrollResults.length === 0 && enrollSearch.trim().length >= 2 && (
                           <div style={{ padding:'10px 14px', color:'var(--text-2)', fontSize:13 }}>Sonuç bulunamadı</div>
                         )}
-                        {enrollResults.map(p => (
-                          <div key={p.id}
+                        {enrollResults.map(r => (
+                          <div key={r._type + r.id}
                             style={{ padding:'10px 14px', cursor:'pointer', display:'flex', flexDirection:'column', gap:2, borderBottom:'1px solid var(--border)' }}
-                            onMouseDown={() => { setEnrollSelectedPlayer(p); setEnrollSearch(p.full_name); setEnrollResults([]); }}>
-                            <span style={{ fontWeight:600, fontSize:14 }}>{p.full_name}</span>
-                            <span style={{ fontSize:12, color:'var(--text-2)' }}>{p.email}</span>
-                          </div>
-                        ))}
-                      </div>
-                    )}
-                  </div>
-                )}
-              </Field>
-            )}
-
-            {/* Müşteri arama */}
-            {enrollMode === 'customer' && (
-              <Field label="Müşteri Ara *">
-                {enrollSelectedCustomer ? (
-                  <div style={{ display:'flex', alignItems:'center', gap:10, padding:'8px 12px', background:'#E0F7FA', borderRadius:8, border:'1px solid #B2EBF2' }}>
-                    <span style={{ flex:1, fontWeight:600 }}>{enrollSelectedCustomer.full_name}</span>
-                    <span style={{ fontSize:12, color:'var(--text-2)' }}>{enrollSelectedCustomer.phone || enrollSelectedCustomer.email || ''}</span>
-                    {enrollSelectedCustomer.user_id && (
-                      <span style={{ fontSize:10, fontWeight:700, background:'#EEF2FF', color:'var(--brand-navy)', padding:'1px 6px', borderRadius:20 }}>Uygulamada Kayıtlı</span>
-                    )}
-                    <button className="btn btn-ghost btn-sm btn-icon" onClick={() => { setEnrollSelectedCustomer(null); setEnrollCustomerSearch(''); }}>
-                      <span className="material-icons" style={{fontSize:14}}>close</span>
-                    </button>
-                  </div>
-                ) : (
-                  <div style={{ position:'relative' }}>
-                    <input
-                      placeholder="Ad, telefon veya e-posta (en az 2 karakter)"
-                      value={enrollCustomerSearch}
-                      onChange={e => handleEnrollCustomerSearch(e.target.value)}
-                    />
-                    {(enrollCustomerSearching || enrollCustomerResults.length > 0) && (
-                      <div style={{ position:'absolute', top:'100%', left:0, right:0, background:'#fff', border:'1px solid var(--border)', borderRadius:8, zIndex:50, maxHeight:200, overflowY:'auto', boxShadow:'0 4px 12px rgba(0,0,0,.1)' }}>
-                        {enrollCustomerSearching && <div style={{ padding:'10px 14px', color:'var(--text-2)', fontSize:13 }}>Aranıyor…</div>}
-                        {!enrollCustomerSearching && enrollCustomerResults.length === 0 && enrollCustomerSearch.trim().length >= 2 && (
-                          <div style={{ padding:'10px 14px', color:'var(--text-2)', fontSize:13 }}>Sonuç bulunamadı</div>
-                        )}
-                        {enrollCustomerResults.map(c => (
-                          <div key={c.id}
-                            style={{ padding:'10px 14px', cursor:'pointer', display:'flex', flexDirection:'column', gap:2, borderBottom:'1px solid var(--border)' }}
-                            onMouseDown={() => { setEnrollSelectedCustomer(c); setEnrollCustomerSearch(c.full_name); setEnrollCustomerResults([]); }}>
+                            onMouseDown={() => { setEnrollSelected(r); setEnrollSearch(r.full_name); setEnrollResults([]); }}>
                             <div style={{ display:'flex', alignItems:'center', gap:6 }}>
-                              <span style={{ fontWeight:600, fontSize:14 }}>{c.full_name}</span>
-                              {c.user_id && <span style={{ fontSize:10, fontWeight:700, background:'#EEF2FF', color:'var(--brand-navy)', padding:'1px 6px', borderRadius:20 }}>Uygulamada Kayıtlı</span>}
+                              <span style={{ fontWeight:600, fontSize:14 }}>{r.full_name}</span>
+                              <span style={{ fontSize:10, fontWeight:700,
+                                background: r._type === 'app' ? '#EEF2FF' : '#E0F7FA',
+                                color:      r._type === 'app' ? 'var(--brand-navy)' : '#00796B',
+                                padding:'1px 6px', borderRadius:20 }}>
+                                {r._type === 'app' ? 'CourtyCLUB Kullanıcısı' : 'Müşteri'}
+                              </span>
                             </div>
-                            <span style={{ fontSize:12, color:'var(--text-2)' }}>{c.phone || c.email || ''}</span>
+                            <span style={{ fontSize:12, color:'var(--text-2)' }}>{r.email || r.phone || ''}</span>
                           </div>
                         ))}
                       </div>
@@ -2380,7 +2336,7 @@ function LessonPackagesScreen({ clubId }) {
             {enrollMode === 'manual' && (
               <div className="fields-2">
                 <Field label="Ad Soyad *">
-                  <input placeholder="Üye adı" value={enrollName} onChange={e => setEnrollName(e.target.value)} />
+                  <input placeholder="Müşteri adı" value={enrollName} onChange={e => setEnrollName(e.target.value)} />
                 </Field>
                 <Field label="Telefon (isteğe bağlı)">
                   <input placeholder="05xx xxx xx xx" value={enrollPhone} onChange={e => setEnrollPhone(e.target.value)} />
