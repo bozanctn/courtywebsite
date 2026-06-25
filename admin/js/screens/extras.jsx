@@ -690,8 +690,9 @@ function MyProgramScreen({ clubId, setScreen, clubProfile }) {
 
   // Paket yükleme — öğrenci seçilince (hoca filtresiz, tüm aktif paketler)
   React.useEffect(() => {
-    const playerId = lsSelectedPlayer?.id;
-    // user_id olmayan müşteri seçildiyse manual_player_name ile sorgula
+    // Müşterinin CourtyCLUB hesabı varsa onun player_id'si olarak kullan
+    const playerId = lsSelectedPlayer?.id || lsSelectedCustomer?.user_id || null;
+    // Sadece app hesabı olmayan müşteri için isimle sorgula
     const manualName = (!playerId && lsSelectedCustomer && !lsSelectedCustomer.user_id)
       ? lsSelectedCustomer.full_name : null;
     if ((!playerId && !manualName) || lsForm.use_manual_coach) {
@@ -701,18 +702,25 @@ function MyProgramScreen({ clubId, setScreen, clubProfile }) {
       setLsLoadingPkgs(true);
       try {
         const now = new Date().toISOString();
-        let q = sb.from('player_lesson_packages')
+        const baseQ = () => sb.from('player_lesson_packages')
           .select('*, lesson_packages(name, total_lessons, price, validity_days, coach_percentage)')
-          .eq('payment_status', 'paid').eq('status', 'active')
+          .in('payment_status', ['paid', 'pending']).eq('status', 'active')
           .or(`expiry_date.is.null,expiry_date.gt.${now}`)
           .order('created_at', { ascending: false });
-        if (playerId) {
-          q = q.eq('player_id', playerId);
-        } else {
-          q = q.is('player_id', null).eq('manual_player_name', manualName);
+        // Hem player_id hem de manual_player_name üzerinden paralel sorgula
+        const queries = [];
+        if (playerId)    queries.push(baseQ().eq('player_id', playerId));
+        if (manualName)  queries.push(baseQ().is('player_id', null).eq('manual_player_name', manualName));
+        // Müşteri linked ama bazı paketleri isimle kaydedilmiş olabilir
+        if (playerId && lsSelectedCustomer?.full_name) {
+          queries.push(baseQ().is('player_id', null).eq('manual_player_name', lsSelectedCustomer.full_name));
         }
-        const { data } = await q;
-        const pkgs = (data || []).map(r => ({
+        const results = await Promise.all(queries);
+        const seen = new Set();
+        const allData = results.flatMap(r => r.data || []).filter(r => {
+          if (seen.has(r.id)) return false; seen.add(r.id); return true;
+        });
+        const pkgs = allData.map(r => ({
           ...r, package_name: r.lesson_packages?.name || r.custom_name || 'Özel Paket',
           remaining: (r.total_lessons || 0) - (r.used_lessons || 0),
         }));
@@ -1840,7 +1848,7 @@ function MyProgramScreen({ clubId, setScreen, clubProfile }) {
 
   // Öğrenci seçilince aktif paketi varsa hocanın otomatik seçilmesi
   React.useEffect(() => {
-    const playerId = lsSelectedPlayer?.id;
+    const playerId = lsSelectedPlayer?.id || lsSelectedCustomer?.user_id || null;
     const manualName = (!playerId && lsSelectedCustomer && !lsSelectedCustomer.user_id)
       ? lsSelectedCustomer.full_name : null;
     if ((!playerId && !manualName) || lsForm.use_manual_coach || coachesList.length === 0) return;
@@ -1849,18 +1857,20 @@ function MyProgramScreen({ clubId, setScreen, clubProfile }) {
       setLsAutoCoachLoading(true);
       try {
         const now = new Date().toISOString();
-        let q = sb.from('player_lesson_packages')
+        const baseQ = () => sb.from('player_lesson_packages')
           .select('coach_id')
-          .eq('payment_status', 'paid').eq('status', 'active')
+          .in('payment_status', ['paid', 'pending']).eq('status', 'active')
           .or(`expiry_date.is.null,expiry_date.gt.${now}`)
           .order('created_at', { ascending: false })
           .limit(1);
-        if (playerId) {
-          q = q.eq('player_id', playerId);
-        } else {
-          q = q.is('player_id', null).eq('manual_player_name', manualName);
+        const queries = [];
+        if (playerId)   queries.push(baseQ().eq('player_id', playerId));
+        if (manualName) queries.push(baseQ().is('player_id', null).eq('manual_player_name', manualName));
+        if (playerId && lsSelectedCustomer?.full_name) {
+          queries.push(baseQ().is('player_id', null).eq('manual_player_name', lsSelectedCustomer.full_name));
         }
-        const { data } = await q;
+        const results = await Promise.all(queries);
+        const data = results.flatMap(r => r.data || []);
         if (!cancelled && data?.length > 0) {
           const matchedCoach = coachesList.find(c => c.individual_coach_id === data[0].coach_id);
           if (matchedCoach) setLsForm(prev => ({ ...prev, coach_id: matchedCoach.id }));
@@ -3202,7 +3212,7 @@ function MyProgramScreen({ clubId, setScreen, clubProfile }) {
               )}
 
               {/* PAKET */}
-              {(lsSelectedPlayer || (lsSelectedCustomer && !lsSelectedCustomer.user_id)) && !lsForm.use_manual_coach && lsForm.coach_id && (
+              {(lsSelectedPlayer || lsSelectedCustomer) && !lsForm.use_manual_coach && lsForm.coach_id && (
                 <div style={{ marginBottom:14 }}>
                   {lsLoadingPkgs ? (
                     <div style={{ fontSize:13, color:'var(--text-2)', padding:'6px 0' }}>Paketler yükleniyor...</div>

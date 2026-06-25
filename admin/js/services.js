@@ -1589,31 +1589,20 @@ const CustomerSvc = {
   },
 
   async getCustomerLessonPackages(customerId, clubId, customerUserId, customerName) {
-    const sel = '*, package:lesson_packages(name, total_lessons, price)';
-    const results = [];
-
-    if (customerUserId) {
-      const { data, error } = await sb.from('player_lesson_packages')
-        .select(sel)
-        .eq('player_id', customerUserId)
-        .eq('club_id', clubId)
-        .order('created_at', { ascending: false });
-      if (error) throw error;
-      results.push(...(data ?? []));
-    }
-
-    if (customerName?.trim()) {
-      const { data, error } = await sb.from('player_lesson_packages')
-        .select(sel)
-        .is('player_id', null)
-        .eq('manual_player_name', customerName.trim())
-        .eq('club_id', clubId)
-        .order('created_at', { ascending: false });
-      if (error) throw error;
-      results.push(...(data ?? []));
-    }
-
-    return results;
+    // Öğrenciler sekmesiyle aynı mantık: tüm paketleri çek, istemci tarafında filtrele.
+    // Bu sayede player_id farklı bir hesaba bağlı olsa da profile join'ındaki full_name eşleşirse bulunur.
+    const sel = '*, package:lesson_packages(name, total_lessons, price), player:profiles!player_id(id, full_name)';
+    const { data, error } = await sb.from('player_lesson_packages')
+      .select(sel)
+      .eq('club_id', clubId)
+      .order('created_at', { ascending: false });
+    if (error) throw error;
+    const name = customerName?.trim()?.toLowerCase();
+    return (data ?? []).filter(p =>
+      (customerUserId && p.player_id === customerUserId) ||
+      (name && p.manual_player_name?.trim()?.toLowerCase() === name) ||
+      (name && p.player?.full_name?.trim()?.toLowerCase() === name)
+    );
   },
 
   async linkToProfile(customerId, userId) {
