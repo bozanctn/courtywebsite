@@ -606,15 +606,16 @@ function MyProgramScreen({ clubId, setScreen, clubProfile }) {
   const [bookingCustomerId,      setBookingCustomerId]      = useState(null);
   const [bookingCustomerName,    setBookingCustomerName]    = useState('');
   const [bookingCustomerQuery,   setBookingCustomerQuery]   = useState('');
-  const [bookingCustomerResults, setBookingCustomerResults] = useState([]);
+  const [bookingCustomerResults,   setBookingCustomerResults]   = useState([]);
+  const [bookingCourtyclubResults, setBookingCourtyclubResults] = useState([]);
   const hasMembership = clubProfile?.has_membership_system !== false;
-  const [bookingPersonMode,      setBookingPersonMode]      = useState('member'); // 'member' | 'customer' | 'guest'
-  const [bookingGuestName,       setBookingGuestName]       = useState('');
+  const [bookingPersonMode,        setBookingPersonMode]        = useState('member'); // 'member' | 'customer'
   const [bookingPriceOverride,   setBookingPriceOverride]   = useState('');
 
-  // Misafir → müşteri ekleme prompt
-  const [guestCustModal,  setGuestCustModal]  = useState(null); // null | { bookingId, name, phone }
-  const [guestCustSaving, setGuestCustSaving] = useState(false);
+  // Hızlı müşteri ekle
+  const [quickAddCust,    setQuickAddCust]    = useState(null); // null | 'booking' | 'lesson'
+  const [quickAddForm,    setQuickAddForm]    = useState({ name: '', phone: '' });
+  const [quickAddSaving,  setQuickAddSaving]  = useState(false);
 
   // Ham veri — sorgu yok, useMemo'da filtre var
   const [allBookings,       setAllBookings]       = useState([]);
@@ -651,10 +652,12 @@ function MyProgramScreen({ clubId, setScreen, clubProfile }) {
   const [lsUsePkg,          setLsUsePkg]          = useState(false);
   const [lsSelectedPkgId,   setLsSelectedPkgId]   = useState(null);
   const [lsSaving,          setLsSaving]          = useState(false);
+  const lsSavingGuard = React.useRef(false);
   const [lsPersonMode,      setLsPersonMode]      = useState('member'); // 'member' | 'customer'
   const [lsSelectedCustomer,setLsSelectedCustomer]= useState(null);
   const [lsCustomerSearch,  setLsCustomerSearch]  = useState('');
   const [lsCustomerResults, setLsCustomerResults] = useState([]);
+  const [lsCourtyclubResults, setLsCourtyclubResults] = useState([]);
   const [lsAutoCoachLoading,setLsAutoCoachLoading]= useState(false);
   const [lsPriceMode,       setLsPriceMode]       = useState('normal'); // 'normal' | 'split'
   const [lsCoachAmount,     setLsCoachAmount]     = useState('');
@@ -1165,14 +1168,14 @@ function MyProgramScreen({ clubId, setScreen, clubProfile }) {
       const [sh, sm] = startStr.split(':').map(Number);
       const [eh, em] = endStr.split(':').map(Number);
       const durationMins = (eh * 60 + em) - (sh * 60 + sm);
-      const duration = [0.75, 1.0, 1.5, 2.0].reduce((prev, cur) =>
+      const duration = [0.25, 0.5, 0.75, 1.0, 1.5, 2.0].reduce((prev, cur) =>
         Math.abs(cur * 60 - durationMins) < Math.abs(prev * 60 - durationMins) ? cur : prev
       );
       setBookingForm({ courtId: courtIds[0], date: selDate, startTime: startStr, endTime: endStr, duration, status: 'confirmed' });
       setBookingMemberId(null); setBookingMemberName(''); setBookingMemberQuery(''); setBookingMemberResults([]);
       setBookingCustomerId(null); setBookingCustomerName(''); setBookingCustomerQuery(''); setBookingCustomerResults([]);
+      setBookingCourtyclubResults([]);
       setBookingPersonMode('member');
-      setBookingGuestName('');
       setBookingPriceOverride('');
       setSlotTypeModal(false);
       loadBookingAvailCourts(selDate, startStr, endStr);
@@ -1186,6 +1189,7 @@ function MyProgramScreen({ clubId, setScreen, clubProfile }) {
       });
       setLsSelectedPlayer(null); setLsPlayerSearch(''); setLsPlayerResults([]);
       setLsSelectedCustomer(null); setLsCustomerSearch(''); setLsCustomerResults([]);
+      setLsCourtyclubResults([]);
       setLsPersonMode('member');
       setLsUsePkg(false); setLsSelectedPkgId(null); setLsPackages([]);
       setLsPriceMode('normal');
@@ -1826,17 +1830,19 @@ function MyProgramScreen({ clubId, setScreen, clubProfile }) {
     } catch(e) { console.error(e); }
   };
 
-  // Birleşik arama — üye + müşteri aynı anda
+  // Birleşik arama — üye + müşteri + courtyclub oyuncusu aynı anda
   const searchLsPerson = async (query) => {
     setLsPlayerSearch(query);
     setLsForm(prev => ({ ...prev, student_name: query, player_id: null }));
-    if (!query || query.length < 2) { setLsPlayerResults([]); setLsCustomerResults([]); return; }
-    const [{ data: memberships }, { data: customers }] = await Promise.all([
+    if (!query || query.length < 2) { setLsPlayerResults([]); setLsCustomerResults([]); setLsCourtyclubResults([]); return; }
+    const [{ data: memberships }, { data: customers }, { data: appPlayers }] = await Promise.all([
       sb.from('club_memberships')
         .select('user_id, member_name, profile:profiles!club_memberships_user_id_fkey(id, full_name, email)')
         .eq('club_id', clubId).eq('status', 'active').limit(30),
       sb.from('club_customers').select('id,full_name,phone,email,user_id').eq('club_id',clubId).eq('is_active',true)
         .or(`full_name.ilike.%${query}%,phone.ilike.%${query}%,email.ilike.%${query}%`).limit(6),
+      sb.from('profiles').select('id,full_name,email,phone').eq('user_type','player')
+        .or(`full_name.ilike.%${query}%,email.ilike.%${query}%,phone.ilike.%${query}%`).limit(8),
     ]);
     const lq = query.toLowerCase();
     const players = (memberships || [])
@@ -1844,6 +1850,13 @@ function MyProgramScreen({ clubId, setScreen, clubProfile }) {
       .map(m => ({ id: m.profile?.id || m.user_id, full_name: m.profile?.full_name || m.member_name, email: m.profile?.email, _kind: 'member' }));
     setLsPlayerResults(players);
     setLsCustomerResults((customers || []).map(c => ({ ...c, _kind: 'customer' })));
+    // Zaten üye veya müşteri olarak listelenenlerden hariç tut
+    const memberIds = new Set(players.map(p => p.id).filter(Boolean));
+    const customerUserIds = new Set((customers || []).map(c => c.user_id).filter(Boolean));
+    const courtyclubPlayers = (appPlayers || []).filter(p =>
+      !memberIds.has(p.id) && !customerUserIds.has(p.id)
+    ).map(p => ({ ...p, _kind: 'courtyclub' }));
+    setLsCourtyclubResults(courtyclubPlayers);
   };
 
   // Öğrenci seçilince aktif paketi varsa hocanın otomatik seçilmesi
@@ -1893,6 +1906,10 @@ function MyProgramScreen({ clubId, setScreen, clubProfile }) {
       alert('Bitiş saati başlangıç saatinden sonra olmalıdır.'); return;
     }
 
+    if (lsSavingGuard.current) return;
+    lsSavingGuard.current = true;
+    setLsSaving(true);
+
     const dateStr = lsForm.date;
     const startHH = lsForm.start_time.slice(0, 5);
     const endHH   = lsForm.end_time.slice(0, 5);
@@ -1908,7 +1925,9 @@ function MyProgramScreen({ clubId, setScreen, clubProfile }) {
       sb.from('court_closures').select('*').eq('court_id', lsForm.court_id).eq('is_active', true),
     ]);
 
-    if (bConflict?.length > 0) { alert('Bu kort seçilen saatte zaten rezerve edilmiş.'); return; }
+    const resetGuard = () => { lsSavingGuard.current = false; setLsSaving(false); };
+
+    if (bConflict?.length > 0) { resetGuard(); alert('Bu kort seçilen saatte zaten rezerve edilmiş.'); return; }
 
     const courtRow0 = courts.find(c => c.id === lsForm.court_id);
     const locationStr = courtRow0 ? `Kort ${courtRow0.court_number}` : '';
@@ -1919,7 +1938,7 @@ function MyProgramScreen({ clubId, setScreen, clubProfile }) {
         const le = (l.end_time   || '').slice(0, 5);
         return ls < endHH && le > startHH;
       });
-    if (hasManualConflict) { alert('Bu kort seçilen saatte zaten dolu.'); return; }
+    if (hasManualConflict) { resetGuard(); alert('Bu kort seçilen saatte zaten dolu.'); return; }
 
     const dow = new Date(dateStr + 'T12:00:00').getDay();
     const closureBlock = (closures || []).some(cl => {
@@ -1929,9 +1948,7 @@ function MyProgramScreen({ clubId, setScreen, clubProfile }) {
       if (cl.closure_type === 'recurring_weekly') return cl.day_of_week === dow;
       return (!cl.start_date || cl.start_date <= dateStr) && (!cl.end_date || cl.end_date >= dateStr);
     });
-    if (closureBlock) {
-      if (!confirm('Bu kort seçilen saatte kapalı olarak işaretlenmiş. Yine de ders oluşturulsun mu?')) return;
-    }
+    if (closureBlock) { resetGuard(); alert('Bu kort seçilen saatte kapalı olarak işaretlenmiş.'); return; }
 
     if (!lsForm.use_manual_coach && lsForm.coach_id) {
       const [sh, sm] = startHH.split(':').map(Number);
@@ -1948,7 +1965,7 @@ function MyProgramScreen({ clubId, setScreen, clubProfile }) {
         const le = (l.end_time   || '').slice(0, 5);
         return ls < endHH && le > startHH;
       });
-      if (hasCoachConflict) { alert('Bu antrenörün seçilen saatte başka bir dersi var.'); return; }
+      if (hasCoachConflict) { resetGuard(); alert(`${coachLabel} adlı antrenörün bu saatte zaten bir dersi var. Ders eklenemez.`); return; }
 
       const { data: coachClosures } = await sb.from('court_closures')
         .select('closure_type,day_of_week,start_hour,end_hour,start_date,end_date,reason')
@@ -1967,7 +1984,9 @@ function MyProgramScreen({ clubId, setScreen, clubProfile }) {
         }
       }
       if (conflicts.length > 0) {
-        if (!confirm(`⚠️ Hoca Çakışması\n\n${coachLabel} adlı hocanın bu saatte başka programı var:\n\n${conflicts.join('\n')}\n\nYine de eklensin mi?`)) return;
+        resetGuard();
+        alert(`⚠️ Hoca Çakışması\n\n${coachLabel} adlı hocanın bu saatte başka programı var:\n\n${conflicts.join('\n')}\n\nDers eklenemez.`);
+        return;
       }
     }
 
@@ -1988,6 +2007,7 @@ function MyProgramScreen({ clubId, setScreen, clubProfile }) {
         isInvited = (invited?.length ?? 0) > 0;
       }
       if ((ownBk?.length ?? 0) > 0 || isInvited || (stuLessons?.length ?? 0) > 0) {
+        resetGuard();
         alert(`${lsSelectedPlayer?.full_name || 'Öğrenci'} adlı oyuncunun bu saatte başka bir rezervasyonu veya dersi bulunuyor.`);
         return;
       }
@@ -2011,11 +2031,10 @@ function MyProgramScreen({ clubId, setScreen, clubProfile }) {
         } else {
           summaryLines.push(`Kulüp Payı:      ₺${perSession.toLocaleString('tr-TR')} (hoca pay oranı tanımlı değil)`);
         }
-        if (!confirm(`Ders Paketi Oturumu\n\n${summaryLines.join('\n')}\n\nKaydedilsin mi?`)) return;
+        if (!confirm(`Ders Paketi Oturumu\n\n${summaryLines.join('\n')}\n\nKaydedilsin mi?`)) { resetGuard(); return; }
       }
     }
 
-    setLsSaving(true);
     try {
       const courtRow  = courts.find(c => c.id === lsForm.court_id);
       const coachId   = !lsForm.use_manual_coach ? (lsForm.coach_id || null) : null;
@@ -2196,6 +2215,7 @@ function MyProgramScreen({ clubId, setScreen, clubProfile }) {
       setLsModal(null);
       setLsSelectedPlayer(null); setLsPlayerSearch(''); setLsPlayerResults([]);
       setLsSelectedCustomer(null); setLsCustomerSearch(''); setLsCustomerResults([]);
+      setLsCourtyclubResults([]);
       setLsPersonMode('member');
       setLsUsePkg(false); setLsSelectedPkgId(null); setLsPackages([]);
       setLsCoachAmount(''); setLsClubAmount('');
@@ -2204,7 +2224,35 @@ function MyProgramScreen({ clubId, setScreen, clubProfile }) {
       if (e.message?.includes('no_overlapping_bookings') || e.code === '23P01') {
         alert('Bu kort seçilen saatte zaten dolu. Lütfen farklı bir saat veya kort seçin.');
       } else { alert(e.message); }
-    } finally { setLsSaving(false); }
+    } finally { lsSavingGuard.current = false; setLsSaving(false); }
+  };
+
+  // ── Hızlı Müşteri Ekle ───────────────────────────────────────
+  const saveQuickCust = async () => {
+    if (!quickAddForm.name.trim()) { alert('Ad Soyad gereklidir.'); return; }
+    if (!quickAddForm.phone.trim()) { alert('Telefon gereklidir.'); return; }
+    setQuickAddSaving(true);
+    try {
+      const { data: newCust, error } = await sb.from('club_customers').insert({
+        club_id:   clubId,
+        full_name: quickAddForm.name.trim(),
+        phone:     quickAddForm.phone.trim(),
+        is_active: true,
+      }).select().single();
+      if (error) throw error;
+      if (quickAddCust === 'lesson') {
+        setLsSelectedCustomer(newCust);
+        setLsForm(prev => ({ ...prev, student_name: newCust.full_name, player_id: null }));
+        setLsPlayerSearch(''); setLsPlayerResults([]); setLsCustomerResults([]);
+      } else {
+        setBookingCustomerId(newCust.id);
+        setBookingCustomerName(newCust.full_name);
+        setBookingPersonMode('customer');
+        setBookingMemberQuery(''); setBookingMemberResults([]); setBookingCustomerResults([]); setBookingCourtyclubResults([]);
+      }
+      setQuickAddCust(null);
+    } catch (e) { alert(e.message); }
+    finally { setQuickAddSaving(false); }
   };
 
   // ── Inline Rezervasyon ────────────────────────────────────────
@@ -2301,29 +2349,28 @@ function MyProgramScreen({ clubId, setScreen, clubProfile }) {
 
   const searchBookingPerson = async (q) => {
     setBookingMemberQuery(q);
-    if (q.length < 2) { setBookingMemberResults([]); setBookingCustomerResults([]); return; }
+    if (q.length < 2) { setBookingMemberResults([]); setBookingCustomerResults([]); setBookingCourtyclubResults([]); return; }
     setBookingMemberLoading(true);
     try {
-      if (hasMembership) {
-        const [{ data: memberships }, { data: customers }] = await Promise.all([
-          sb.from('club_memberships')
-            .select('user_id, member_name, profile:profiles!club_memberships_user_id_fkey(id, full_name, email)')
-            .eq('club_id', clubId).eq('status', 'active').limit(20),
-          sb.from('club_customers').select('id, full_name, phone, email, user_id').eq('club_id', clubId).eq('is_active', true)
-            .or(`full_name.ilike.%${q}%,phone.ilike.%${q}%,email.ilike.%${q}%`).limit(6),
-        ]);
-        const lq = q.toLowerCase();
-        const players = (memberships || [])
-          .filter(m => (m.profile?.full_name || m.member_name || '').toLowerCase().includes(lq))
-          .map(m => ({ id: m.profile?.id || m.user_id, full_name: m.profile?.full_name || m.member_name, email: m.profile?.email }));
-        setBookingMemberResults(players);
-        setBookingCustomerResults(customers || []);
-      } else {
-        const { data: customers } = await sb.from('club_customers').select('id, full_name, phone, email, user_id').eq('club_id', clubId).eq('is_active', true)
-          .or(`full_name.ilike.%${q}%,phone.ilike.%${q}%,email.ilike.%${q}%`).limit(6);
-        setBookingMemberResults([]);
-        setBookingCustomerResults(customers || []);
-      }
+      const [memRes, custRes, ccRes] = await Promise.all([
+        sb.from('club_memberships')
+          .select('user_id, member_name, profile:profiles!club_memberships_user_id_fkey(id, full_name, email)')
+          .eq('club_id', clubId).eq('status', 'active').limit(30),
+        sb.from('club_customers').select('id, full_name, phone, email, user_id').eq('club_id', clubId).eq('is_active', true)
+          .or(`full_name.ilike.%${q}%,phone.ilike.%${q}%,email.ilike.%${q}%`).limit(6),
+        sb.from('profiles').select('id, full_name, email, phone').eq('user_type', 'player')
+          .or(`full_name.ilike.%${q}%,email.ilike.%${q}%,phone.ilike.%${q}%`).limit(8),
+      ]);
+      const lq = q.toLowerCase();
+      const members = (memRes.data || [])
+        .filter(m => (m.profile?.full_name || m.member_name || '').toLowerCase().includes(lq))
+        .map(m => ({ id: m.profile?.id || m.user_id, full_name: m.profile?.full_name || m.member_name, email: m.profile?.email }));
+      const customers = custRes.data || [];
+      const memberIds = new Set(members.map(p => p.id).filter(Boolean));
+      const customerUserIds = new Set(customers.map(c => c.user_id).filter(Boolean));
+      setBookingMemberResults(members);
+      setBookingCustomerResults(customers);
+      setBookingCourtyclubResults((ccRes.data || []).filter(p => !memberIds.has(p.id) && !customerUserIds.has(p.id)));
     } catch(e) { console.error(e); }
     finally { setBookingMemberLoading(false); }
   };
@@ -2395,7 +2442,7 @@ function MyProgramScreen({ clubId, setScreen, clubProfile }) {
         total_amount:      totalAmount,
         calculated_amount: calculatedAmount,
         club_customer_id:  bookingCustomerId || null,
-        player_name:       bookingMemberName || bookingCustomerName || bookingGuestName.trim() || null,
+        player_name:       bookingMemberName || bookingCustomerName || null,
       }).select('id').single();
       if (bkErr) throw bkErr;
 
@@ -2414,24 +2461,18 @@ function MyProgramScreen({ clubId, setScreen, clubProfile }) {
       setSlotClickInfo(null);
       setBookingCustomerId(null); setBookingCustomerName('');
       setBookingCustomerQuery(''); setBookingCustomerResults([]);
+      setBookingCourtyclubResults([]);
       setBookingPersonMode('member');
       await load();
 
-      // Misafir modunda isim varsa → müşteri ekleme promptu göster
-      if (bookingPersonMode === 'guest' && bookingGuestName.trim()) {
-        let bookingId = insertedBkId;
-        if (!bookingId) {
-          const { data: found } = await sb.from('bookings').select('id')
-            .eq('court_id', courtId).eq('start_time', startDb).eq('user_id', user.id)
-            .order('created_at', { ascending: false }).limit(1).maybeSingle();
-          bookingId = found?.id ?? null;
-        }
-        setGuestCustModal({ bookingId, name: bookingGuestName.trim(), phone: '' });
-        return;
-      }
-
       alert('Rezervasyon başarıyla oluşturuldu.');
-    } catch(e) { alert('Hata: ' + e.message); }
+    } catch(e) {
+      if (e.message?.includes('duration_hours_check')) {
+        alert('Geçersiz süre: Seçilen süre minimum rezervasyon süresinin altında. Lütfen bitiş saatini kontrol edin.');
+      } else {
+        alert('Hata: ' + e.message);
+      }
+    }
     finally { setBookingSaving(false); }
   };
 
@@ -2493,22 +2534,22 @@ function MyProgramScreen({ clubId, setScreen, clubProfile }) {
           borderRadius:'0 6px 6px 0', padding:'2px 6px', overflow:'hidden', zIndex:1,
           cursor: isClickable ? 'pointer' : 'default',
         }}>
-        <div style={{ fontSize:9, fontWeight:700, color:ev.color, lineHeight:1.4, display:'flex', justifyContent:'space-between', alignItems:'center' }}>
+        <div style={{ fontSize:12, fontWeight:700, color:ev.color, lineHeight:1.4, display:'flex', justifyContent:'space-between', alignItems:'center' }}>
           <span>{timeStr}</span>
           {(isBooking || isLesson) && height >= 22 && (
-            <span style={{ fontSize:8, background: isPaid ? '#22C55E22' : '#F59E0B22', color: isPaid ? '#16A34A' : '#D97706', borderRadius:3, padding:'1px 3px', fontWeight:700 }}>
+            <span style={{ fontSize:11, background: isPaid ? '#22C55E22' : '#F59E0B22', color: isPaid ? '#16A34A' : '#D97706', borderRadius:3, padding:'1px 4px', fontWeight:700 }}>
               {isPaid ? '✓' : '₺'}
             </span>
           )}
           {isBlock && height >= 22 && (
-            <span className="material-icons" style={{ fontSize:10, color: ev.color, opacity:0.7 }}>touch_app</span>
+            <span className="material-icons" style={{ fontSize:13, color: ev.color, opacity:0.7 }}>touch_app</span>
           )}
         </div>
         {height >= 30 && (
           <>
-            <div style={{ fontSize:10, fontWeight:600, color:'var(--text-1)', whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis' }}>{ev.label}</div>
+            <div style={{ fontSize:13, fontWeight:700, color:'var(--text-1)', whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis' }}>{ev.label}</div>
             {ev.coaches && ev.coaches.length > 0 && (
-              <div style={{ fontSize:9, color:'var(--text-2)', lineHeight:1.4, overflowWrap:'break-word' }}>
+              <div style={{ fontSize:12, color:'var(--text-2)', lineHeight:1.4, overflowWrap:'break-word' }}>
                 {ev.coaches.join(', ')}
               </div>
             )}
@@ -3117,9 +3158,7 @@ function MyProgramScreen({ clubId, setScreen, clubProfile }) {
                   <div>
                     <div style={{ display:'flex', alignItems:'center', gap:6 }}>
                       <span style={{ fontSize:14, fontWeight:700, color:'var(--brand-navy)' }}>{lsSelectedCustomer?.full_name || lsSelectedPlayer?.full_name}</span>
-                      <span style={{ fontSize:10, fontWeight:700, color:'#fff', background: lsSelectedCustomer && !lsSelectedCustomer._kind?.includes('member') ? '#0891B2' : 'var(--brand-navy)', borderRadius:5, padding:'2px 6px', letterSpacing:0.2 }}>
-                        {lsSelectedCustomer && !lsSelectedPlayer ? 'Müşteri' : 'Üye'}
-                      </span>
+                      <span style={{ fontSize:10, fontWeight:700, color:'#fff', background: lsSelectedCustomer && !lsSelectedPlayer ? '#0891B2' : 'var(--brand-navy)', borderRadius:5, padding:'2px 6px', letterSpacing:0.2 }}>{lsSelectedCustomer && !lsSelectedPlayer ? 'Müşteri' : 'Üye'}</span>
                     </div>
                     <div style={{ fontSize:12, color:'var(--text-2)', marginTop:1 }}>{lsSelectedPlayer?.email || lsSelectedCustomer?.phone || lsSelectedCustomer?.email || ''}</div>
                     {lsAutoCoachLoading && <div style={{ fontSize:11, color:'var(--brand-navy)', marginTop:2 }}>Paket kontrol ediliyor...</div>}
@@ -3128,27 +3167,59 @@ function MyProgramScreen({ clubId, setScreen, clubProfile }) {
                     onClick={() => {
                       setLsSelectedPlayer(null); setLsPlayerSearch(''); setLsPlayerResults([]);
                       setLsSelectedCustomer(null); setLsCustomerSearch(''); setLsCustomerResults([]);
+                      setLsCourtyclubResults([]);
                       setLsForm(prev => ({...prev, student_name:'', player_id:null}));
                       setLsPackages([]); setLsUsePkg(false); setLsSelectedPkgId(null);
                     }}>
                     <span className="material-icons" style={{ fontSize:18, color:'var(--text-2)' }}>close</span>
                   </button>
                 </div>
+              ) : quickAddCust === 'lesson' ? (
+                /* Inline hızlı müşteri ekleme */
+                <div style={{ border:'1.5px solid var(--brand-navy)', borderRadius:12, padding:'12px 14px', background:'#F0F4FF', marginBottom:12 }}>
+                  <div style={{ fontSize:13, fontWeight:700, color:'var(--brand-navy)', marginBottom:10 }}>Hızlı Müşteri Ekle</div>
+                  <div style={{ display:'flex', flexDirection:'column', gap:8 }}>
+                    <input placeholder="Ad Soyad *" value={quickAddForm.name}
+                      onChange={e => setQuickAddForm(p => ({...p, name: e.target.value}))}
+                      style={{ border:'1.5px solid var(--border)', borderRadius:10, padding:'10px 12px', fontSize:14, color:'var(--text-1)', background:'#fff', boxSizing:'border-box', width:'100%' }} />
+                    <input placeholder="Telefon *" value={quickAddForm.phone}
+                      onChange={e => setQuickAddForm(p => ({...p, phone: e.target.value}))}
+                      style={{ border:'1.5px solid var(--border)', borderRadius:10, padding:'10px 12px', fontSize:14, color:'var(--text-1)', background:'#fff', boxSizing:'border-box', width:'100%' }} />
+                    <div style={{ display:'flex', gap:8 }}>
+                      <button type="button" onClick={() => setQuickAddCust(null)}
+                        style={{ flex:1, padding:'9px', borderRadius:10, border:'1.5px solid var(--border)', background:'var(--bg)', cursor:'pointer', fontSize:13, fontWeight:600, color:'var(--text-2)' }}>
+                        İptal
+                      </button>
+                      <button type="button" onClick={saveQuickCust} disabled={quickAddSaving}
+                        style={{ flex:2, padding:'9px', borderRadius:10, border:'none', background:'var(--brand-navy)', color:'#fff', cursor:quickAddSaving?'not-allowed':'pointer', fontSize:13, fontWeight:700 }}>
+                        {quickAddSaving ? 'Ekleniyor…' : 'Ekle ve Seç'}
+                      </button>
+                    </div>
+                  </div>
+                </div>
               ) : (
                 /* Birleşik arama kutusu */
                 <div style={{ position:'relative', marginBottom:12 }}>
-                  <input style={{ width:'100%', border:'1.5px solid var(--border)', borderRadius:12, padding:'11px 12px', fontSize:14, color:'var(--text-1)', background:'var(--bg)', boxSizing:'border-box' }}
-                    placeholder="Ad, telefon veya e-posta ile ara..." value={lsPlayerSearch}
-                    onChange={e => searchLsPerson(e.target.value)} />
-                  {(lsPlayerResults.length > 0 || lsCustomerResults.length > 0) && (
-                    <div style={{ position:'absolute', top:'100%', left:0, right:0, zIndex:999, background:'var(--surface)', border:'1.5px solid var(--border)', borderRadius:12, boxShadow:'0 4px 16px rgba(0,0,0,0.12)', overflow:'hidden' }}>
-                      {lsPlayerResults.map((p, i) => (
+                  <div style={{ display:'flex', gap:8 }}>
+                    <input style={{ flex:1, border:'1.5px solid var(--border)', borderRadius:12, padding:'11px 12px', fontSize:14, color:'var(--text-1)', background:'var(--bg)', boxSizing:'border-box' }}
+                      placeholder="Ad, telefon veya e-posta ile ara..." value={lsPlayerSearch}
+                      onChange={e => searchLsPerson(e.target.value)} />
+                    <button type="button"
+                      style={{ width:42, height:42, borderRadius:12, border:'1.5px solid var(--brand-navy)', background:'var(--brand-navy)', color:'#fff', cursor:'pointer', flexShrink:0, display:'grid', placeItems:'center' }}
+                      title="Yeni müşteri ekle"
+                      onClick={() => { setQuickAddForm({name:'',phone:''}); setQuickAddCust('lesson'); }}>
+                      <span className="material-icons" style={{fontSize:20}}>person_add</span>
+                    </button>
+                  </div>
+                  {(lsPlayerResults.length > 0 || lsCustomerResults.length > 0 || lsCourtyclubResults.length > 0) && (
+                    <div style={{ position:'absolute', top:'100%', left:0, right:0, zIndex:999, background:'var(--surface)', border:'1.5px solid var(--border)', borderRadius:12, boxShadow:'0 4px 16px rgba(0,0,0,0.12)', overflow:'hidden', marginTop:4 }}>
+                      {lsPlayerResults.map((p) => (
                         <div key={'m-'+p.id}
                           style={{ padding:'10px 14px', cursor:'pointer', borderBottom:'1px solid var(--border)', display:'flex', alignItems:'center', justifyContent:'space-between' }}
                           onMouseDown={() => {
                             setLsSelectedPlayer(p);
                             setLsForm(prev=>({...prev, student_name:p.full_name, player_id:p.id}));
-                            setLsPlayerSearch(''); setLsPlayerResults([]); setLsCustomerResults([]);
+                            setLsPlayerSearch(''); setLsPlayerResults([]); setLsCustomerResults([]); setLsCourtyclubResults([]);
                           }}>
                           <div>
                             <div style={{ fontSize:14, fontWeight:600, color:'var(--text-1)' }}>{p.full_name}</div>
@@ -3163,7 +3234,7 @@ function MyProgramScreen({ clubId, setScreen, clubProfile }) {
                           onMouseDown={() => {
                             setLsSelectedCustomer(c);
                             setLsForm(prev=>({...prev, student_name:c.full_name, player_id: c.user_id || null}));
-                            setLsPlayerSearch(''); setLsPlayerResults([]); setLsCustomerResults([]);
+                            setLsPlayerSearch(''); setLsPlayerResults([]); setLsCustomerResults([]); setLsCourtyclubResults([]);
                             if (c.user_id) setLsSelectedPlayer({ id: c.user_id, full_name: c.full_name, email: c.email });
                           }}>
                           <div>
@@ -3173,6 +3244,21 @@ function MyProgramScreen({ clubId, setScreen, clubProfile }) {
                           <span style={{ fontSize:10, fontWeight:700, color:'#fff', background:'#0891B2', borderRadius:5, padding:'2px 6px', flexShrink:0, marginLeft:8 }}>Müşteri</span>
                         </div>
                       ))}
+                      {lsCourtyclubResults.map((p) => (
+                        <div key={'cc-'+p.id}
+                          style={{ padding:'10px 14px', cursor:'pointer', borderBottom:'1px solid var(--border)', display:'flex', alignItems:'center', justifyContent:'space-between' }}
+                          onMouseDown={() => {
+                            setLsSelectedPlayer({ id: p.id, full_name: p.full_name, email: p.email });
+                            setLsForm(prev=>({...prev, student_name:p.full_name, player_id:p.id}));
+                            setLsPlayerSearch(''); setLsPlayerResults([]); setLsCustomerResults([]); setLsCourtyclubResults([]);
+                          }}>
+                          <div>
+                            <div style={{ fontSize:14, fontWeight:600, color:'var(--text-1)' }}>{p.full_name}</div>
+                            <div style={{ fontSize:12, color:'var(--text-2)' }}>{p.phone || p.email || ''}</div>
+                          </div>
+                          <span style={{ fontSize:10, fontWeight:700, color:'#fff', background:'#22C55E', borderRadius:5, padding:'2px 6px', flexShrink:0, marginLeft:8 }}>CourtyClub Üyesi</span>
+                        </div>
+                      ))}
                     </div>
                   )}
                 </div>
@@ -3180,17 +3266,7 @@ function MyProgramScreen({ clubId, setScreen, clubProfile }) {
 
               {/* ANTRENÖR */}
               <div style={{ fontSize:12, fontWeight:700, color:'var(--text-2)', marginBottom:8, letterSpacing:0.4 }}>ANTRENÖR</div>
-              <div style={{ display:'flex', gap:8, marginBottom:10 }}>
-                <button style={{ flex:1, padding:'9px', borderRadius:10, border: !lsForm.use_manual_coach ? '1.5px solid var(--brand-navy)' : '1.5px solid var(--border)', background: !lsForm.use_manual_coach ? '#EEF2FF' : 'var(--bg)', cursor:'pointer', fontSize:13, fontWeight:600, color: !lsForm.use_manual_coach ? 'var(--brand-navy)' : 'var(--text-2)' }}
-                  onClick={() => setLsForm({...lsForm, use_manual_coach:false, manual_coach_name:''})}>Listeden Seç</button>
-                <button style={{ flex:1, padding:'9px', borderRadius:10, border: lsForm.use_manual_coach ? '1.5px solid var(--brand-navy)' : '1.5px solid var(--border)', background: lsForm.use_manual_coach ? '#EEF2FF' : 'var(--bg)', cursor:'pointer', fontSize:13, fontWeight:600, color: lsForm.use_manual_coach ? 'var(--brand-navy)' : 'var(--text-2)' }}
-                  onClick={() => setLsForm({...lsForm, use_manual_coach:true, coach_id:''})}>Manuel Giriş</button>
-              </div>
-              {lsForm.use_manual_coach ? (
-                <input style={{ width:'100%', border:'1.5px solid var(--border)', borderRadius:12, padding:'11px 12px', fontSize:14, color:'var(--text-1)', background:'var(--bg)', boxSizing:'border-box', marginBottom:14 }}
-                  placeholder="Antrenör adı" value={lsForm.manual_coach_name || ''}
-                  onChange={e => setLsForm({...lsForm, manual_coach_name:e.target.value})} />
-              ) : coachesList.length === 0 ? (
+              {coachesList.length === 0 ? (
                 <div style={{ padding:14, borderRadius:12, background:'var(--bg)', border:'1px solid var(--border)', textAlign:'center', color:'var(--text-2)', fontSize:13, marginBottom:14 }}>Henüz antrenör eklenmemiş.</div>
               ) : (
                 <div style={{ display:'flex', flexDirection:'column', gap:6, marginBottom:14 }}>
@@ -3212,7 +3288,7 @@ function MyProgramScreen({ clubId, setScreen, clubProfile }) {
               )}
 
               {/* PAKET */}
-              {(lsSelectedPlayer || lsSelectedCustomer) && !lsForm.use_manual_coach && lsForm.coach_id && (
+              {(lsSelectedPlayer || lsSelectedCustomer) && lsForm.coach_id && (
                 <div style={{ marginBottom:14 }}>
                   {lsLoadingPkgs ? (
                     <div style={{ fontSize:13, color:'var(--text-2)', padding:'6px 0' }}>Paketler yükleniyor...</div>
@@ -3623,70 +3699,68 @@ function MyProgramScreen({ clubId, setScreen, clubProfile }) {
             {/* Scrollable body */}
             <div style={{ overflowY:'auto', flex:1, padding:'16px 20px', display:'flex', flexDirection:'column', gap:16 }}>
 
-              {/* Kişi seçimi — birleşik arama veya misafir */}
+              {/* Kişi seçimi */}
               <div>
-                <div style={{ fontSize:12, fontWeight:700, color:'var(--text-2)', marginBottom:8, letterSpacing:0.4 }}>KİŞİ (OPSİYONEL)</div>
-                {/* Misafir modu toggle */}
-                <div style={{ display:'flex', gap:8, marginBottom:10 }}>
-                  {[{key:'search',label: hasMembership ? 'Üye / Müşteri' : 'Müşteri'},{key:'guest',label:'Misafir'}].map(t => (
-                    <button key={t.key} type="button"
-                      style={{ flex:1, padding:'7px 0', borderRadius:9, cursor:'pointer', fontSize:12, fontWeight:600,
-                        border: bookingPersonMode === t.key || (t.key === 'search' && bookingPersonMode !== 'guest') ? '1.5px solid var(--brand-navy)' : '1.5px solid var(--border)',
-                        background: bookingPersonMode === t.key || (t.key === 'search' && bookingPersonMode !== 'guest') ? '#EEF2FF' : 'var(--bg)',
-                        color: bookingPersonMode === t.key || (t.key === 'search' && bookingPersonMode !== 'guest') ? 'var(--brand-navy)' : 'var(--text-2)' }}
-                      onClick={() => {
-                        if (t.key === 'guest') {
-                          setBookingPersonMode('guest');
-                          setBookingMemberId(null); setBookingMemberName(''); setBookingMemberQuery(''); setBookingMemberResults([]);
-                          setBookingCustomerId(null); setBookingCustomerName(''); setBookingCustomerQuery(''); setBookingCustomerResults([]);
-                        } else {
-                          setBookingPersonMode('member');
-                          setBookingGuestName('');
-                        }
-                      }}>
-                      {t.label}
-                    </button>
-                  ))}
-                </div>
-                {bookingPersonMode === 'guest' ? (
-                  <div style={{ position:'relative' }}>
-                    <span className="material-icons" style={{ position:'absolute', left:10, top:'50%', transform:'translateY(-50%)', fontSize:15, color:'var(--text-2)', pointerEvents:'none' }}>person_outline</span>
-                    <input placeholder="Misafir adı yazın..."
-                      value={bookingGuestName}
-                      onChange={e => setBookingGuestName(e.target.value)}
-                      style={{ width:'100%', border:'1.5px solid var(--border)', borderRadius:12, padding:'10px 12px 10px 32px', fontSize:14, boxSizing:'border-box', color:'var(--text-1)', background:'var(--bg)' }} />
-                  </div>
-                ) : (bookingMemberId || bookingCustomerId) ? (
+                <div style={{ fontSize:12, fontWeight:700, color:'var(--text-2)', marginBottom:8, letterSpacing:0.4 }}>OYUNCU</div>
+                {(bookingMemberId || bookingCustomerId) ? (
                   <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', border:'1.5px solid var(--brand-navy)', borderRadius:12, padding:'10px 12px', background:'#EEF2FF' }}>
                     <div style={{ display:'flex', alignItems:'center', gap:6 }}>
                       <span style={{ fontSize:14, fontWeight:700, color:'var(--brand-navy)' }}>{bookingMemberName || bookingCustomerName}</span>
-                      <span style={{ fontSize:10, fontWeight:700, color:'#fff', background: (bookingCustomerId && !bookingMemberId) || !hasMembership ? '#0891B2' : 'var(--brand-navy)', borderRadius:5, padding:'2px 6px' }}>
-                        {(bookingCustomerId && !bookingMemberId) || !hasMembership ? 'Müşteri' : 'Oyuncu'}
-                      </span>
+                      <span style={{ fontSize:10, fontWeight:700, color:'#fff', background: bookingPersonMode === 'member' ? 'var(--brand-navy)' : '#0891B2', borderRadius:5, padding:'2px 6px' }}>{bookingPersonMode === 'member' ? 'Üye' : 'Müşteri'}</span>
                     </div>
                     <button type="button"
-                      onClick={() => { setBookingMemberId(null); setBookingMemberName(''); setBookingMemberQuery(''); setBookingMemberResults([]); setBookingCustomerId(null); setBookingCustomerName(''); setBookingCustomerQuery(''); setBookingCustomerResults([]); }}
+                      onClick={() => { setBookingMemberId(null); setBookingMemberName(''); setBookingMemberQuery(''); setBookingMemberResults([]); setBookingCustomerId(null); setBookingCustomerName(''); setBookingCustomerQuery(''); setBookingCustomerResults([]); setBookingCourtyclubResults([]); }}
                       style={{ background:'none', border:'none', cursor:'pointer', padding:4, display:'grid', placeItems:'center' }}>
                       <span className="material-icons" style={{ fontSize:18, color:'var(--text-2)' }}>close</span>
                     </button>
                   </div>
+                ) : quickAddCust === 'booking' ? (
+                  <div style={{ border:'1.5px solid var(--brand-navy)', borderRadius:12, padding:'12px 14px', background:'#F0F4FF' }}>
+                    <div style={{ fontSize:13, fontWeight:700, color:'var(--brand-navy)', marginBottom:10 }}>Hızlı Müşteri Ekle</div>
+                    <div style={{ display:'flex', flexDirection:'column', gap:8 }}>
+                      <input placeholder="Ad Soyad *" value={quickAddForm.name}
+                        onChange={e => setQuickAddForm(p => ({...p, name: e.target.value}))}
+                        style={{ border:'1.5px solid var(--border)', borderRadius:10, padding:'10px 12px', fontSize:14, color:'var(--text-1)', background:'#fff', boxSizing:'border-box', width:'100%' }} />
+                      <input placeholder="Telefon *" value={quickAddForm.phone}
+                        onChange={e => setQuickAddForm(p => ({...p, phone: e.target.value}))}
+                        style={{ border:'1.5px solid var(--border)', borderRadius:10, padding:'10px 12px', fontSize:14, color:'var(--text-1)', background:'#fff', boxSizing:'border-box', width:'100%' }} />
+                      <div style={{ display:'flex', gap:8 }}>
+                        <button type="button" onClick={() => setQuickAddCust(null)}
+                          style={{ flex:1, padding:'9px', borderRadius:10, border:'1.5px solid var(--border)', background:'var(--bg)', cursor:'pointer', fontSize:13, fontWeight:600, color:'var(--text-2)' }}>
+                          İptal
+                        </button>
+                        <button type="button" onClick={saveQuickCust} disabled={quickAddSaving}
+                          style={{ flex:2, padding:'9px', borderRadius:10, border:'none', background:'var(--brand-navy)', color:'#fff', cursor:quickAddSaving?'not-allowed':'pointer', fontSize:13, fontWeight:700 }}>
+                          {quickAddSaving ? 'Ekleniyor…' : 'Ekle ve Seç'}
+                        </button>
+                      </div>
+                    </div>
+                  </div>
                 ) : (
                   <div style={{ position:'relative' }}>
-                    <input placeholder="Ad, telefon veya e-posta ile ara..."
-                      value={bookingMemberQuery}
-                      onChange={e => searchBookingPerson(e.target.value)}
-                      style={{ width:'100%', border:'1.5px solid var(--border)', borderRadius:12, padding:'10px 12px', fontSize:14, boxSizing:'border-box', color:'var(--text-1)', background:'var(--bg)' }} />
-                    {(bookingMemberResults.length > 0 || bookingCustomerResults.length > 0) && (
+                    <div style={{ display:'flex', gap:8 }}>
+                      <input placeholder="Ad, telefon veya e-posta ile ara..."
+                        value={bookingMemberQuery}
+                        onChange={e => searchBookingPerson(e.target.value)}
+                        style={{ flex:1, border:'1.5px solid var(--border)', borderRadius:12, padding:'10px 12px', fontSize:14, boxSizing:'border-box', color:'var(--text-1)', background:'var(--bg)' }} />
+                      <button type="button"
+                        style={{ width:42, height:42, borderRadius:12, border:'1.5px solid var(--brand-navy)', background:'var(--brand-navy)', color:'#fff', cursor:'pointer', flexShrink:0, display:'grid', placeItems:'center' }}
+                        title="Yeni müşteri ekle"
+                        onClick={() => { setQuickAddForm({name:'',phone:''}); setQuickAddCust('booking'); }}>
+                        <span className="material-icons" style={{fontSize:20}}>person_add</span>
+                      </button>
+                    </div>
+                    {(bookingMemberResults.length > 0 || bookingCustomerResults.length > 0 || bookingCourtyclubResults.length > 0) && (
                       <div style={{ position:'absolute', top:'100%', left:0, right:0, zIndex:10, background:'var(--surface)', border:'1.5px solid var(--border)', borderRadius:12, boxShadow:'0 4px 16px rgba(0,0,0,0.12)', overflow:'hidden', marginTop:4 }}>
-                        {hasMembership && bookingMemberResults.map(m => (
+                        {bookingMemberResults.map(m => (
                           <div key={'p-'+m.id}
                             style={{ padding:'10px 14px', cursor:'pointer', borderBottom:'1px solid var(--border)', display:'flex', alignItems:'center', justifyContent:'space-between' }}
-                            onMouseDown={() => { setBookingMemberId(m.id); setBookingMemberName(m.full_name); setBookingPersonMode('member'); setBookingMemberQuery(''); setBookingMemberResults([]); setBookingCustomerResults([]); }}>
+                            onMouseDown={() => { setBookingMemberId(m.id); setBookingMemberName(m.full_name); setBookingPersonMode('member'); setBookingMemberQuery(''); setBookingMemberResults([]); setBookingCustomerResults([]); setBookingCourtyclubResults([]); }}>
                             <div>
                               <div style={{ fontSize:14, fontWeight:600, color:'var(--text-1)' }}>{m.full_name}</div>
                               <div style={{ fontSize:12, color:'var(--text-2)' }}>{m.email}</div>
                             </div>
-                            <span style={{ fontSize:10, fontWeight:700, color:'#fff', background:'var(--brand-navy)', borderRadius:5, padding:'2px 6px', flexShrink:0, marginLeft:8 }}>Oyuncu</span>
+                            <span style={{ fontSize:10, fontWeight:700, color:'#fff', background:'var(--brand-navy)', borderRadius:5, padding:'2px 6px', flexShrink:0, marginLeft:8 }}>Üye</span>
                           </div>
                         ))}
                         {bookingCustomerResults.map(c => (
@@ -3695,7 +3769,7 @@ function MyProgramScreen({ clubId, setScreen, clubProfile }) {
                             onMouseDown={() => {
                               setBookingCustomerId(c.id); setBookingCustomerName(c.full_name); setBookingPersonMode('customer');
                               if (c.user_id) { setBookingMemberId(c.user_id); setBookingMemberName(c.full_name); }
-                              setBookingMemberQuery(''); setBookingMemberResults([]); setBookingCustomerResults([]);
+                              setBookingMemberQuery(''); setBookingMemberResults([]); setBookingCustomerResults([]); setBookingCourtyclubResults([]);
                             }}>
                             <div>
                               <div style={{ fontSize:14, fontWeight:600, color:'var(--text-1)' }}>{c.full_name}</div>
@@ -3704,10 +3778,20 @@ function MyProgramScreen({ clubId, setScreen, clubProfile }) {
                             <span style={{ fontSize:10, fontWeight:700, color:'#fff', background:'#0891B2', borderRadius:5, padding:'2px 6px', flexShrink:0, marginLeft:8 }}>Müşteri</span>
                           </div>
                         ))}
+                        {bookingCourtyclubResults.map(p => (
+                          <div key={'cc-'+p.id}
+                            style={{ padding:'10px 14px', cursor:'pointer', borderBottom:'1px solid var(--border)', display:'flex', alignItems:'center', justifyContent:'space-between' }}
+                            onMouseDown={() => { setBookingMemberId(p.id); setBookingMemberName(p.full_name); setBookingPersonMode('member'); setBookingMemberQuery(''); setBookingMemberResults([]); setBookingCustomerResults([]); setBookingCourtyclubResults([]); }}>
+                            <div>
+                              <div style={{ fontSize:14, fontWeight:600, color:'var(--text-1)' }}>{p.full_name}</div>
+                              <div style={{ fontSize:12, color:'var(--text-2)' }}>{p.phone || p.email || ''}</div>
+                            </div>
+                            <span style={{ fontSize:10, fontWeight:700, color:'#fff', background:'#22C55E', borderRadius:5, padding:'2px 6px', flexShrink:0, marginLeft:8 }}>CourtyClub Üyesi</span>
+                          </div>
+                        ))}
                       </div>
                     )}
                   </div>
-                )}
                 )}
               </div>
 
@@ -3716,7 +3800,7 @@ function MyProgramScreen({ clubId, setScreen, clubProfile }) {
                 const court    = courts.find(c => c.id === bookingForm.courtId);
                 const dh       = (bookingForm.duration || 1);
                 const calcAmt  = Math.round((court?.hourly_rate || 0) * dh * 100) / 100;
-                const fmtD     = d => d === 0.75 ? '45 dk' : d === 1.5 ? '1,5 saat' : `${d} saat`;
+                const fmtD     = d => d === 0.25 ? '15 dk' : d === 0.5 ? '30 dk' : d === 0.75 ? '45 dk' : d === 1.5 ? '1,5 saat' : `${d} saat`;
                 return (
                   <div style={{ background:'#F8FAFC', borderRadius:14, padding:'16px 18px', border:'1px solid var(--border)' }}>
                     <div style={{ fontSize:12, fontWeight:700, color:'var(--text-2)', marginBottom:12, letterSpacing:0.4 }}>REZERVASYON ÖZETİ</div>
@@ -3725,9 +3809,7 @@ function MyProgramScreen({ clubId, setScreen, clubProfile }) {
                       { label:'Saat',  value: `${bookingForm.startTime} – ${bookingForm.endTime}` },
                       { label:'Süre',  value: fmtD(dh) },
                       { label:'Kort',  value: `Kort ${court?.court_number}` },
-                      ...(bookingPersonMode === 'member' && bookingMemberName ? [{ label:'Üye', value: bookingMemberName }] : []),
-                      ...(bookingPersonMode === 'customer' && bookingCustomerName ? [{ label:'Müşteri', value: bookingCustomerName }] : []),
-                      ...(bookingPersonMode === 'guest' && bookingGuestName.trim() ? [{ label:'Misafir', value: bookingGuestName.trim() }] : []),
+                      ...((bookingMemberName || bookingCustomerName) ? [{ label:'Oyuncu', value: bookingMemberName || bookingCustomerName }] : []),
                     ].map(({ label, value }) => (
                       <div key={label} style={{ display:'flex', justifyContent:'space-between', marginBottom:8 }}>
                         <span style={{ fontSize:13, color:'var(--text-2)' }}>{label}:</span>
@@ -3774,74 +3856,6 @@ function MyProgramScreen({ clubId, setScreen, clubProfile }) {
         </div>
       )}
 
-      {/* ── Misafir → Müşteri Ekleme Modalı ─────────────────────── */}
-      {guestCustModal && (
-        <div style={{ position:'fixed', inset:0, background:'rgba(0,0,0,0.5)', zIndex:2000, display:'flex', alignItems:'center', justifyContent:'center', padding:20 }}>
-          <div style={{ background:'#fff', borderRadius:20, width:'100%', maxWidth:420, padding:28, boxShadow:'0 8px 40px rgba(0,0,0,0.18)' }}>
-            <div style={{ display:'flex', alignItems:'center', gap:10, marginBottom:16 }}>
-              <span className="material-icons" style={{ fontSize:24, color:'#D97706' }}>person_add</span>
-              <span style={{ fontSize:18, fontWeight:800, color:'var(--text-1)' }}>Müşteri Olarak Ekle?</span>
-            </div>
-            <p style={{ fontSize:13, color:'var(--text-2)', marginBottom:20, lineHeight:1.5 }}>
-              <strong>{guestCustModal.name}</strong> adlı misafiri müşteri olarak kaydetmek ister misiniz?
-              Kaydedilirse bu rezervasyon müşteri profiline bağlanır.
-            </p>
-
-            <div style={{ marginBottom:14 }}>
-              <label style={{ fontSize:12, fontWeight:700, color:'var(--text-2)', display:'block', marginBottom:6 }}>AD SOYAD</label>
-              <input
-                type="text"
-                value={guestCustModal.name}
-                onChange={e => setGuestCustModal(prev => ({ ...prev, name: e.target.value }))}
-                style={{ width:'100%', padding:'11px 14px', borderRadius:10, border:'1.5px solid var(--border)', fontSize:14, background:'var(--bg)', boxSizing:'border-box' }}
-              />
-            </div>
-
-            <div style={{ marginBottom:24 }}>
-              <label style={{ fontSize:12, fontWeight:700, color:'var(--text-2)', display:'block', marginBottom:6 }}>TELEFON <span style={{ color:'#EF4444' }}>*</span></label>
-              <input
-                type="tel"
-                placeholder="05XX XXX XX XX"
-                value={guestCustModal.phone}
-                onChange={e => setGuestCustModal(prev => ({ ...prev, phone: e.target.value }))}
-                autoFocus
-                style={{ width:'100%', padding:'11px 14px', borderRadius:10, border:'1.5px solid var(--border)', fontSize:14, background:'var(--bg)', boxSizing:'border-box' }}
-              />
-            </div>
-
-            <div style={{ display:'flex', gap:10 }}>
-              <button
-                onClick={() => { setGuestCustModal(null); alert('Rezervasyon başarıyla oluşturuldu.'); }}
-                disabled={guestCustSaving}
-                style={{ flex:1, padding:'12px', borderRadius:12, border:'1.5px solid var(--border)', background:'var(--bg)', cursor:'pointer', fontSize:14, fontWeight:700, color:'var(--text-2)' }}
-              >
-                Hayır, Geç
-              </button>
-              <button
-                onClick={async () => {
-                  if (!guestCustModal?.phone?.trim()) { alert('Telefon numarası zorunludur.'); return; }
-                  if (!guestCustModal?.bookingId)    { alert('Rezervasyon ID bulunamadı.'); return; }
-                  setGuestCustSaving(true);
-                  try {
-                    const { data: customer, error: ce } = await sb.from('club_customers')
-                      .insert({ club_id: clubId, full_name: guestCustModal.name, phone: guestCustModal.phone.trim() })
-                      .select('id').single();
-                    if (ce) throw ce;
-                    await sb.from('bookings').update({ club_customer_id: customer.id }).eq('id', guestCustModal.bookingId);
-                    setGuestCustModal(null);
-                    alert('Rezervasyon oluşturuldu ve müşteri kaydedildi.');
-                  } catch(e) { alert('Hata: ' + e.message); }
-                  finally { setGuestCustSaving(false); }
-                }}
-                disabled={guestCustSaving}
-                style={{ flex:2, padding:'12px', borderRadius:12, border:'none', background:'#D97706', color:'#fff', cursor: guestCustSaving ? 'not-allowed' : 'pointer', fontSize:14, fontWeight:800, opacity: guestCustSaving ? 0.7 : 1 }}
-              >
-                {guestCustSaving ? 'Kaydediliyor...' : 'Evet, Müşteri Olarak Ekle'}
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
 
     </div>
   );

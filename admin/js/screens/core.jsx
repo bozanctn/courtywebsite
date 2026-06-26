@@ -313,18 +313,19 @@ function ReservationsScreen({ clubId, setScreen, clubProfile }) {
   const [bkMemberLoading, setBkMemberLoading] = useState(false);
 
   // Müşteri (CRM) arama state'leri
-  const [bkCustomerId,      setBkCustomerId]      = useState(null);
-  const [bkCustomerName,    setBkCustomerName]    = useState('');
-  const [bkCustomerQuery,   setBkCustomerQuery]   = useState('');
-  const [bkCustomerResults, setBkCustomerResults] = useState([]);
+  const [bkCustomerId,        setBkCustomerId]        = useState(null);
+  const [bkCustomerName,      setBkCustomerName]      = useState('');
+  const [bkCustomerQuery,     setBkCustomerQuery]     = useState('');
+  const [bkCustomerResults,   setBkCustomerResults]   = useState([]);
+  const [bkCourtyclubResults, setBkCourtyclubResults] = useState([]);
   const hasMembership = clubProfile?.has_membership_system !== false;
-  const [bkPersonMode,      setBkPersonMode]      = useState('member'); // 'member' | 'customer' | 'guest'
-  const [bkGuestName,       setBkGuestName]       = useState('');
+  const [bkPersonMode,      setBkPersonMode]      = useState('member'); // 'member' | 'customer'
   const [bkPriceOverride,   setBkPriceOverride]   = useState('');
 
-  // Misafir → müşteri ekleme prompt
-  const [guestCustModal,  setGuestCustModal]  = useState(null); // null | { bookingId, name, phone }
-  const [guestCustSaving, setGuestCustSaving] = useState(false);
+  // Hızlı müşteri ekle
+  const [quickAddCust,    setQuickAddCust]    = useState(null); // null | 'booking' | 'lesson'
+  const [quickAddForm,    setQuickAddForm]    = useState({ name: '', phone: '' });
+  const [quickAddSaving,  setQuickAddSaving]  = useState(false);
 
   // Özel dersler state
   const [lessons,      setLessons]      = useState([]);
@@ -334,14 +335,17 @@ function ReservationsScreen({ clubId, setScreen, clubProfile }) {
   const [lessonModal,  setLessonModal]  = useState(null);
   const [lessonForm,   setLessonForm]   = useState({});
   const [lessonMarkingId,    setLessonMarkingId]    = useState(null);
-  const [lessonPlayerSearch,   setLessonPlayerSearch]   = useState('');
-  const [lessonPlayerResults,  setLessonPlayerResults]  = useState([]);
-  const [lessonSelectedPlayer, setLessonSelectedPlayer] = useState(null);
+  const [lessonPlayerSearch,    setLessonPlayerSearch]    = useState('');
+  const [lessonPlayerResults,   setLessonPlayerResults]   = useState([]);
+  const [lessonSelectedPlayer,  setLessonSelectedPlayer]  = useState(null);
+  const [lessonCustomerResults,   setLessonCustomerResults]   = useState([]);
+  const [lessonSelectedCustomer,  setLessonSelectedCustomer]  = useState(null);
+  const [lessonCourtyclubResults, setLessonCourtyclubResults] = useState([]);
   const [lessonPackages,          setLessonPackages]          = useState([]);
   const [lessonUsePackage,        setLessonUsePackage]        = useState(false);
   const [lessonSelectedPackageId, setLessonSelectedPackageId] = useState(null);
   const [lessonLoadingPackages,   setLessonLoadingPackages]   = useState(false);
-  const [lessonPriceMode,         setLessonPriceMode]         = useState('dual'); // 'dual' | 'split'
+  const [lessonPriceMode,         setLessonPriceMode]         = useState('normal'); // 'normal' | 'split'
   const [lessonCoachAmountInput,  setLessonCoachAmountInput]  = useState('');
   const [lessonClubAmountInput,   setLessonClubAmountInput]   = useState('');
 
@@ -367,7 +371,7 @@ function ReservationsScreen({ clubId, setScreen, clubProfile }) {
         Math.abs(cur * 60 - dMins) < Math.abs(prev * 60 - dMins) ? cur : prev
       );
       setBkForm({ courtId: p.court_id, date: p.date, startTime: p.start_time, endTime: p.end_time, duration: dur, status: 'confirmed' });
-      setBkMemberId(null); setBkMemberName(''); setBkMemberQuery(''); setBkMemberResults([]);
+      setBkMemberId(null); setBkMemberName(''); setBkMemberQuery(''); setBkMemberResults([]); setBkCourtyclubResults([]);
       setBkModalVisible(true);
       // Courts henüz yüklenmemişse önce yükle
       if (courts.length > 0) {
@@ -399,6 +403,7 @@ function ReservationsScreen({ clubId, setScreen, clubProfile }) {
       setBkForm({ courtId: '', date: todayStr, startTime: '09:00', endTime: '10:00', duration: 1.0, status: 'confirmed' });
       setBkMemberQuery(''); setBkMemberResults([]);
       setBkCustomerQuery(''); setBkCustomerResults([]);
+      setBkCourtyclubResults([]);
       setBkModalVisible(true);
       sb.from('courts').select('id,court_number,court_type,hourly_rate,is_indoor')
         .eq('club_id', clubId).eq('is_active', true).order('court_number')
@@ -560,8 +565,8 @@ function ReservationsScreen({ clubId, setScreen, clubProfile }) {
     setBkForm({ courtId: courts[0]?.id || '', date: selDate, startTime, endTime, duration: 1.0, status: 'confirmed' });
     setBkMemberId(null); setBkMemberName(''); setBkMemberQuery(''); setBkMemberResults([]);
     setBkCustomerId(null); setBkCustomerName(''); setBkCustomerQuery(''); setBkCustomerResults([]);
+    setBkCourtyclubResults([]);
     setBkPersonMode(hasMembership ? 'member' : 'customer');
-    setBkGuestName('');
     setBkPriceOverride('');
     loadBkAvailCourts(selDate, startTime, endTime);
     setBkModalVisible(true);
@@ -630,31 +635,78 @@ function ReservationsScreen({ clubId, setScreen, clubProfile }) {
     loadBkAvailCourts(newForm.date, newForm.startTime, newEnd);
   };
 
-  const searchBkMembers = async (q) => {
+  const searchBkPerson = async (q) => {
     setBkMemberQuery(q);
-    if (q.length < 2) { setBkMemberResults([]); return; }
-    setBkMemberLoading(true);
+    if (q.length < 2) { setBkMemberResults([]); setBkCustomerResults([]); setBkCourtyclubResults([]); return; }
     try {
-      const { data } = await sb.from('profiles')
-        .select('id, full_name, email')
-        .ilike('full_name', `%${q}%`)
-        .limit(8);
-      setBkMemberResults(data || []);
+      const [memRes, custRes, ccRes] = await Promise.all([
+        sb.from('club_memberships')
+          .select('user_id, member_name, profile:profiles!club_memberships_user_id_fkey(id, full_name, email)')
+          .eq('club_id', clubId).eq('status', 'active').limit(30),
+        sb.from('club_customers').select('id, full_name, phone, email, user_id').eq('club_id', clubId).eq('is_active', true)
+          .or(`full_name.ilike.%${q}%,phone.ilike.%${q}%,email.ilike.%${q}%`).limit(6),
+        sb.from('profiles').select('id, full_name, email, phone').eq('user_type', 'player')
+          .or(`full_name.ilike.%${q}%,email.ilike.%${q}%,phone.ilike.%${q}%`).limit(8),
+      ]);
+      const lq = q.toLowerCase();
+      const members = (memRes.data || [])
+        .filter(m => (m.profile?.full_name || m.member_name || '').toLowerCase().includes(lq))
+        .map(m => ({ id: m.profile?.id || m.user_id, full_name: m.profile?.full_name || m.member_name, email: m.profile?.email }));
+      const customers = custRes.data || [];
+      const memberIds = new Set(members.map(p => p.id).filter(Boolean));
+      const customerUserIds = new Set(customers.map(c => c.user_id).filter(Boolean));
+      setBkMemberResults(members);
+      setBkCustomerResults(customers);
+      setBkCourtyclubResults((ccRes.data || []).filter(p => !memberIds.has(p.id) && !customerUserIds.has(p.id)));
     } catch(e) { console.error(e); }
-    finally { setBkMemberLoading(false); }
   };
 
-  const searchBkCustomers = async (q) => {
-    setBkCustomerQuery(q);
-    if (q.length < 2) { setBkCustomerResults([]); return; }
+  const searchLessonPerson = async (q) => {
+    setLessonPlayerSearch(q);
+    if (q.length < 2) { setLessonPlayerResults([]); setLessonCustomerResults([]); setLessonCourtyclubResults([]); return; }
     try {
-      const { data } = await sb.from('club_customers')
-        .select('id, full_name, phone, email, user_id')
-        .eq('club_id', clubId).eq('is_active', true)
-        .or(`full_name.ilike.%${q}%,phone.ilike.%${q}%,email.ilike.%${q}%`)
-        .limit(8);
-      setBkCustomerResults(data || []);
+      const [memRes, custRes, ccRes] = await Promise.all([
+        sb.from('club_memberships')
+          .select('user_id, member_name, profile:profiles!club_memberships_user_id_fkey(id, full_name, email)')
+          .eq('club_id', clubId).eq('status', 'active').limit(30),
+        sb.from('club_customers').select('id, full_name, phone, email, user_id').eq('club_id', clubId).eq('is_active', true)
+          .or(`full_name.ilike.%${q}%,phone.ilike.%${q}%,email.ilike.%${q}%`).limit(6),
+        sb.from('profiles').select('id, full_name, email, phone').eq('user_type', 'player')
+          .or(`full_name.ilike.%${q}%,email.ilike.%${q}%,phone.ilike.%${q}%`).limit(8),
+      ]);
+      const lq = q.toLowerCase();
+      const members = (memRes.data || [])
+        .filter(m => (m.profile?.full_name || m.member_name || '').toLowerCase().includes(lq))
+        .map(m => ({ id: m.profile?.id || m.user_id, full_name: m.profile?.full_name || m.member_name, email: m.profile?.email }));
+      const customers = custRes.data || [];
+      const memberIds = new Set(members.map(p => p.id).filter(Boolean));
+      const customerUserIds = new Set(customers.map(c => c.user_id).filter(Boolean));
+      setLessonPlayerResults(members);
+      setLessonCustomerResults(customers);
+      setLessonCourtyclubResults((ccRes.data || []).filter(p => !memberIds.has(p.id) && !customerUserIds.has(p.id)));
     } catch(e) { console.error(e); }
+  };
+
+  const saveQuickCust = async () => {
+    if (!quickAddForm.name.trim()) { alert('Ad Soyad gereklidir.'); return; }
+    if (!quickAddForm.phone.trim()) { alert('Telefon gereklidir.'); return; }
+    setQuickAddSaving(true);
+    try {
+      const { data: newCust, error } = await sb.from('club_customers').insert({
+        club_id: clubId, full_name: quickAddForm.name.trim(), phone: quickAddForm.phone.trim(), is_active: true,
+      }).select().single();
+      if (error) throw error;
+      if (quickAddCust === 'lesson') {
+        setLessonSelectedCustomer(newCust);
+        setLessonForm(prev => ({ ...prev, student_name: newCust.full_name, player_id: null }));
+        setLessonPlayerSearch(''); setLessonPlayerResults([]); setLessonCustomerResults([]); setLessonCourtyclubResults([]);
+      } else {
+        setBkCustomerId(newCust.id); setBkCustomerName(newCust.full_name); setBkPersonMode('customer');
+        setBkMemberQuery(''); setBkMemberResults([]); setBkCustomerResults([]); setBkCourtyclubResults([]);
+      }
+      setQuickAddCust(null);
+    } catch (e) { alert(e.message); }
+    finally { setQuickAddSaving(false); }
   };
 
   const saveBkBooking = async () => {
@@ -739,7 +791,7 @@ function ReservationsScreen({ clubId, setScreen, clubProfile }) {
         total_amount:      totalAmount,
         calculated_amount: calculatedAmount,
         club_customer_id:  bkCustomerId || null,
-        player_name:       bkMemberName || bkCustomerName || bkGuestName.trim() || null,
+        player_name:       bkMemberName || bkCustomerName || null,
       }).select('id').single();
       if (bkErr) throw bkErr;
 
@@ -752,22 +804,6 @@ function ReservationsScreen({ clubId, setScreen, clubProfile }) {
           is_primary_player: true,
           status:            'confirmed',
         });
-      }
-
-      // Misafir modunda isim varsa → müşteri ekleme promptu göster
-      if (bkPersonMode === 'guest' && bkGuestName.trim()) {
-        let bookingId = insertedBkId;
-        if (!bookingId) {
-          const { data: found } = await sb.from('bookings').select('id')
-            .eq('court_id', courtId).eq('start_time', startDb).eq('user_id', user.id)
-            .order('created_at', { ascending: false }).limit(1).maybeSingle();
-          bookingId = found?.id ?? null;
-        }
-        setBkModalVisible(false);
-        loadDay();
-        loadDotDates();
-        setGuestCustModal({ bookingId, name: bkGuestName.trim(), phone: '' });
-        return;
       }
 
       setBkModalVisible(false);
@@ -961,6 +997,7 @@ function ReservationsScreen({ clubId, setScreen, clubProfile }) {
       setLessonSelectedPlayer(null);
       setLessonPlayerSearch('');
       setLessonPlayerResults([]);
+      setLessonCourtyclubResults([]);
       setLessonPackages([]);
       setLessonUsePackage(false);
       setLessonSelectedPackageId(null);
@@ -1011,14 +1048,6 @@ function ReservationsScreen({ clubId, setScreen, clubProfile }) {
   }, [lessonSelectedPlayer?.id, lessonForm.coach_id, lessonForm.use_manual_coach]);
 
   // ── Özel ders fonksiyonları ──────────────────────────────────
-  const searchPlayers = async (q) => {
-    if (q.length < 2) { setLessonPlayerResults([]); return; }
-    const { data } = await sb.from('profiles').select('id,full_name,email')
-      .eq('user_type', 'player')
-      .or(`full_name.ilike.%${q}%,email.ilike.%${q}%`)
-      .limit(8);
-    setLessonPlayerResults(data || []);
-  };
 
   const loadLessons = async () => {
     setLoadingL(true);
@@ -1301,7 +1330,7 @@ function ReservationsScreen({ clubId, setScreen, clubProfile }) {
       const coachAmt    = parseFloat(String(lessonCoachAmountInput).replace(',', '.')) || 0;
       const clubAmt     = parseFloat(String(lessonClubAmountInput).replace(',', '.'))  || 0;
       const dualTotal   = coachAmt + clubAmt;
-      const isDual      = lessonPriceMode === 'dual';
+      const isDual      = lessonPriceMode === 'normal';
       const amountVal   = usingPkg ? 0 : isDual ? (dualTotal || null) : (lessonForm.amount ? parseFloat(String(lessonForm.amount).replace(',', '.')) : null);
       const coachAmtVal = usingPkg ? null : isDual ? (coachAmt || null) : null;
       const payStatus   = usingPkg ? 'paid' : lessonPriceMode === 'split' ? 'paid' : (lessonForm.payment_status || 'unpaid');
@@ -1320,7 +1349,7 @@ function ReservationsScreen({ clubId, setScreen, clubProfile }) {
         payment_status: payStatus,
         amount:         amountVal,
         coach_amount:   coachAmtVal,
-        price_mode:     lessonPriceMode,
+        price_mode:     lessonPriceMode === 'normal' ? 'dual' : lessonPriceMode,
       };
 
       if (lessonModal?.id) {
@@ -1479,22 +1508,6 @@ function ReservationsScreen({ clubId, setScreen, clubProfile }) {
     finally { setSaving(false); }
   };
 
-  // ── Misafiri müşteri olarak kaydet ────────────────────────────
-  const saveGuestAsCustomer = async () => {
-    if (!guestCustModal?.phone?.trim()) { alert('Telefon numarası zorunludur.'); return; }
-    if (!guestCustModal?.bookingId)    { alert('Rezervasyon ID bulunamadı.');   return; }
-    setGuestCustSaving(true);
-    try {
-      const { data: customer, error: ce } = await sb.from('club_customers')
-        .insert({ club_id: clubId, full_name: guestCustModal.name, phone: guestCustModal.phone.trim() })
-        .select('id').single();
-      if (ce) throw ce;
-      await sb.from('bookings').update({ club_customer_id: customer.id }).eq('id', guestCustModal.bookingId);
-      setGuestCustModal(null);
-      alert('Rezervasyon oluşturuldu ve müşteri kaydedildi.');
-    } catch(e) { alert('Hata: ' + e.message); }
-    finally { setGuestCustSaving(false); }
-  };
 
   const cancelLesson = async (lesson) => {
     if (lesson.source === 'booking') { alert('Rezervasyon kaynaklı dersler buradan iptal edilemez.'); return; }
@@ -1682,7 +1695,7 @@ function ReservationsScreen({ clubId, setScreen, clubProfile }) {
         </div>
         {mainTab === 'bookings'
           ? <button className="btn btn-pri" onClick={openAdd}><span className="material-icons">add</span> Yeni Rezervasyon</button>
-          : <button className="btn btn-pri" onClick={() => { setLessonForm({ date: selDate, start_time:'09:00', end_time:'10:00', payment_status:'unpaid', use_manual_coach: false }); setLessonPriceMode('dual'); setLessonCoachAmountInput(''); setLessonClubAmountInput(''); setLessonModal({ type:'add' }); }}>
+          : <button className="btn btn-pri" onClick={() => { setLessonForm({ date: selDate, start_time:'09:00', end_time:'10:00', payment_status:'unpaid', use_manual_coach: false }); setLessonPriceMode('normal'); setLessonCoachAmountInput(''); setLessonClubAmountInput(''); setLessonModal({ type:'add' }); }}>
               <span className="material-icons">add</span> Ders Ekle
             </button>
         }
@@ -2074,113 +2087,92 @@ function ReservationsScreen({ clubId, setScreen, clubProfile }) {
                 )}
               </div>
 
-              {/* Kişi seçimi (Üye, Müşteri veya Misafir) */}
+              {/* Kişi seçimi */}
               <div>
-                <div style={{ fontSize:12, fontWeight:700, color:'var(--text-2)', marginBottom:10, letterSpacing:0.4 }}>KİŞİ (OPSİYONEL)</div>
-                {/* Toggle */}
-                <div style={{ display:'flex', gap:8, marginBottom:12 }}>
-                  {[{ key:'member', icon:'group', label:'Üye' }, { key:'customer', icon:'people_alt', label:'Müşteri' }, { key:'guest', icon:'person_outline', label:'Misafir' }].filter(t => hasMembership || t.key !== 'member').map(t => (
-                    <button key={t.key} type="button"
-                      style={{ flex:1, padding:'9px 0', borderRadius:10, cursor:'pointer', fontSize:13, fontWeight:600, display:'flex', alignItems:'center', justifyContent:'center', gap:6,
-                        border: bkPersonMode === t.key ? '1.5px solid var(--brand-navy)' : '1.5px solid var(--border)',
-                        background: bkPersonMode === t.key ? '#EEF2FF' : 'var(--bg)',
-                        color: bkPersonMode === t.key ? 'var(--brand-navy)' : 'var(--text-2)' }}
-                      onClick={() => {
-                        setBkPersonMode(t.key);
-                        setBkMemberId(null); setBkMemberName(''); setBkMemberQuery(''); setBkMemberResults([]);
-                        setBkCustomerId(null); setBkCustomerName(''); setBkCustomerQuery(''); setBkCustomerResults([]);
-                        if (t.key !== 'guest') setBkGuestName('');
-                      }}>
-                      <span className="material-icons" style={{ fontSize:14 }}>{t.icon}</span>
-                      {t.label}
-                    </button>
-                  ))}
-                </div>
-
-                {/* Üye arama */}
-                {bkPersonMode === 'member' && (bkMemberId ? (
-                  <div style={{ display:'flex', alignItems:'center', gap:8, background:'#EEF2FF', borderRadius:12, padding:'10px 14px' }}>
-                    <span className="material-icons" style={{ color:'var(--brand-navy)', fontSize:16 }}>person</span>
-                    <span style={{ flex:1, fontWeight:600, fontSize:13, color:'var(--text-1)' }}>{bkMemberName}</span>
-                    <button type="button" onClick={() => { setBkMemberId(null); setBkMemberName(''); setBkMemberQuery(''); setBkMemberResults([]); }}
-                      style={{ background:'none', border:'none', cursor:'pointer', color:'var(--text-2)', padding:0, display:'grid', placeItems:'center' }}>
-                      <span className="material-icons" style={{ fontSize:16 }}>close</span>
-                    </button>
-                  </div>
-                ) : (
-                  <div style={{ position:'relative' }}>
-                    <div style={{ position:'relative' }}>
-                      <input placeholder="Üye adı ara..." value={bkMemberQuery}
-                        onChange={e => searchBkMembers(e.target.value)}
-                        style={{ width:'100%', border:'1.5px solid var(--border)', borderRadius:12, padding:'10px 12px 10px 36px', fontSize:14, boxSizing:'border-box', color:'var(--text-1)', background:'var(--bg)' }} />
-                      <span className="material-icons" style={{ position:'absolute', left:10, top:'50%', transform:'translateY(-50%)', fontSize:16, color:'var(--text-2)', pointerEvents:'none' }}>search</span>
+                <div style={{ fontSize:12, fontWeight:700, color:'var(--text-2)', marginBottom:10, letterSpacing:0.4 }}>OYUNCU</div>
+                {(bkMemberId || bkCustomerId) ? (
+                  <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', border:'1.5px solid var(--brand-navy)', borderRadius:12, padding:'10px 14px', background:'#EEF2FF' }}>
+                    <div style={{ display:'flex', alignItems:'center', gap:6 }}>
+                      <span style={{ fontSize:14, fontWeight:700, color:'var(--brand-navy)' }}>{bkMemberName || bkCustomerName}</span>
+                      <span style={{ fontSize:10, fontWeight:700, color:'#fff', background: bkPersonMode === 'member' ? 'var(--brand-navy)' : '#0891B2', borderRadius:5, padding:'2px 6px' }}>{bkPersonMode === 'member' ? 'Üye' : 'Müşteri'}</span>
                     </div>
-                    {bkMemberResults.length > 0 && (
-                      <div style={{ position:'absolute', top:'100%', left:0, right:0, zIndex:10, background:'#fff', border:'1px solid var(--border)', borderRadius:12, boxShadow:'0 4px 16px rgba(0,0,0,0.12)', overflow:'hidden', marginTop:4 }}>
-                        {bkMemberResults.map((m, idx) => (
-                          <div key={m.id}
-                            style={{ padding:'10px 14px', cursor:'pointer', borderBottom: idx < bkMemberResults.length-1 ? '1px solid var(--border)' : 'none', fontSize:13, fontWeight:500, display:'flex', alignItems:'center', gap:8 }}
-                            onMouseDown={() => { setBkMemberId(m.id); setBkMemberName(m.full_name); setBkMemberQuery(''); setBkMemberResults([]); }}>
-                            <span className="material-icons" style={{ fontSize:15, color:'var(--brand-navy)' }}>person</span>
-                            <span style={{ flex:1 }}>{m.full_name}</span>
-                            {m.email && <span style={{ fontSize:11, color:'var(--text-2)' }}>{m.email}</span>}
-                          </div>
-                        ))}
-                      </div>
-                    )}
-                  </div>
-                ))}
-
-                {/* Müşteri arama */}
-                {bkPersonMode === 'customer' && (bkCustomerId ? (
-                  <div style={{ display:'flex', alignItems:'center', gap:8, background:'#EEF2FF', borderRadius:12, padding:'10px 14px' }}>
-                    <span className="material-icons" style={{ color:'var(--brand-navy)', fontSize:16 }}>people_alt</span>
-                    <span style={{ flex:1, fontWeight:600, fontSize:13, color:'var(--text-1)' }}>{bkCustomerName}</span>
                     <button type="button"
-                      onClick={() => { setBkCustomerId(null); setBkCustomerName(''); setBkCustomerQuery(''); setBkCustomerResults([]); setBkMemberId(null); setBkMemberName(''); }}
-                      style={{ background:'none', border:'none', cursor:'pointer', color:'var(--text-2)', padding:0, display:'grid', placeItems:'center' }}>
-                      <span className="material-icons" style={{ fontSize:16 }}>close</span>
+                      onClick={() => { setBkMemberId(null); setBkMemberName(''); setBkMemberQuery(''); setBkMemberResults([]); setBkCustomerId(null); setBkCustomerName(''); setBkCustomerResults([]); setBkCourtyclubResults([]); }}
+                      style={{ background:'none', border:'none', cursor:'pointer', padding:4, display:'grid', placeItems:'center' }}>
+                      <span className="material-icons" style={{ fontSize:18, color:'var(--text-2)' }}>close</span>
                     </button>
+                  </div>
+                ) : quickAddCust === 'booking' ? (
+                  <div style={{ border:'1.5px solid var(--brand-navy)', borderRadius:12, padding:'12px 14px', background:'#F0F4FF' }}>
+                    <div style={{ fontSize:13, fontWeight:700, color:'var(--brand-navy)', marginBottom:10 }}>Hızlı Müşteri Ekle</div>
+                    <div style={{ display:'flex', flexDirection:'column', gap:8 }}>
+                      <input placeholder="Ad Soyad *" value={quickAddForm.name}
+                        onChange={e => setQuickAddForm(p => ({...p, name: e.target.value}))}
+                        style={{ border:'1.5px solid var(--border)', borderRadius:10, padding:'10px 12px', fontSize:14, color:'var(--text-1)', background:'#fff', boxSizing:'border-box', width:'100%' }} />
+                      <input placeholder="Telefon *" value={quickAddForm.phone}
+                        onChange={e => setQuickAddForm(p => ({...p, phone: e.target.value}))}
+                        style={{ border:'1.5px solid var(--border)', borderRadius:10, padding:'10px 12px', fontSize:14, color:'var(--text-1)', background:'#fff', boxSizing:'border-box', width:'100%' }} />
+                      <div style={{ display:'flex', gap:8 }}>
+                        <button type="button" onClick={() => setQuickAddCust(null)}
+                          style={{ flex:1, padding:'9px', borderRadius:10, border:'1.5px solid var(--border)', background:'var(--bg)', cursor:'pointer', fontSize:13, fontWeight:600, color:'var(--text-2)' }}>İptal</button>
+                        <button type="button" onClick={saveQuickCust} disabled={quickAddSaving}
+                          style={{ flex:2, padding:'9px', borderRadius:10, border:'none', background:'var(--brand-navy)', color:'#fff', cursor:quickAddSaving?'not-allowed':'pointer', fontSize:13, fontWeight:700 }}>
+                          {quickAddSaving ? 'Ekleniyor…' : 'Ekle ve Seç'}
+                        </button>
+                      </div>
+                    </div>
                   </div>
                 ) : (
                   <div style={{ position:'relative' }}>
-                    <div style={{ position:'relative' }}>
-                      <input placeholder="Müşteri adı veya telefon ara..." value={bkCustomerQuery}
-                        onChange={e => searchBkCustomers(e.target.value)}
-                        style={{ width:'100%', border:'1.5px solid var(--border)', borderRadius:12, padding:'10px 12px 10px 36px', fontSize:14, boxSizing:'border-box', color:'var(--text-1)', background:'var(--bg)' }} />
-                      <span className="material-icons" style={{ position:'absolute', left:10, top:'50%', transform:'translateY(-50%)', fontSize:16, color:'var(--text-2)', pointerEvents:'none' }}>search</span>
+                    <div style={{ display:'flex', gap:8 }}>
+                      <input placeholder="Ad, telefon veya e-posta ile ara..."
+                        value={bkMemberQuery}
+                        onChange={e => searchBkPerson(e.target.value)}
+                        style={{ flex:1, border:'1.5px solid var(--border)', borderRadius:12, padding:'10px 12px', fontSize:14, boxSizing:'border-box', color:'var(--text-1)', background:'var(--bg)' }} />
+                      <button type="button"
+                        style={{ width:42, height:42, borderRadius:12, border:'1.5px solid var(--brand-navy)', background:'var(--brand-navy)', color:'#fff', cursor:'pointer', flexShrink:0, display:'grid', placeItems:'center' }}
+                        title="Yeni müşteri ekle"
+                        onClick={() => { setQuickAddForm({name:'',phone:''}); setQuickAddCust('booking'); }}>
+                        <span className="material-icons" style={{fontSize:20}}>person_add</span>
+                      </button>
                     </div>
-                    {bkCustomerResults.length > 0 && (
-                      <div style={{ position:'absolute', top:'100%', left:0, right:0, zIndex:10, background:'#fff', border:'1px solid var(--border)', borderRadius:12, boxShadow:'0 4px 16px rgba(0,0,0,0.12)', overflow:'hidden', marginTop:4 }}>
-                        {bkCustomerResults.map((c, idx) => (
-                          <div key={c.id}
-                            style={{ padding:'10px 14px', cursor:'pointer', borderBottom: idx < bkCustomerResults.length-1 ? '1px solid var(--border)' : 'none', fontSize:13, fontWeight:500, display:'flex', alignItems:'center', gap:8 }}
-                            onMouseDown={() => {
-                              setBkCustomerId(c.id); setBkCustomerName(c.full_name);
-                              setBkCustomerQuery(''); setBkCustomerResults([]);
-                              if (c.user_id) { setBkMemberId(c.user_id); setBkMemberName(c.full_name); }
-                            }}>
-                            <span className="material-icons" style={{ fontSize:15, color:'var(--brand-navy)' }}>people_alt</span>
-                            <span style={{ flex:1 }}>{c.full_name}</span>
-                            <span style={{ fontSize:11, color:'var(--text-2)' }}>{c.phone}</span>
-                            {c.user_id && <span style={{ fontSize:10, fontWeight:700, background:'#EEF2FF', color:'var(--brand-navy)', padding:'1px 6px', borderRadius:20 }}>CC</span>}
+                    {(bkMemberResults.length > 0 || bkCustomerResults.length > 0 || bkCourtyclubResults.length > 0) && (
+                      <div style={{ position:'absolute', top:'100%', left:0, right:0, zIndex:10, background:'var(--surface)', border:'1.5px solid var(--border)', borderRadius:12, boxShadow:'0 4px 16px rgba(0,0,0,0.12)', overflow:'hidden', marginTop:4 }}>
+                        {bkMemberResults.map(m => (
+                          <div key={'m-'+m.id}
+                            style={{ padding:'10px 14px', cursor:'pointer', borderBottom:'1px solid var(--border)', display:'flex', alignItems:'center', justifyContent:'space-between' }}
+                            onMouseDown={() => { setBkMemberId(m.id); setBkMemberName(m.full_name); setBkPersonMode('member'); setBkMemberQuery(''); setBkMemberResults([]); setBkCustomerResults([]); setBkCourtyclubResults([]); }}>
+                            <div>
+                              <div style={{ fontSize:14, fontWeight:600, color:'var(--text-1)' }}>{m.full_name}</div>
+                              <div style={{ fontSize:12, color:'var(--text-2)' }}>{m.email}</div>
+                            </div>
+                            <span style={{ fontSize:10, fontWeight:700, color:'#fff', background:'var(--brand-navy)', borderRadius:5, padding:'2px 6px', flexShrink:0, marginLeft:8 }}>Üye</span>
+                          </div>
+                        ))}
+                        {bkCustomerResults.map(c => (
+                          <div key={'c-'+c.id}
+                            style={{ padding:'10px 14px', cursor:'pointer', borderBottom:'1px solid var(--border)', display:'flex', alignItems:'center', justifyContent:'space-between' }}
+                            onMouseDown={() => { setBkCustomerId(c.id); setBkCustomerName(c.full_name); setBkPersonMode('customer'); if (c.user_id) { setBkMemberId(c.user_id); setBkMemberName(c.full_name); } setBkMemberQuery(''); setBkMemberResults([]); setBkCustomerResults([]); setBkCourtyclubResults([]); }}>
+                            <div>
+                              <div style={{ fontSize:14, fontWeight:600, color:'var(--text-1)' }}>{c.full_name}</div>
+                              <div style={{ fontSize:12, color:'var(--text-2)' }}>{c.phone || c.email || ''}</div>
+                            </div>
+                            <span style={{ fontSize:10, fontWeight:700, color:'#fff', background:'#0891B2', borderRadius:5, padding:'2px 6px', flexShrink:0, marginLeft:8 }}>Müşteri</span>
+                          </div>
+                        ))}
+                        {bkCourtyclubResults.map(p => (
+                          <div key={'cc-'+p.id}
+                            style={{ padding:'10px 14px', cursor:'pointer', borderBottom:'1px solid var(--border)', display:'flex', alignItems:'center', justifyContent:'space-between' }}
+                            onMouseDown={() => { setBkMemberId(p.id); setBkMemberName(p.full_name); setBkPersonMode('member'); setBkMemberQuery(''); setBkMemberResults([]); setBkCustomerResults([]); setBkCourtyclubResults([]); }}>
+                            <div>
+                              <div style={{ fontSize:14, fontWeight:600, color:'var(--text-1)' }}>{p.full_name}</div>
+                              <div style={{ fontSize:12, color:'var(--text-2)' }}>{p.phone || p.email || ''}</div>
+                            </div>
+                            <span style={{ fontSize:10, fontWeight:700, color:'#fff', background:'#22C55E', borderRadius:5, padding:'2px 6px', flexShrink:0, marginLeft:8 }}>CourtyClub Üyesi</span>
                           </div>
                         ))}
                       </div>
                     )}
-                  </div>
-                ))}
-
-                {/* Misafir — serbest metin */}
-                {bkPersonMode === 'guest' && (
-                  <div style={{ position:'relative' }}>
-                    <span className="material-icons" style={{ position:'absolute', left:10, top:'50%', transform:'translateY(-50%)', fontSize:16, color:'var(--text-2)', pointerEvents:'none' }}>person_outline</span>
-                    <input
-                      placeholder="Misafir adı yazın..."
-                      value={bkGuestName}
-                      onChange={e => setBkGuestName(e.target.value)}
-                      style={{ width:'100%', border:'1.5px solid var(--border)', borderRadius:12, padding:'10px 12px 10px 36px', fontSize:14, boxSizing:'border-box', color:'var(--text-1)', background:'var(--bg)' }}
-                    />
                   </div>
                 )}
               </div>
@@ -2201,9 +2193,7 @@ function ReservationsScreen({ clubId, setScreen, clubProfile }) {
                       { label:'Saat',  value: `${bkForm.startTime} – ${bkForm.endTime}` },
                       { label:'Süre',  value: fmtD(bkForm.duration || 1) },
                       { label:'Kort',  value: `Kort ${court?.court_number}` },
-                      ...(bkPersonMode === 'member' && bkMemberName ? [{ label:'Üye', value: bkMemberName }] : []),
-                      ...(bkPersonMode === 'customer' && bkCustomerName ? [{ label:'Müşteri', value: bkCustomerName }] : []),
-                      ...(bkPersonMode === 'guest' && bkGuestName.trim() ? [{ label:'Misafir', value: bkGuestName.trim() }] : []),
+                      ...((bkMemberName || bkCustomerName) ? [{ label:'Oyuncu', value: bkMemberName || bkCustomerName }] : []),
                     ].map(({ label, value }) => (
                       <div key={label} style={{ display:'flex', justifyContent:'space-between', marginBottom:8 }}>
                         <span style={{ fontSize:13, color:'var(--text-2)' }}>{label}:</span>
@@ -2268,26 +2258,7 @@ function ReservationsScreen({ clubId, setScreen, clubProfile }) {
             <div style={{ overflowY:'auto', flex:1, padding:'16px 20px', display:'flex', flexDirection:'column', gap:0 }}>
               {/* ── Antrenör ─────────────────────────────────── */}
               <div style={{ fontSize:12, fontWeight:700, color:'var(--text-2)', marginBottom:8, letterSpacing:0.4 }}>ANTRENÖR</div>
-              {/* Toggle butonları */}
-              <div style={{ display:'flex', gap:8, marginBottom:12 }}>
-                <button
-                  style={{ flex:1, padding:'9px', borderRadius:10, border: !lessonForm.use_manual_coach ? '1.5px solid var(--brand-navy)' : '1.5px solid var(--border)', background: !lessonForm.use_manual_coach ? '#EEF2FF' : 'var(--bg)', cursor:'pointer', fontSize:13, fontWeight:600, color: !lessonForm.use_manual_coach ? 'var(--brand-navy)' : 'var(--text-2)' }}
-                  onClick={() => setLessonForm({...lessonForm, use_manual_coach: false, manual_coach_name:''})}
-                >
-                  Listeden Seç
-                </button>
-                <button
-                  style={{ flex:1, padding:'9px', borderRadius:10, border: lessonForm.use_manual_coach ? '1.5px solid var(--brand-navy)' : '1.5px solid var(--border)', background: lessonForm.use_manual_coach ? '#EEF2FF' : 'var(--bg)', cursor:'pointer', fontSize:13, fontWeight:600, color: lessonForm.use_manual_coach ? 'var(--brand-navy)' : 'var(--text-2)' }}
-                  onClick={() => setLessonForm({...lessonForm, use_manual_coach: true, coach_id:''})}
-                >
-                  Manuel Giriş
-                </button>
-              </div>
-              {lessonForm.use_manual_coach ? (
-                <input style={{ width:'100%', border:'1.5px solid var(--border)', borderRadius:12, padding:'11px 12px', fontSize:15, color:'var(--text-1)', background:'var(--bg)', boxSizing:'border-box', marginBottom:16 }}
-                  placeholder="Antrenör adı" value={lessonForm.manual_coach_name || ''}
-                  onChange={e => setLessonForm({...lessonForm, manual_coach_name: e.target.value})} />
-              ) : coaches.length === 0 ? (
+              {coaches.length === 0 ? (
                 <div style={{ padding:16, borderRadius:12, background:'var(--bg)', border:'1px solid var(--border)', textAlign:'center', color:'var(--text-2)', fontSize:13, marginBottom:16 }}>Henüz antrenör eklenmemiş.</div>
               ) : (
                 <div style={{ display:'flex', flexDirection:'column', gap:8, marginBottom:16 }}>
@@ -2331,30 +2302,81 @@ function ReservationsScreen({ clubId, setScreen, clubProfile }) {
               </div>
 
               {/* ── Öğrenci ───────────────────────────────────── */}
-              <div style={{ fontSize:12, fontWeight:700, color:'var(--text-2)', marginBottom:8, letterSpacing:0.4 }}>ÖĞRENCİ (opsiyonel)</div>
-              {lessonSelectedPlayer ? (
+              <div style={{ fontSize:12, fontWeight:700, color:'var(--text-2)', marginBottom:8, letterSpacing:0.4 }}>OYUNCU</div>
+              {(lessonSelectedPlayer || lessonSelectedCustomer) ? (
                 <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', border:'1.5px solid var(--brand-navy)', borderRadius:12, padding:'11px 12px', marginBottom:16, background:'#EEF2FF' }}>
-                  <div>
-                    <div style={{ fontSize:14, fontWeight:700, color:'var(--brand-navy)' }}>{lessonSelectedPlayer.full_name}</div>
-                    <div style={{ fontSize:12, color:'var(--text-2)' }}>{lessonSelectedPlayer.email}</div>
+                  <div style={{ display:'flex', alignItems:'center', gap:6 }}>
+                    <span style={{ fontSize:14, fontWeight:700, color:'var(--brand-navy)' }}>{lessonSelectedCustomer?.full_name || lessonSelectedPlayer?.full_name}</span>
+                    <span style={{ fontSize:10, fontWeight:700, color:'#fff', background: lessonSelectedCustomer && !lessonSelectedPlayer ? '#0891B2' : 'var(--brand-navy)', borderRadius:5, padding:'2px 6px' }}>{lessonSelectedCustomer && !lessonSelectedPlayer ? 'Müşteri' : 'Üye'}</span>
                   </div>
                   <button style={{ background:'none', border:'none', cursor:'pointer', padding:4 }}
-                    onClick={() => { setLessonSelectedPlayer(null); setLessonPlayerSearch(''); setLessonPlayerResults([]); setLessonForm(prev => ({ ...prev, student_name: '', player_id: null })); }}>
+                    onClick={() => { setLessonSelectedPlayer(null); setLessonSelectedCustomer(null); setLessonPlayerSearch(''); setLessonPlayerResults([]); setLessonCustomerResults([]); setLessonCourtyclubResults([]); setLessonForm(prev => ({ ...prev, student_name: '', player_id: null })); }}>
                     <span className="material-icons" style={{ fontSize:18, color:'var(--text-2)' }}>close</span>
                   </button>
                 </div>
+              ) : quickAddCust === 'lesson' ? (
+                <div style={{ border:'1.5px solid var(--brand-navy)', borderRadius:12, padding:'12px 14px', background:'#F0F4FF', marginBottom:16 }}>
+                  <div style={{ fontSize:13, fontWeight:700, color:'var(--brand-navy)', marginBottom:10 }}>Hızlı Müşteri Ekle</div>
+                  <div style={{ display:'flex', flexDirection:'column', gap:8 }}>
+                    <input placeholder="Ad Soyad *" value={quickAddForm.name}
+                      onChange={e => setQuickAddForm(p => ({...p, name: e.target.value}))}
+                      style={{ border:'1.5px solid var(--border)', borderRadius:10, padding:'10px 12px', fontSize:14, color:'var(--text-1)', background:'#fff', boxSizing:'border-box', width:'100%' }} />
+                    <input placeholder="Telefon *" value={quickAddForm.phone}
+                      onChange={e => setQuickAddForm(p => ({...p, phone: e.target.value}))}
+                      style={{ border:'1.5px solid var(--border)', borderRadius:10, padding:'10px 12px', fontSize:14, color:'var(--text-1)', background:'#fff', boxSizing:'border-box', width:'100%' }} />
+                    <div style={{ display:'flex', gap:8 }}>
+                      <button type="button" onClick={() => setQuickAddCust(null)}
+                        style={{ flex:1, padding:'9px', borderRadius:10, border:'1.5px solid var(--border)', background:'var(--bg)', cursor:'pointer', fontSize:13, fontWeight:600, color:'var(--text-2)' }}>İptal</button>
+                      <button type="button" onClick={saveQuickCust} disabled={quickAddSaving}
+                        style={{ flex:2, padding:'9px', borderRadius:10, border:'none', background:'var(--brand-navy)', color:'#fff', cursor:quickAddSaving?'not-allowed':'pointer', fontSize:13, fontWeight:700 }}>
+                        {quickAddSaving ? 'Ekleniyor…' : 'Ekle ve Seç'}
+                      </button>
+                    </div>
+                  </div>
+                </div>
               ) : (
                 <div style={{ position:'relative', marginBottom:16 }}>
-                  <input style={{ width:'100%', border:'1.5px solid var(--border)', borderRadius:12, padding:'11px 12px', fontSize:15, color:'var(--text-1)', background:'var(--bg)', boxSizing:'border-box' }}
-                    placeholder="Öğrenci adı yazın veya ara..." value={lessonPlayerSearch}
-                    onChange={e => { const v = e.target.value; setLessonPlayerSearch(v); setLessonForm(prev => ({ ...prev, student_name: v, player_id: null })); searchPlayers(v); }} />
-                  {lessonPlayerResults.length > 0 && (
-                    <div style={{ position:'absolute', top:'100%', left:0, right:0, zIndex:999, background:'var(--surface)', border:'1.5px solid var(--border)', borderRadius:12, boxShadow:'0 4px 16px rgba(0,0,0,0.12)', overflow:'hidden' }}>
+                  <div style={{ display:'flex', gap:8 }}>
+                    <input style={{ flex:1, border:'1.5px solid var(--border)', borderRadius:12, padding:'11px 12px', fontSize:14, color:'var(--text-1)', background:'var(--bg)', boxSizing:'border-box' }}
+                      placeholder="Ad, telefon veya e-posta ile ara..." value={lessonPlayerSearch}
+                      onChange={e => searchLessonPerson(e.target.value)} />
+                    <button type="button"
+                      style={{ width:42, height:42, borderRadius:12, border:'1.5px solid var(--brand-navy)', background:'var(--brand-navy)', color:'#fff', cursor:'pointer', flexShrink:0, display:'grid', placeItems:'center' }}
+                      title="Yeni müşteri ekle"
+                      onClick={() => { setQuickAddForm({name:'',phone:''}); setQuickAddCust('lesson'); }}>
+                      <span className="material-icons" style={{fontSize:20}}>person_add</span>
+                    </button>
+                  </div>
+                  {(lessonPlayerResults.length > 0 || lessonCustomerResults.length > 0 || lessonCourtyclubResults.length > 0) && (
+                    <div style={{ position:'absolute', top:'100%', left:0, right:0, zIndex:999, background:'var(--surface)', border:'1.5px solid var(--border)', borderRadius:12, boxShadow:'0 4px 16px rgba(0,0,0,0.12)', overflow:'hidden', marginTop:4 }}>
                       {lessonPlayerResults.map(p => (
-                        <div key={p.id} style={{ padding:'10px 14px', cursor:'pointer', borderBottom:'1px solid var(--border)' }}
-                          onMouseDown={() => { setLessonSelectedPlayer(p); setLessonForm(prev => ({ ...prev, student_name: p.full_name, player_id: p.id })); setLessonPlayerSearch(p.full_name); setLessonPlayerResults([]); }}>
-                          <div style={{ fontSize:14, fontWeight:600, color:'var(--text-1)' }}>{p.full_name}</div>
-                          <div style={{ fontSize:12, color:'var(--text-2)' }}>{p.email}</div>
+                        <div key={'m-'+p.id} style={{ padding:'10px 14px', cursor:'pointer', borderBottom:'1px solid var(--border)', display:'flex', alignItems:'center', justifyContent:'space-between' }}
+                          onMouseDown={() => { setLessonSelectedPlayer(p); setLessonForm(prev => ({ ...prev, student_name: p.full_name, player_id: p.id })); setLessonPlayerSearch(''); setLessonPlayerResults([]); setLessonCustomerResults([]); setLessonCourtyclubResults([]); }}>
+                          <div>
+                            <div style={{ fontSize:14, fontWeight:600, color:'var(--text-1)' }}>{p.full_name}</div>
+                            <div style={{ fontSize:12, color:'var(--text-2)' }}>{p.email}</div>
+                          </div>
+                          <span style={{ fontSize:10, fontWeight:700, color:'#fff', background:'var(--brand-navy)', borderRadius:5, padding:'2px 6px', flexShrink:0, marginLeft:8 }}>Üye</span>
+                        </div>
+                      ))}
+                      {lessonCustomerResults.map(c => (
+                        <div key={'c-'+c.id} style={{ padding:'10px 14px', cursor:'pointer', borderBottom:'1px solid var(--border)', display:'flex', alignItems:'center', justifyContent:'space-between' }}
+                          onMouseDown={() => { setLessonSelectedCustomer(c); setLessonForm(prev => ({ ...prev, student_name: c.full_name, player_id: c.user_id || null })); setLessonPlayerSearch(''); setLessonPlayerResults([]); setLessonCustomerResults([]); setLessonCourtyclubResults([]); if (c.user_id) setLessonSelectedPlayer({ id: c.user_id, full_name: c.full_name, email: c.email }); }}>
+                          <div>
+                            <div style={{ fontSize:14, fontWeight:600, color:'var(--text-1)' }}>{c.full_name}</div>
+                            <div style={{ fontSize:12, color:'var(--text-2)' }}>{c.phone || c.email || ''}</div>
+                          </div>
+                          <span style={{ fontSize:10, fontWeight:700, color:'#fff', background:'#0891B2', borderRadius:5, padding:'2px 6px', flexShrink:0, marginLeft:8 }}>Müşteri</span>
+                        </div>
+                      ))}
+                      {lessonCourtyclubResults.map(p => (
+                        <div key={'cc-'+p.id} style={{ padding:'10px 14px', cursor:'pointer', borderBottom:'1px solid var(--border)', display:'flex', alignItems:'center', justifyContent:'space-between' }}
+                          onMouseDown={() => { setLessonSelectedPlayer(p); setLessonForm(prev => ({ ...prev, student_name: p.full_name, player_id: p.id })); setLessonPlayerSearch(''); setLessonPlayerResults([]); setLessonCustomerResults([]); setLessonCourtyclubResults([]); }}>
+                          <div>
+                            <div style={{ fontSize:14, fontWeight:600, color:'var(--text-1)' }}>{p.full_name}</div>
+                            <div style={{ fontSize:12, color:'var(--text-2)' }}>{p.phone || p.email || ''}</div>
+                          </div>
+                          <span style={{ fontSize:10, fontWeight:700, color:'#fff', background:'#22C55E', borderRadius:5, padding:'2px 6px', flexShrink:0, marginLeft:8 }}>CourtyClub Üyesi</span>
                         </div>
                       ))}
                     </div>
@@ -2363,7 +2385,7 @@ function ReservationsScreen({ clubId, setScreen, clubProfile }) {
               )}
 
               {/* ── Paket Kullanımı ──────────────────────────── */}
-              {lessonSelectedPlayer && !lessonForm.use_manual_coach && lessonForm.coach_id && (
+              {(lessonSelectedPlayer || lessonSelectedCustomer) && lessonForm.coach_id && (
                 <div style={{ marginBottom:16 }}>
                   {lessonLoadingPackages ? (
                     <div style={{ fontSize:13, color:'var(--text-2)', padding:'8px 0' }}>Paketler yükleniyor...</div>
@@ -2447,57 +2469,61 @@ function ReservationsScreen({ clubId, setScreen, clubProfile }) {
                 placeholder="Ders hakkında not..." value={lessonForm.notes || ''}
                 onChange={e => setLessonForm({...lessonForm, notes: e.target.value})} />
 
-              {/* ── Ders Ücreti (dual) ───────────────────────── */}
-              {!lessonUsePackage && lessonPriceMode === 'dual' && (() => {
-                const coachAmt_ = parseFloat(String(lessonCoachAmountInput).replace(',', '.')) || 0;
-                const clubAmt_  = parseFloat(String(lessonClubAmountInput).replace(',', '.'))  || 0;
-                const total_    = coachAmt_ + clubAmt_;
-                return (
-                  <div style={{ marginBottom:16 }}>
-                    <div style={{ display:'flex', gap:8, marginBottom:8 }}>
-                      <div style={{ flex:1 }}>
-                        <div style={{ fontSize:11, fontWeight:700, color:'var(--text-2)', marginBottom:4 }}>HOCA HAKEDİŞİ (₺)</div>
+              {/* ── Ders Ücreti ──────────────────────────────── */}
+              {!lessonUsePackage && lessonPriceMode === 'normal' ? (
+                <div style={{ marginBottom:16 }}>
+                  <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:10, marginBottom:8 }}>
+                    <div>
+                      <div style={{ fontSize:12, fontWeight:700, color:'var(--text-2)', marginBottom:6, letterSpacing:0.4 }}>HOCA HAKEDİŞİ (₺)</div>
+                      <div style={{ display:'flex', alignItems:'center', border:'1.5px solid var(--border)', borderRadius:12, background:'var(--bg)', paddingLeft:10 }}>
+                        <span style={{ fontSize:14, fontWeight:700, color:'var(--text-2)', marginRight:3 }}>₺</span>
                         <input type="number" min="0" step="0.01"
-                          style={{ width:'100%', border:'1.5px solid var(--border)', borderRadius:10, padding:'10px 12px', fontSize:14, color:'var(--text-1)', background:'var(--bg)', boxSizing:'border-box', outline:'none' }}
-                          placeholder="0" value={lessonCoachAmountInput}
+                          style={{ flex:1, border:'none', background:'transparent', padding:'11px 8px 11px 0', fontSize:14, color:'var(--text-1)', outline:'none' }}
+                          placeholder="0,00" value={lessonCoachAmountInput}
                           onChange={e => setLessonCoachAmountInput(e.target.value)} />
                       </div>
-                      <div style={{ flex:1 }}>
-                        <div style={{ fontSize:11, fontWeight:700, color:'var(--text-2)', marginBottom:4 }}>KULÜP PAYI (₺)</div>
+                    </div>
+                    <div>
+                      <div style={{ fontSize:12, fontWeight:700, color:'var(--text-2)', marginBottom:6, letterSpacing:0.4 }}>KULÜP PAYI (₺)</div>
+                      <div style={{ display:'flex', alignItems:'center', border:'1.5px solid var(--border)', borderRadius:12, background:'var(--bg)', paddingLeft:10 }}>
+                        <span style={{ fontSize:14, fontWeight:700, color:'var(--text-2)', marginRight:3 }}>₺</span>
                         <input type="number" min="0" step="0.01"
-                          style={{ width:'100%', border:'1.5px solid var(--border)', borderRadius:10, padding:'10px 12px', fontSize:14, color:'var(--text-1)', background:'var(--bg)', boxSizing:'border-box', outline:'none' }}
-                          placeholder="0" value={lessonClubAmountInput}
+                          style={{ flex:1, border:'none', background:'transparent', padding:'11px 8px 11px 0', fontSize:14, color:'var(--text-1)', outline:'none' }}
+                          placeholder="0,00" value={lessonClubAmountInput}
                           onChange={e => setLessonClubAmountInput(e.target.value)} />
                       </div>
                     </div>
-                    {total_ > 0 && (
-                      <div style={{ display:'flex', gap:8, marginBottom:8 }}>
-                        <div style={{ flex:1, background:'#F0FDF4', borderRadius:10, padding:'8px 12px', border:'1px solid #BBF7D0' }}>
-                          <div style={{ fontSize:10, color:'var(--text-2)', fontWeight:600 }}>HOCA HAKEDİŞİ</div>
-                          <div style={{ fontSize:15, fontWeight:800, color:'#16A34A' }}>₺{coachAmt_.toLocaleString('tr-TR')}</div>
-                        </div>
-                        <div style={{ flex:1, background:'#EEF2FF', borderRadius:10, padding:'8px 12px', border:'1px solid #C7D2FE' }}>
-                          <div style={{ fontSize:10, color:'var(--text-2)', fontWeight:600 }}>KULÜP PAYI</div>
-                          <div style={{ fontSize:15, fontWeight:800, color:'var(--brand-navy)' }}>₺{clubAmt_.toLocaleString('tr-TR')}</div>
-                        </div>
-                      </div>
-                    )}
-                    {total_ > 0 && (
-                      <div style={{ background:'var(--bg-2,#F3F4F6)', borderRadius:10, padding:'8px 12px', textAlign:'center' }}>
-                        <div style={{ fontSize:10, color:'var(--text-2)', fontWeight:600 }}>TOPLAM</div>
-                        <div style={{ fontSize:18, fontWeight:800, color:'var(--text-1)' }}>₺{total_.toLocaleString('tr-TR')}</div>
-                      </div>
-                    )}
                   </div>
-                );
-              })()}
+                  {(() => {
+                    const total_ = (parseFloat(lessonCoachAmountInput) || 0) + (parseFloat(lessonClubAmountInput) || 0);
+                    if (total_ <= 0) return null;
+                    return (
+                      <div style={{ fontSize:12, fontWeight:600, color:'var(--text-2)', textAlign:'right' }}>
+                        Toplam: <span style={{ color:'var(--text-1)', fontWeight:800 }}>₺{total_.toLocaleString('tr-TR', { minimumFractionDigits:2 })}</span>
+                      </div>
+                    );
+                  })()}
+                </div>
+              ) : !lessonUsePackage ? (
+                <div>
+                  <div style={{ fontSize:12, fontWeight:700, color:'var(--text-2)', marginBottom:8, letterSpacing:0.4 }}>DERS ÜCRETİ (opsiyonel)</div>
+                  <div style={{ display:'flex', alignItems:'center', border:'1.5px solid var(--border)', borderRadius:12, background:'var(--bg)', paddingLeft:12, marginBottom:16 }}>
+                    <span style={{ fontSize:16, fontWeight:700, color:'var(--text-2)', marginRight:4 }}>₺</span>
+                    <input type="number" min="0" step="0.01"
+                      style={{ flex:1, border:'none', background:'transparent', padding:'11px 12px 11px 0', fontSize:15, color:'var(--text-1)', outline:'none' }}
+                      placeholder="0,00" value={lessonForm.amount || ''}
+                      onChange={e => setLessonForm({...lessonForm, amount: e.target.value})} />
+                  </div>
+                </div>
+              ) : null}
 
               {/* ── Ödeme Modeli ─────────────────────────────── */}
+              {!lessonUsePackage && <>
               <div style={{ fontSize:12, fontWeight:700, color:'var(--text-2)', marginBottom:8, letterSpacing:0.4 }}>ÖDEME MODELİ</div>
               <div style={{ display:'flex', gap:8, marginBottom:12 }}>
                 <button
-                  style={{ flex:1, padding:'9px', borderRadius:10, border: lessonPriceMode === 'dual' ? '1.5px solid var(--brand-navy)' : '1.5px solid var(--border)', background: lessonPriceMode === 'dual' ? '#EEF2FF' : 'var(--bg)', cursor:'pointer', fontSize:13, fontWeight:600, color: lessonPriceMode === 'dual' ? 'var(--brand-navy)' : 'var(--text-2)' }}
-                  onClick={() => { setLessonPriceMode('dual'); setLessonForm(prev => ({...prev, payment_status:'unpaid'})); }}
+                  style={{ flex:1, padding:'9px', borderRadius:10, border: lessonPriceMode === 'normal' ? '1.5px solid var(--brand-navy)' : '1.5px solid var(--border)', background: lessonPriceMode === 'normal' ? '#EEF2FF' : 'var(--bg)', cursor:'pointer', fontSize:13, fontWeight:600, color: lessonPriceMode === 'normal' ? 'var(--brand-navy)' : 'var(--text-2)' }}
+                  onClick={() => { setLessonPriceMode('normal'); setLessonForm(prev => ({...prev, payment_status:'unpaid'})); }}
                 >Özel Fiyat</button>
                 <button
                   style={{ flex:1, padding:'9px', borderRadius:10, border: lessonPriceMode === 'split' ? '1.5px solid #7C3AED' : '1.5px solid var(--border)', background: lessonPriceMode === 'split' ? '#F5F3FF' : 'var(--bg)', cursor:'pointer', fontSize:13, fontWeight:600, color: lessonPriceMode === 'split' ? '#7C3AED' : 'var(--text-2)' }}
@@ -2535,11 +2561,12 @@ function ReservationsScreen({ clubId, setScreen, clubProfile }) {
                   </div>
                 );
               })()}
+              </>}
 
               {/* ── Ödeme Durumu ─────────────────────────────── */}
-              {lessonPriceMode === 'dual' && <>
+              {!lessonUsePackage && <>
               <div style={{ fontSize:12, fontWeight:700, color:'var(--text-2)', marginBottom:8, letterSpacing:0.4 }}>ÖDEME DURUMU</div>
-              <div style={{ display:'flex', gap:10, marginBottom:20, opacity: lessonUsePackage ? 0.6 : 1, pointerEvents: lessonUsePackage ? 'none' : 'auto' }}>
+              <div style={{ display:'flex', gap:10, marginBottom:20 }}>
                 <button
                   style={{ flex:1, display:'flex', alignItems:'center', justifyContent:'center', gap:6, padding:'11px', borderRadius:12, border: (lessonForm.payment_status||'unpaid') === 'unpaid' ? '1.5px solid #F59E0B' : '1.5px solid var(--border)', background: (lessonForm.payment_status||'unpaid') === 'unpaid' ? '#FEF3C7' : 'var(--bg)', cursor:'pointer' }}
                   onClick={() => setLessonForm({...lessonForm, payment_status:'unpaid'})}
@@ -2569,60 +2596,6 @@ function ReservationsScreen({ clubId, setScreen, clubProfile }) {
         </div>
       )}
 
-      {/* ── Misafir → Müşteri Ekleme Modalı ─────────────────────── */}
-      {guestCustModal && (
-        <div style={{ position:'fixed', inset:0, background:'rgba(0,0,0,0.5)', zIndex:2000, display:'flex', alignItems:'center', justifyContent:'center', padding:20 }}>
-          <div style={{ background:'#fff', borderRadius:20, width:'100%', maxWidth:420, padding:28, boxShadow:'0 8px 40px rgba(0,0,0,0.18)' }}>
-            <div style={{ display:'flex', alignItems:'center', gap:10, marginBottom:16 }}>
-              <span className="material-icons" style={{ fontSize:24, color:'#D97706' }}>person_add</span>
-              <span style={{ fontSize:18, fontWeight:800, color:'var(--text-1)' }}>Müşteri Olarak Ekle?</span>
-            </div>
-            <p style={{ fontSize:13, color:'var(--text-2)', marginBottom:20, lineHeight:1.5 }}>
-              <strong>{guestCustModal.name}</strong> adlı misafiri müşteri olarak kaydetmek ister misiniz?
-              Kaydedilirse bu rezervasyon müşteri profiline bağlanır.
-            </p>
-
-            <div style={{ marginBottom:14 }}>
-              <label style={{ fontSize:12, fontWeight:700, color:'var(--text-2)', display:'block', marginBottom:6 }}>AD SOYAD</label>
-              <input
-                type="text"
-                value={guestCustModal.name}
-                onChange={e => setGuestCustModal(prev => ({ ...prev, name: e.target.value }))}
-                style={{ width:'100%', padding:'11px 14px', borderRadius:10, border:'1.5px solid var(--border)', fontSize:14, background:'var(--bg)', boxSizing:'border-box' }}
-              />
-            </div>
-
-            <div style={{ marginBottom:24 }}>
-              <label style={{ fontSize:12, fontWeight:700, color:'var(--text-2)', display:'block', marginBottom:6 }}>TELEFON <span style={{ color:'#EF4444' }}>*</span></label>
-              <input
-                type="tel"
-                placeholder="05XX XXX XX XX"
-                value={guestCustModal.phone}
-                onChange={e => setGuestCustModal(prev => ({ ...prev, phone: e.target.value }))}
-                autoFocus
-                style={{ width:'100%', padding:'11px 14px', borderRadius:10, border:'1.5px solid var(--border)', fontSize:14, background:'var(--bg)', boxSizing:'border-box' }}
-              />
-            </div>
-
-            <div style={{ display:'flex', gap:10 }}>
-              <button
-                onClick={() => { setGuestCustModal(null); alert('Rezervasyon başarıyla oluşturuldu.'); }}
-                disabled={guestCustSaving}
-                style={{ flex:1, padding:'12px', borderRadius:12, border:'1.5px solid var(--border)', background:'var(--bg)', cursor:'pointer', fontSize:14, fontWeight:700, color:'var(--text-2)' }}
-              >
-                Hayır, Geç
-              </button>
-              <button
-                onClick={saveGuestAsCustomer}
-                disabled={guestCustSaving}
-                style={{ flex:2, padding:'12px', borderRadius:12, border:'none', background:'#D97706', color:'#fff', cursor: guestCustSaving ? 'not-allowed' : 'pointer', fontSize:14, fontWeight:800, opacity: guestCustSaving ? 0.7 : 1 }}
-              >
-                {guestCustSaving ? 'Kaydediliyor...' : 'Evet, Müşteri Olarak Ekle'}
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
     </div>
   );
 }
