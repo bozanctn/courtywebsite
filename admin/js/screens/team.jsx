@@ -50,7 +50,7 @@ function CoachesScreen({ clubId }) {
   const filtered = coaches.filter(c => showInactive || c.is_active);
 
   const openAdd = () => {
-    setForm({ is_active: true, full_name: '', email: '', phone: '', hourly_rate: '', coach_pay_rate: '', experience_years: '', specialization: '', bio: '' });
+    setForm({ is_active: true, full_name: '', email: '', phone: '', hourly_rate: '', coach_pay_rate: '', experience_years: '', specialization: '', bio: '', day_off: null });
     setModal('add');
   };
 
@@ -97,6 +97,7 @@ function CoachesScreen({ clubId }) {
         specialization:   form.specialization || null,
         bio:              form.bio?.trim() || null,
         is_active:        form.is_active !== false,
+        day_off:          form.day_off != null ? Number(form.day_off) : null,
       };
       if (modal === 'add') {
         const { error } = await sb.from('club_coaches').insert(payload);
@@ -388,6 +389,12 @@ function CoachesScreen({ clubId }) {
                     {c.specialization}
                   </span>
                 )}
+                {c.day_off != null && (
+                  <span style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: 12, color: '#DC2626', background: '#FEF2F2', border: '1px solid #FECACA', borderRadius: 8, padding: '4px 9px', fontWeight: 600 }}>
+                    <span className="material-icons" style={{ fontSize: 13 }}>beach_access</span>
+                    {['Pzt','Sal','Çar','Per','Cum','Cmt','Paz'][c.day_off]} İzin
+                  </span>
+                )}
               </div>
 
               {c.bio && <p style={{ fontSize: 13, color: 'var(--text-2)', margin: 0, lineHeight: 1.5 }}>{c.bio}</p>}
@@ -536,6 +543,16 @@ function CoachesScreen({ clubId }) {
                 ))}
               </div>
             </Field>
+            <Field label="İzin Günü">
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, marginTop: 4 }}>
+                {['Pazartesi','Salı','Çarşamba','Perşembe','Cuma','Cumartesi','Pazar'].map((d, i) => (
+                  <button key={i} type="button"
+                    style={{ padding: '6px 14px', borderRadius: 999, fontSize: 13, fontWeight: form.day_off === i ? 700 : 500, border: '1.5px solid', borderColor: form.day_off === i ? 'var(--brand-navy)' : 'var(--border)', background: form.day_off === i ? 'var(--brand-navy)' : 'var(--bg)', color: form.day_off === i ? '#fff' : 'var(--text-2)', cursor: 'pointer' }}
+                    onClick={() => setForm({ ...form, day_off: form.day_off === i ? null : i })}
+                  >{d}</button>
+                ))}
+              </div>
+            </Field>
             <Field label="Biyografi">
               <textarea rows={3} value={form.bio || ''} placeholder="Hoca hakkında kısa bilgi…"
                 onChange={e => setForm({ ...form, bio: e.target.value })} style={{ resize: 'vertical' }} />
@@ -579,44 +596,50 @@ function CoachesScreen({ clubId }) {
                   return (
                     <div key={idx}>
                       <div style={{ display: 'flex', alignItems: 'center', gap: 8, paddingBottom: 6, borderBottom: `1.5px solid ${isToday ? 'var(--brand-navy)' : 'var(--border)'}`, marginBottom: 6 }}>
-                        <span style={{ fontSize: 12, fontWeight: 700, color: isToday ? 'var(--brand-navy)' : 'var(--text-2)', width: 28 }}>{DAY_NAMES[idx]}</span>
-                        <span style={{ fontSize: 12, color: isToday ? 'var(--brand-navy)' : 'var(--text-2)', fontWeight: isToday ? 700 : 400 }}>{fmtWeekDate(day)}</span>
+                        <span style={{ fontSize: 14, fontWeight: 700, color: isToday ? 'var(--brand-navy)' : 'var(--text-2)', width: 32 }}>{DAY_NAMES[idx]}</span>
+                        <span style={{ fontSize: 14, color: isToday ? 'var(--brand-navy)' : 'var(--text-2)', fontWeight: isToday ? 700 : 400 }}>{fmtWeekDate(day)}</span>
                         {dayItems.length > 0 && (
                           <span style={{ marginLeft: 'auto', background: 'var(--brand-navy)', color: '#fff', borderRadius: 10, minWidth: 20, height: 20, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '0 6px', fontSize: 11, fontWeight: 700 }}>{dayItems.length}</span>
                         )}
                       </div>
+                      {idx === scheduleCoach.day_off && (
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 6, background: '#FEF2F2', border: '1px solid #FECACA', borderRadius: 8, padding: '6px 12px', marginBottom: 6 }}>
+                          <span className="material-icons" style={{ fontSize: 14, color: '#DC2626' }}>beach_access</span>
+                          <span style={{ fontSize: 13, fontWeight: 700, color: '#DC2626' }}>İzin</span>
+                        </div>
+                      )}
                       {dayItems.length === 0 ? (
-                        <div style={{ paddingLeft: 36, fontSize: 13, color: 'var(--text-2)', fontStyle: 'italic', paddingBottom: 4 }}>Ders yok</div>
+                        <div style={{ paddingLeft: 36, fontSize: 15, color: 'var(--text-2)', fontStyle: 'italic', paddingBottom: 4 }}>Ders yok</div>
                       ) : dayItems.map(lesson => {
                         const isGroup = lesson.source === 'group';
                         const isPaid  = lesson.payment_status === 'paid';
                         return (
-                          <div key={lesson.id} style={{ display: 'flex', gap: 10, background: isGroup ? '#FFFBEB' : '#fff', borderRadius: 10, padding: 10, marginBottom: 6, border: `1px solid ${isGroup ? '#FDE68A' : 'var(--border)'}` }}>
-                            <div style={{ width: 3, borderRadius: 2, background: isGroup ? '#F59E0B' : 'var(--brand-navy)', alignSelf: 'stretch', flexShrink: 0 }} />
+                          <div key={lesson.id} style={{ display: 'flex', gap: 10, background: isGroup ? '#FFFBEB' : '#fff', borderRadius: 10, padding: 14, marginBottom: 6, border: `1px solid ${isGroup ? '#FDE68A' : 'var(--border)'}` }}>
+                            <div style={{ width: 4, borderRadius: 2, background: isGroup ? '#F59E0B' : 'var(--brand-navy)', alignSelf: 'stretch', flexShrink: 0 }} />
                             <div style={{ flex: 1 }}>
                               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 8 }}>
-                                <span style={{ fontSize: 12, fontWeight: 700, color: isGroup ? '#F59E0B' : 'var(--brand-navy)' }}>
+                                <span style={{ fontSize: 15, fontWeight: 700, color: isGroup ? '#F59E0B' : 'var(--brand-navy)' }}>
                                   {lesson._displayStart} – {lesson._displayEnd}
                                 </span>
                                 {isGroup ? (
-                                  <span style={{ fontSize: 11, fontWeight: 700, background: '#FEF3C7', color: '#F59E0B', borderRadius: 20, padding: '2px 8px' }}>Grup</span>
+                                  <span style={{ fontSize: 13, fontWeight: 700, background: '#FEF3C7', color: '#F59E0B', borderRadius: 20, padding: '3px 10px' }}>Grup</span>
                                 ) : (
-                                  <span style={{ fontSize: 11, fontWeight: 700, background: isPaid ? '#DCFCE7' : '#FEF3C7', color: isPaid ? '#22C55E' : '#F59E0B', borderRadius: 20, padding: '2px 8px' }}>
+                                  <span style={{ fontSize: 13, fontWeight: 700, background: isPaid ? '#DCFCE7' : '#FEF3C7', color: isPaid ? '#22C55E' : '#F59E0B', borderRadius: 20, padding: '3px 10px' }}>
                                     {isPaid ? 'Ödendi' : 'Bekliyor'}
                                   </span>
                                 )}
                               </div>
-                              <div style={{ fontSize: 14, fontWeight: 600, color: 'var(--text-1)', marginTop: 2 }}>
+                              <div style={{ fontSize: 17, fontWeight: 700, color: 'var(--text-1)', marginTop: 4 }}>
                                 {lesson.student_name || 'İsimsiz Öğrenci'}
                               </div>
                               {lesson.location && (
-                                <div style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: 12, color: 'var(--text-2)', marginTop: 4 }}>
-                                  <span className="material-icons" style={{ fontSize: 12 }}>location_on</span>
+                                <div style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: 14, color: 'var(--text-2)', marginTop: 5 }}>
+                                  <span className="material-icons" style={{ fontSize: 14 }}>location_on</span>
                                   {lesson.location}
                                 </div>
                               )}
-                              {lesson.amount > 0 && <div style={{ fontSize: 13, fontWeight: 700, color: '#22C55E', marginTop: 4 }}>{fmtMoney(lesson.amount)}</div>}
-                              {lesson.notes && <div style={{ fontSize: 12, color: 'var(--text-2)', marginTop: 4, fontStyle: 'italic' }}>{lesson.notes}</div>}
+                              {lesson.amount > 0 && <div style={{ fontSize: 16, fontWeight: 700, color: '#22C55E', marginTop: 5 }}>{fmtMoney(lesson.amount)}</div>}
+                              {lesson.notes && <div style={{ fontSize: 14, color: 'var(--text-2)', marginTop: 5, fontStyle: 'italic' }}>{lesson.notes}</div>}
                             </div>
                           </div>
                         );
