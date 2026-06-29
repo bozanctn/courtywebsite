@@ -1519,15 +1519,28 @@ function ReservationsScreen({ clubId, setScreen, clubProfile }) {
         }
       }
 
+      // Booking'i hem web (localTimeToDb) hem mobil (+03:00) formatında iptal et
+      const cancelCourtBooking = async (courtId, date, startTime, endTime) => {
+        const startWeb = localTimeToDb(`${date}T${startTime}`);
+        const endWeb   = localTimeToDb(`${date}T${endTime}`);
+        const startMob = new Date(`${date}T${startTime}:00+03:00`).toISOString();
+        const endMob   = new Date(`${date}T${endTime}:00+03:00`).toISOString();
+        await Promise.all([
+          sb.from('bookings').update({ status: 'cancelled' })
+            .eq('court_id', courtId).eq('start_time', startWeb).neq('status', 'cancelled'),
+          sb.from('bookings').update({ status: 'cancelled' })
+            .eq('court_id', courtId).eq('start_time', startMob).neq('status', 'cancelled'),
+        ]);
+      };
       if (lesson.source === 'lesson') {
         await sb.from('lessons').update({ status: 'cancelled' }).eq('id', lesson.id);
+        if (lesson.court_id) {
+          await cancelCourtBooking(lesson.court_id, lesson.date, lesson.start_time, lesson.end_time);
+        }
       } else {
         await sb.from('club_manual_lessons').delete().eq('id', lesson.id);
         if (lesson.court_id) {
-          const startDb = localTimeToDb(`${lesson.date}T${lesson.start_time}`);
-          const endDb   = localTimeToDb(`${lesson.date}T${lesson.end_time}`);
-          await sb.from('bookings').update({ status: 'cancelled' })
-            .eq('court_id', lesson.court_id).eq('start_time', startDb).eq('end_time', endDb);
+          await cancelCourtBooking(lesson.court_id, lesson.date, lesson.start_time, lesson.end_time);
         }
       }
     } catch (e) { console.warn('Ders iptal hatası:', e.message); }

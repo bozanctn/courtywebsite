@@ -1678,18 +1678,30 @@ function MyProgramScreen({ clubId, setScreen, clubProfile }) {
           ]);
         }
       }
+      // Booking'i hem web (localTimeToDb) hem mobil (+03:00) formatında iptal et
+      const cancelCourtBooking = async (courtId, lessonDate, sh, sm, eh, em) => {
+        const pad = n => String(n).padStart(2,'0');
+        const startWeb = localTimeToDb(`${lessonDate}T${pad(sh)}:${pad(sm)}`);
+        const endWeb   = localTimeToDb(`${lessonDate}T${pad(eh)}:${pad(em)}`);
+        const startMob = new Date(`${lessonDate}T${pad(sh)}:${pad(sm)}:00+03:00`).toISOString();
+        const endMob   = new Date(`${lessonDate}T${pad(eh)}:${pad(em)}:00+03:00`).toISOString();
+        await Promise.all([
+          sb.from('bookings').update({ status: 'cancelled' })
+            .eq('court_id', courtId).eq('start_time', startWeb).neq('status', 'cancelled'),
+          sb.from('bookings').update({ status: 'cancelled' })
+            .eq('court_id', courtId).eq('start_time', startMob).neq('status', 'cancelled'),
+        ]);
+      };
       if (lsDetail.source === 'manual') {
         await sb.from('club_manual_lessons').delete().eq('id', lsDetail.rawId);
         if (lsDetail.courtId) {
-          const sh = String(lsDetail.sh).padStart(2,'0'), sm_ = String(lsDetail.sm).padStart(2,'0');
-          const eh = String(lsDetail.eh).padStart(2,'0'), em_ = String(lsDetail.em).padStart(2,'0');
-          const startDb = localTimeToDb(`${lsDetail.lessonDate}T${sh}:${sm_}`);
-          const endDb   = localTimeToDb(`${lsDetail.lessonDate}T${eh}:${em_}`);
-          await sb.from('bookings').update({ status: 'cancelled' })
-            .eq('court_id', lsDetail.courtId).eq('start_time', startDb).eq('end_time', endDb);
+          await cancelCourtBooking(lsDetail.courtId, lsDetail.lessonDate, lsDetail.sh, lsDetail.sm, lsDetail.eh, lsDetail.em);
         }
       } else {
         await sb.from('lessons').update({ status: 'cancelled' }).eq('id', lsDetail.rawId);
+        if (lsDetail.courtId) {
+          await cancelCourtBooking(lsDetail.courtId, lsDetail.lessonDate, lsDetail.sh, lsDetail.sm, lsDetail.eh, lsDetail.em);
+        }
       }
       setLsDetail(null);
       load();
