@@ -438,28 +438,42 @@ document.addEventListener('DOMContentLoaded', () => {
 // ==========================================
 // Language Switcher (TR / EN)
 // ==========================================
+function applyLanguage(lang) {
+    // 1. Swap text for data-tr / data-en elements (index.html ve diğer sayfalar)
+    document.querySelectorAll('[data-tr]').forEach(el => {
+        const text = lang === 'en' ? el.dataset.en : el.dataset.tr;
+        if (text !== undefined) el.textContent = text;
+    });
+
+    // 2. Show/hide lang-section blocks (privacy.html, acik-riza.html)
+    document.querySelectorAll('.lang-section').forEach(section => {
+        section.style.display = section.classList.contains('lang-section-' + lang) ? '' : 'none';
+    });
+
+    // 3. Update <html lang="...">
+    document.documentElement.lang = lang;
+
+    // 4. Update toggle button active state
+    document.querySelectorAll('.lang-opt').forEach(opt => {
+        opt.classList.toggle('active', opt.dataset.lang === lang);
+    });
+
+    // 5. Persist choice
+    localStorage.setItem('courty-lang', lang);
+}
+
 document.addEventListener('DOMContentLoaded', () => {
-    const langBtns = document.querySelectorAll('.lang-btn');
-    if (!langBtns.length) return;
+    const toggle = document.getElementById('lang-toggle');
+    if (!toggle) return;
 
-    langBtns.forEach(btn => {
-        btn.addEventListener('click', () => {
-            const lang = btn.dataset.lang;
+    // Apply saved or default language
+    const saved = localStorage.getItem('courty-lang') || 'tr';
+    applyLanguage(saved);
 
-            // Update button states
-            langBtns.forEach(b => b.classList.remove('active'));
-            btn.classList.add('active');
-
-            // Show/hide language sections
-            document.querySelectorAll('.lang-section').forEach(section => {
-                section.style.display = section.classList.contains(`lang-section-${lang}`) ? 'block' : 'none';
-            });
-
-            // Scroll to content top
-            const switcher = document.querySelector('.lang-switcher');
-            if (switcher) {
-                window.scrollTo({ top: switcher.offsetTop - 120, behavior: 'smooth' });
-            }
-        });
+    // Click on TR or EN label
+    toggle.addEventListener('click', (e) => {
+        const opt = e.target.closest('.lang-opt');
+        if (!opt) return;
+        applyLanguage(opt.dataset.lang);
     });
 });
