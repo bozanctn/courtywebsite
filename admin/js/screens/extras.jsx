@@ -585,9 +585,10 @@ function MyProgramScreen({ clubId, setScreen, clubProfile }) {
   const [slotClickInfo,  setSlotClickInfo]  = useState(null); // { courtId, startHour, endHour }
   const [slotTypeModal,  setSlotTypeModal]  = useState(false);
   const [closureGroups,  setClosureGroups]  = useState([]);
-  const [closureType,    setClosureType]    = useState(null); // 'closure' | 'group'
-  const [selectedGroup,  setSelectedGroup]  = useState('');
-  const [slotSaving,     setSlotSaving]     = useState(false);
+  const [closureType,        setClosureType]        = useState(null); // 'closure' | 'group'
+  const [closureIsRecurring, setClosureIsRecurring] = useState(false);
+  const [selectedGroup,      setSelectedGroup]      = useState('');
+  const [slotSaving,         setSlotSaving]         = useState(false);
   const [dragState,      setDragState]      = useState(null); // { courtId, startHour, currentHour }
 
   // Inline rezervasyon modalı
@@ -1198,7 +1199,7 @@ function MyProgramScreen({ clubId, setScreen, clubProfile }) {
       setSlotClickInfo(null);
     } else if (type === 'group') {
       if (grpGroups.length === 0) {
-        const { data } = await sb.from('club_groups').select('id,name,coach_id').eq('club_id', clubId).eq('is_active', true);
+        const { data } = await sb.from('club_groups').select('id,name,coach_id,billing_type').eq('club_id', clubId).eq('is_active', true);
         setGrpGroups(data || []);
       }
       setGrpSelectedId('');
@@ -1267,16 +1268,18 @@ function MyProgramScreen({ clubId, setScreen, clubProfile }) {
       }
 
       // Her kort için ayrı kayıt
+      const isRecurring = closureType === 'closure' && closureIsRecurring;
+      const dow = new Date(selDate + 'T12:00:00').getDay();
       const rows = slotClickInfo.courtIds.map(cId => ({
         court_id:     cId,
-        closure_type: 'one_time',
+        closure_type: isRecurring ? 'recurring_weekly' : 'one_time',
         reason:       closureType === 'group' ? 'Grup Dersi' : 'Kapalı',
         start_hour:   slotClickInfo.startHour,
         start_minute: slotClickInfo.startMinute || 0,
         end_hour:     slotClickInfo.endHour,
         end_minute:   slotClickInfo.endMinute || 0,
         start_date:   selDate,
-        end_date:     selDate,
+        ...(isRecurring ? { day_of_week: dow } : { end_date: selDate }),
         is_active:    true,
         group_id:     selectedGroup || null,
       }));
@@ -1285,6 +1288,7 @@ function MyProgramScreen({ clubId, setScreen, clubProfile }) {
       setSlotTypeModal(false);
       setSlotClickInfo(null);
       setClosureType(null);
+      setClosureIsRecurring(false);
       await load();
     } catch (e) { alert('Hata: ' + e.message); }
     finally { setSlotSaving(false); }
@@ -1312,8 +1316,18 @@ function MyProgramScreen({ clubId, setScreen, clubProfile }) {
         .select('id,court_id,closure_type,day_of_week,start_hour,start_minute,end_hour,end_minute,start_date,end_date,reason,group_id,courts(court_number)')
         .in('court_id', courtIds).eq('is_active', true);
 
+      const courtClosureGroupIds = (courtClosures || []).map(r => r.group_id).filter(Boolean);
+      const exSetGrp = new Set();
+      if (courtClosureGroupIds.length > 0) {
+        const { data: exDataGrp } = await sb.from('group_lesson_exceptions')
+          .select('group_id, start_hour, start_minute')
+          .in('group_id', courtClosureGroupIds)
+          .eq('exception_date', selDate);
+        (exDataGrp || []).forEach(ex => exSetGrp.add(`${ex.group_id}_${ex.start_hour}_${ex.start_minute ?? 0}`));
+      }
       for (const row of (courtClosures || [])) {
         if (row.group_id === grpSelectedId) continue;
+        if (row.group_id && exSetGrp.has(`${row.group_id}_${row.start_hour}_${row.start_minute ?? 0}`)) continue;
         const cs = (row.start_hour || 0) + (row.start_minute || 0) / 60;
         const ce = (row.end_hour   || 0) + (row.end_minute   || 0) / 60;
         if (!(startH < ce && endH > cs)) continue;
@@ -1421,6 +1435,23 @@ function MyProgramScreen({ clubId, setScreen, clubProfile }) {
         }));
         const { error: attErr } = await sb.from('group_attendance').insert(attendanceRows);
         if (attErr) console.warn('Devamsızlık kaydı hatası:', attErr.message);
+
+        // Kredi bazlı grupta gelen üyelerin aktif paketinden seans düş
+        if (group?.billing_type === 'credit') {
+          const presentIds = grpMembers.filter(m => grpSelectedMembers.has(m.id)).map(m => m.id);
+          for (const memberId of presentIds) {
+            const { data: pkgs } = await sb.from('club_group_member_packages')
+              .select('id,used_sessions,total_sessions')
+              .eq('group_id', grpSelectedId).eq('member_id', memberId)
+              .order('purchased_at', { ascending: true });
+            const activePkg = (pkgs || []).find(p => p.used_sessions < p.total_sessions);
+            if (activePkg) {
+              await sb.from('club_group_member_packages')
+                .update({ used_sessions: activePkg.used_sessions + 1 })
+                .eq('id', activePkg.id);
+            }
+          }
+        }
       }
 
       setGrpModal(null);
@@ -1775,7 +1806,15 @@ function MyProgramScreen({ clubId, setScreen, clubProfile }) {
     if (!confirm(`"${clDetail.label}" grubunun tüm haftalık serisini silmek istediğinize emin misiniz?`)) return;
     setClDetailSaving(true);
     try {
-      const { error } = await sb.from('court_closures').delete().eq('id', clDetail.rawId);
+      let error;
+      if (clDetail.groupId) {
+        // Grup dersi: group_id üzerinden tüm recurring kayıtları sil
+        ({ error } = await sb.from('court_closures').delete()
+          .eq('group_id', clDetail.groupId)
+          .eq('closure_type', 'recurring_weekly'));
+      } else if (clDetail.rawId) {
+        ({ error } = await sb.from('court_closures').delete().eq('id', clDetail.rawId));
+      }
       if (error) throw error;
       setClDeleteChoice(false);
       setClDetail(null);
@@ -1953,10 +1992,20 @@ function MyProgramScreen({ clubId, setScreen, clubProfile }) {
     if (hasManualConflict) { resetGuard(); alert('Bu kort seçilen saatte zaten dolu.'); return; }
 
     const dow = new Date(dateStr + 'T12:00:00').getDay();
+    const closureGroupIdsEx = (closures || []).map(c => c.group_id).filter(Boolean);
+    const exSetEx = new Set();
+    if (closureGroupIdsEx.length > 0) {
+      const { data: exDataEx } = await sb.from('group_lesson_exceptions')
+        .select('group_id, start_hour, start_minute')
+        .in('group_id', closureGroupIdsEx)
+        .eq('exception_date', dateStr);
+      (exDataEx || []).forEach(ex => exSetEx.add(`${ex.group_id}_${ex.start_hour}_${ex.start_minute ?? 0}`));
+    }
     const closureBlock = (closures || []).some(cl => {
       const cs = String(cl.start_hour ?? 0).padStart(2,'0') + ':00';
       const ce = String(cl.end_hour   ?? 0).padStart(2,'0') + ':00';
       if (!(cs < endHH && ce > startHH)) return false;
+      if (cl.group_id && exSetEx.has(`${cl.group_id}_${cl.start_hour}_${cl.start_minute ?? 0}`)) return false;
       if (cl.closure_type === 'recurring_weekly') return cl.day_of_week === dow;
       return (!cl.start_date || cl.start_date <= dateStr) && (!cl.end_date || cl.end_date >= dateStr);
     });
@@ -2762,6 +2811,28 @@ function MyProgramScreen({ clubId, setScreen, clubProfile }) {
                 <div style={{ fontSize:13, fontWeight:600, color:'var(--text-1)', marginBottom:4 }}>
                   {closureType === 'group' ? 'Grup seçin (opsiyonel)' : 'Kapatma Onayı'}
                 </div>
+                {closureType === 'closure' && (
+                  <div style={{ display:'flex', gap:8, marginBottom:8 }}>
+                    {[
+                      { v: false, label: 'Tek Seferlik', icon: 'today',  desc: 'Sadece bu tarih için' },
+                      { v: true,  label: 'Haftalık',     icon: 'repeat', desc: 'Her hafta tekrarlanır' },
+                    ].map(({ v, label, icon, desc }) => {
+                      const sel = closureIsRecurring === v;
+                      return (
+                        <div key={String(v)} onClick={() => setClosureIsRecurring(v)}
+                          style={{ flex:1, padding:'12px 14px', borderRadius:14,
+                            border: sel ? '2px solid #DC2626' : '1.5px solid var(--border)',
+                            background: sel ? '#FEE2E2' : 'var(--bg)', cursor:'pointer', transition:'all 0.12s' }}>
+                          <div style={{ display:'flex', alignItems:'center', gap:6, marginBottom:4 }}>
+                            <span className="material-icons" style={{ fontSize:17, color: sel ? '#DC2626' : 'var(--text-2)' }}>{icon}</span>
+                            <span style={{ fontSize:13, fontWeight:700, color: sel ? '#B91C1C' : 'var(--text-1)' }}>{label}</span>
+                          </div>
+                          <div style={{ fontSize:11, color:'var(--text-2)' }}>{desc}</div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
                 {closureType === 'group' && (
                   <select value={selectedGroup} onChange={e => setSelectedGroup(e.target.value)}
                     style={{ border:'1.5px solid var(--border)', borderRadius:10, padding:'10px 12px', fontSize:14 }}>
@@ -2775,14 +2846,14 @@ function MyProgramScreen({ clubId, setScreen, clubProfile }) {
                   {slotSaving ? 'Kaydediliyor…' : closureType === 'group' ? 'Grup Dersi Ekle' : 'Kapat'}
                 </button>
                 <button style={{ padding:'10px', borderRadius:12, border:'1px solid var(--border)', background:'var(--bg)', cursor:'pointer', fontSize:13, color:'var(--text-2)', fontWeight:600 }}
-                  onClick={() => setClosureType(null)}>
+                  onClick={() => { setClosureType(null); setClosureIsRecurring(false); }}>
                   ← Geri
                 </button>
               </>
             )}
 
             <button style={{ marginTop:2, padding:'10px', borderRadius:12, border:'1px solid var(--border)', background:'var(--bg)', cursor:'pointer', fontSize:13, color:'var(--text-2)', fontWeight:600 }}
-              onClick={() => { setSlotTypeModal(false); setSlotClickInfo(null); setClosureType(null); }}>
+              onClick={() => { setSlotTypeModal(false); setSlotClickInfo(null); setClosureType(null); setClosureIsRecurring(false); }}>
               İptal
             </button>
           </div>
@@ -4788,7 +4859,7 @@ function GroupsScreen({ clubId, setScreen }) {
   };
   const combineHour = (h, m) => h + (m || 0) / 60;
   const splitHour  = (h) => ({ hour: Math.floor(h), minute: Math.round((h % 1) * 60) });
-  const makeMember = () => ({ key: Date.now() + Math.random(), name:'', phone:'', contact:'', fee:'', days:[] });
+  const makeMember = () => ({ key: Date.now() + Math.random(), name:'', phone:'', contact:'', fee:'', schedule_slots:[], joinDate:'' });
   const makeSlot   = () => ({ courts: [], start: 9, end: 11 });
 
   // ── List ─────────────────────────────────────────────────────
@@ -4809,6 +4880,9 @@ function GroupsScreen({ clubId, setScreen }) {
   const [coachShares,        setCoachShares]        = useState({});
   const [coachFixedAmounts,  setCoachFixedAmounts]  = useState({});
   const [monthlyFee,         setMonthlyFee]         = useState('0');
+  const [billingType,        setBillingType]        = useState('monthly');
+  const [creditSessions,     setCreditSessions]     = useState('8');
+  const [creditPrice,        setCreditPrice]        = useState('0');
   const [clubPercentage,     setClubPercentage]     = useState('100');
   const [splitType,          setSplitType]          = useState('percentage');
   const [selectedDays,       setSelectedDays]       = useState([]);
@@ -4823,11 +4897,13 @@ function GroupsScreen({ clubId, setScreen }) {
   const [detailGroupDays,setDetailGroupDays]= useState([]);
   const [detailGroupSlots,setDetailGroupSlots]= useState([]);
   const [detailTab,     setDetailTab]     = useState('members');
+  const [memberPackageSummary, setMemberPackageSummary] = useState({});
 
   // Add/edit member
   const [addMemberVisible, setAddMemberVisible] = useState(false);
-  const [newMember,        setNewMember]        = useState({ name:'', phone:'', contact:'', fee:'', days:[] });
+  const [newMember,        setNewMember]        = useState({ name:'', phone:'', contact:'', fee:'', days:[], joinDate:'' });
   const [addingMember,     setAddingMember]     = useState(false);
+  const [addMemberRemain,  setAddMemberRemain]  = useState({ total: 0, remaining: 0, monthName: '' });
   const [editMemberVisible,setEditMemberVisible]= useState(false);
   const [editingMember,    setEditingMember]    = useState(null);
   const [editMemberForm,   setEditMemberForm]   = useState({ name:'', phone:'', contact:'', fee:'', days:[] });
@@ -4862,6 +4938,16 @@ function GroupsScreen({ clubId, setScreen }) {
   const [duesPost,        setDuesPost]        = useState(null);
   const [loadingDues,     setLoadingDues]     = useState(false);
   const [postingFinance,  setPostingFinance]  = useState(false);
+
+  // ── Credit Packages ───────────────────────────────────────────
+  const [packages,          setPackages]          = useState([]);
+  const [loadingPackages,   setLoadingPackages]   = useState(false);
+  const [addPkgVisible,     setAddPkgVisible]     = useState(false);
+  const [addPkgMember,      setAddPkgMember]      = useState(null);
+  const [addPkgSessions,    setAddPkgSessions]    = useState('');
+  const [addPkgPrice,       setAddPkgPrice]       = useState('');
+  const [savingPkg,         setSavingPkg]         = useState(false);
+  const [postingPkg,        setPostingPkg]        = useState(false);
 
   // ── Init ─────────────────────────────────────────────────────
   useEffect(() => { if (clubId) init(); }, [clubId]);
@@ -5027,11 +5113,11 @@ function GroupsScreen({ clubId, setScreen }) {
     }
     setSaving(true);
     try {
-      const fee = parseFloat(monthlyFee) || 0;
+      const fee = billingType === 'monthly' ? (parseFloat(monthlyFee) || 0) : 0;
       const pct = Math.min(100, Math.max(0, parseFloat(clubPercentage) || 100));
       const primaryCoachId = allCoachIds[0] || null;
       const { data: group, error: groupErr } = await sb.from('club_groups')
-        .insert([{ club_id:clubId, name:groupName.trim(), coach_id:primaryCoachId, description:groupDesc.trim()||null, monthly_fee:fee, club_percentage:pct, split_type:splitType }])
+        .insert([{ club_id:clubId, name:groupName.trim(), coach_id:primaryCoachId, description:groupDesc.trim()||null, monthly_fee:fee, club_percentage:pct, split_type:splitType, billing_type:billingType, credit_sessions: billingType==='credit'?(parseInt(creditSessions)||8):null, credit_price: billingType==='credit'?(parseFloat(creditPrice)||0):null }])
         .select().single();
       if (groupErr) throw groupErr;
       const { error: membErr } = await sb.from('club_group_members').insert(
@@ -5041,10 +5127,25 @@ function GroupsScreen({ clubId, setScreen }) {
           contact_number: m.phone.trim() || null,
           contact_person: m.contact.trim() || null,
           custom_fee: m.fee.trim() && !isNaN(parseFloat(m.fee)) ? parseFloat(m.fee) : null,
-          schedule_days: (m.days||[]).length === 0 ? selectedDays : m.days,
+          schedule_slots: (m.schedule_slots||[]).length === 0 ? allSlots : m.schedule_slots,
+          join_date: m.joinDate || todayISO(),
         }))
       );
       if (membErr) throw membErr;
+      // Kredi grubuysa üyeler için otomatik paket oluştur
+      if (billingType === 'credit') {
+        const { data: createdMembers } = await sb.from('club_group_members').select('id, member_name').eq('group_id', group.id);
+        if (createdMembers?.length) {
+          const pkgRows = createdMembers.map(m => ({
+            group_id: group.id, club_id: clubId,
+            member_id: m.id, member_name: m.member_name,
+            total_sessions: parseInt(creditSessions) || 8,
+            used_sessions: 0, amount: parseFloat(creditPrice) || 0,
+            is_paid: false, purchased_at: new Date().toISOString(),
+          }));
+          await sb.from('club_group_member_packages').insert(pkgRows);
+        }
+      }
       if (allCoachIds.length > 0) {
         const eq = parseFloat((100 / allCoachIds.length).toFixed(2));
         await sb.from('club_group_coaches').insert(
@@ -5083,6 +5184,24 @@ function GroupsScreen({ clubId, setScreen }) {
   };
 
   // ── Detail ────────────────────────────────────────────────────
+  const loadMemberPackageSummary = async (groupId, members) => {
+    if (!members?.length) return;
+    const { data: pkgs } = await sb.from('club_group_member_packages')
+      .select('member_id, total_sessions, used_sessions, purchased_at')
+      .eq('group_id', groupId).order('purchased_at', { ascending: true });
+    const summary = {};
+    for (const m of members) {
+      const mp = (pkgs || []).filter(p => p.member_id === m.id);
+      const active = mp.find(p => p.used_sessions < p.total_sessions);
+      const pkgIdx = active ? mp.indexOf(active) : mp.length - 1;
+      if (mp.length > 0) {
+        const pkg = active ?? mp[mp.length - 1];
+        summary[m.id] = { label: `${pkgIdx + 1}. Paket`, total: pkg.total_sessions, used: pkg.used_sessions, remaining: pkg.total_sessions - pkg.used_sessions };
+      }
+    }
+    setMemberPackageSummary(summary);
+  };
+
   const openDetail = async (group) => {
     try {
       const [fresh, { data: closures }] = await Promise.all([
@@ -5100,6 +5219,8 @@ function GroupsScreen({ clubId, setScreen }) {
       setDetailGroupDays([...new Set(slots.map(s => s.day))]);
       setDetailGroupSlots(slots);
       setDetailTab('members');
+      setMemberPackageSummary({});
+      if (fresh.billing_type === 'credit') await loadMemberPackageSummary(group.id, fresh.members);
       setDetailVisible(true);
     } catch (e) { alert(e.message); }
   };
@@ -5133,25 +5254,114 @@ function GroupsScreen({ clubId, setScreen }) {
   };
 
   // ── Member operations ─────────────────────────────────────────
+  const reloadDetail = async () => {
+    const fresh = await loadGroupDetail(detailGroup.id);
+    setDetailGroup(fresh);
+    if (fresh.billing_type === 'credit') await loadMemberPackageSummary(detailGroup.id, fresh.members);
+  };
+
   const handleRemoveMember = async (member) => {
     if ((detailGroup?.members?.length ?? 0) <= 2) { alert('Grupta en az 2 üye bulunmalıdır'); return; }
     if (!confirm(`"${member.member_name}" grubdan çıkarılsın mı?`)) return;
     try {
       await sb.from('club_group_members').delete().eq('id', member.id);
-      setDetailGroup(await loadGroupDetail(detailGroup.id));
+      await reloadDetail();
       await loadGroups(currentPage, searchQuery);
     } catch (e) { alert(e.message); }
   };
+
+  // Tarih aralığındaki seans sayısını hesapla
+  const calcSessionsInRangeG = (days, from, to) => {
+    let count = 0;
+    const d = new Date(from); d.setHours(12,0,0,0);
+    const end = new Date(to); end.setHours(12,0,0,0);
+    while (d <= end) { if (days.includes(d.getDay())) count++; d.setDate(d.getDate() + 1); }
+    return count;
+  };
+
+  // addMemberVisible veya joinDate değişince seans bilgisini hesapla
+  useEffect(() => {
+    if (!addMemberVisible) { setAddMemberRemain({ total: 0, remaining: 0, monthName: '' }); return; }
+    const billingType = detailGroup?.billing_type;
+
+    if (billingType === 'credit') {
+      // Kredili grup: aktif paketlerdeki max used_sessions = döngüde yapılan ders sayısı
+      const load = async () => {
+        const creditSessions = detailGroup?.credit_sessions || 8;
+        const { data: pkgs } = await sb.from('club_group_member_packages')
+          .select('used_sessions, total_sessions').eq('group_id', detailGroup.id);
+        const activePkgs = (pkgs || []).filter(p => p.used_sessions < p.total_sessions);
+        const sessionsDone = activePkgs.length > 0 ? Math.max(...activePkgs.map(p => p.used_sessions)) : 0;
+        const remaining = Math.max(creditSessions - sessionsDone, 0);
+        setAddMemberRemain({ total: creditSessions, remaining, monthName: '' });
+      };
+      load();
+      return;
+    }
+
+    if (billingType === 'monthly') {
+      const days = [...new Set((detailGroupSlots || []).map(s => s.day))];
+      if (!days.length) { setAddMemberRemain({ total: 0, remaining: 0, monthName: '' }); return; }
+      const joinDate = newMember.joinDate
+        ? new Date(newMember.joinDate + 'T12:00:00')
+        : new Date();
+      const targetYear  = joinDate.getFullYear();
+      const targetMth   = joinDate.getMonth();
+      const monthStart  = new Date(targetYear, targetMth, 1);
+      const monthEnd    = new Date(targetYear, targetMth + 1, 0);
+      const total       = calcSessionsInRangeG(days, monthStart, monthEnd);
+      const remaining   = calcSessionsInRangeG(days, joinDate, monthEnd);
+      const MONTHS_TR_LOCAL = ['Ocak','Şubat','Mart','Nisan','Mayıs','Haziran','Temmuz','Ağustos','Eylül','Ekim','Kasım','Aralık'];
+      setAddMemberRemain({ total, remaining, monthName: MONTHS_TR_LOCAL[targetMth] });
+    }
+  }, [addMemberVisible, newMember.joinDate, detailGroupSlots, detailGroup?.billing_type, detailGroup?.id]);
 
   const handleAddMember = async () => {
     if (!newMember.name.trim()) { alert('Üye adı boş olamaz'); return; }
     setAddingMember(true);
     try {
       const feeVal = newMember.fee.trim() && !isNaN(parseFloat(newMember.fee)) ? parseFloat(newMember.fee) : null;
-      await sb.from('club_group_members').insert([{ group_id:detailGroup.id, member_name:newMember.name.trim(), contact_number:newMember.phone.trim()||null, contact_person:newMember.contact.trim()||null, custom_fee:feeVal, schedule_slots:newMember.schedule_slots }]);
-      setNewMember({ name:'', phone:'', contact:'', fee:'', schedule_slots:[] });
+      const joinDateVal = newMember.joinDate.trim() || todayISO();
+      await sb.from('club_group_members').insert([{ group_id:detailGroup.id, member_name:newMember.name.trim(), contact_number:newMember.phone.trim()||null, contact_person:newMember.contact.trim()||null, custom_fee:feeVal, schedule_slots:newMember.schedule_slots, join_date:joinDateVal }]);
+      const { data: newMemberRow } = await sb.from('club_group_members').select('id, member_name')
+        .eq('group_id', detailGroup.id).eq('member_name', newMember.name.trim())
+        .order('created_at', { ascending: false }).limit(1).maybeSingle();
+      // Kredi grubuysa yeni üye için (orantılı) ilk paket oluştur
+      if (detailGroup?.billing_type === 'credit' && newMemberRow) {
+        const fullSessions = detailGroup.credit_sessions || 8;
+        const fullPrice    = detailGroup.credit_price || 0;
+        const initSess = addMemberRemain.remaining > 0 && addMemberRemain.remaining < fullSessions
+          ? addMemberRemain.remaining : fullSessions;
+        const initAmt  = Math.round((initSess / fullSessions) * fullPrice * 100) / 100;
+        await sb.from('club_group_member_packages').insert({
+          group_id: detailGroup.id, club_id: clubId,
+          member_id: newMemberRow.id, member_name: newMemberRow.member_name,
+          total_sessions: initSess, used_sessions: 0,
+          amount: initAmt, is_paid: false, purchased_at: new Date().toISOString(),
+        });
+      }
+      // Aylık grubuysa ve bu ay aidat zaten oluşturulmuşsa orantılı kayıt ekle
+      if (detailGroup?.billing_type === 'monthly' && newMemberRow &&
+          addMemberRemain.remaining > 0 && addMemberRemain.total > 0) {
+        const now = new Date();
+        const { data: existingDues } = await sb.from('club_group_dues').select('id')
+          .eq('group_id', detailGroup.id)
+          .eq('year', now.getFullYear()).eq('month', now.getMonth() + 1)
+          .limit(1);
+        if (existingDues && existingDues.length > 0) {
+          const baseFee = feeVal ?? detailGroup.monthly_fee ?? 0;
+          const proratedFee = Math.round((addMemberRemain.remaining / addMemberRemain.total) * baseFee * 100) / 100;
+          await sb.from('club_group_dues').insert({
+            group_id: detailGroup.id, club_id: clubId,
+            year: now.getFullYear(), month: now.getMonth() + 1,
+            member_id: newMemberRow.id, member_name: newMemberRow.member_name,
+            amount: proratedFee, is_paid: false,
+          });
+        }
+      }
+      setNewMember({ name:'', phone:'', contact:'', fee:'', schedule_slots:[], joinDate:'' });
       setAddMemberVisible(false);
-      setDetailGroup(await loadGroupDetail(detailGroup.id));
+      await reloadDetail();
       await loadGroups(currentPage, searchQuery);
     } catch (e) { alert(e.message); }
     finally { setAddingMember(false); }
@@ -5163,7 +5373,7 @@ function GroupsScreen({ clubId, setScreen }) {
       const feeVal = editMemberForm.fee.trim() && !isNaN(parseFloat(editMemberForm.fee)) ? parseFloat(editMemberForm.fee) : null;
       await sb.from('club_group_members').update({ member_name:editMemberForm.name.trim(), contact_number:editMemberForm.phone.trim()||null, contact_person:editMemberForm.contact.trim()||null, custom_fee:feeVal, schedule_slots:editMemberForm.schedule_slots }).eq('id', editingMember.id);
       setEditMemberVisible(false);
-      setDetailGroup(await loadGroupDetail(detailGroup.id));
+      await reloadDetail();
       await loadGroups(currentPage, searchQuery);
     } catch (e) { alert(e.message); }
   };
@@ -5251,7 +5461,7 @@ function GroupsScreen({ clubId, setScreen }) {
         if (rows.length > 0) { const { error } = await sb.from('court_closures').insert(rows); if (error) throw error; }
       }
       setEditSchedVisible(false);
-      setDetailGroup(await loadGroupDetail(detailGroup.id));
+      await reloadDetail();
       await loadGroups(currentPage, searchQuery);
     } catch (e) { alert(e.message); }
     finally { setSavingSched(false); }
@@ -5280,7 +5490,7 @@ function GroupsScreen({ clubId, setScreen }) {
         await sb.from('club_group_coaches').update({ fixed_amount: editSplitType === 'fixed_amount' ? fa : null }).eq('group_id', detailGroup.id).eq('coach_id', coach.id);
       }
       setEditFeeVisible(false);
-      setDetailGroup(await loadGroupDetail(detailGroup.id));
+      await reloadDetail();
       await loadGroups(currentPage, searchQuery);
     } catch (e) { alert(e.message); }
     finally { setSavingFee(false); }
@@ -5289,12 +5499,17 @@ function GroupsScreen({ clubId, setScreen }) {
   // ── Dues / Payment ────────────────────────────────────────────
   const openPayment = async (group) => {
     setPaymentGroup(group);
-    const now = new Date();
-    const yr = now.getFullYear(), mo = now.getMonth() + 1;
-    setPayYear(yr); setPayMonth(mo);
-    setDues([]); setDuesPost(null);
     setPaymentVisible(true);
-    await loadDues(group, yr, mo);
+    if (group.billing_type === 'credit') {
+      setPackages([]);
+      await loadPackages(group);
+    } else {
+      const now = new Date();
+      const yr = now.getFullYear(), mo = now.getMonth() + 1;
+      setPayYear(yr); setPayMonth(mo);
+      setDues([]); setDuesPost(null);
+      await loadDues(group, yr, mo);
+    }
   };
 
   const loadDues = async (group, year, month) => {
@@ -5350,13 +5565,14 @@ function GroupsScreen({ clubId, setScreen }) {
         .select('coach_id,share_percentage,fixed_amount,club_coaches(full_name)').eq('group_id', paymentGroup.id);
 
       let clubAmount, coachAmount;
+      const memberCount = dues.length;
       if (groupCoaches && groupCoaches.length > 0) {
         if (paymentGroup.split_type === 'fixed_amount') {
           const totalCoachFixed = groupCoaches.reduce((s, gc) => s + (gc.fixed_amount || 0), 0);
-          coachAmount = Math.round(Math.min(totalCoachFixed, totalAmount) * 100) / 100;
+          coachAmount = Math.min(Math.round(totalCoachFixed * memberCount * 100) / 100, totalAmount);
           clubAmount  = Math.round((totalAmount - coachAmount) * 100) / 100;
           for (const gc of groupCoaches) {
-            const earning = Math.round(Math.min(gc.fixed_amount || 0, totalAmount) * 100) / 100;
+            const earning = Math.min(Math.round((gc.fixed_amount || 0) * memberCount * 100) / 100, totalAmount);
             if (earning <= 0) continue;
             await sb.from('coach_earnings').insert({ club_id:clubId, coach_id:gc.coach_id, coach_name:gc.club_coaches?.full_name??'', student_name:null, lesson_id:null, booking_id:null, amount:earning, court_fee:0, date:today, description, payment_status:'unpaid' });
           }
@@ -5382,7 +5598,94 @@ function GroupsScreen({ clubId, setScreen }) {
     finally { setPostingFinance(false); }
   };
 
+  // ── Credit Package Functions ──────────────────────────────────
+  const loadPackages = async (group) => {
+    setLoadingPackages(true);
+    try {
+      const { data: mbs } = await sb.from('club_group_members').select('id,member_name').eq('group_id', group.id);
+      const { data: pkgs } = await sb.from('club_group_member_packages')
+        .select('*').eq('group_id', group.id).order('purchased_at', { ascending: false });
+      const memberMap = {};
+      for (const m of (mbs || [])) {
+        const memberPkgs = (pkgs || []).filter(p => p.member_id === m.id);
+        const active = memberPkgs.find(p => p.used_sessions < p.total_sessions);
+        memberMap[m.id] = { ...m, packages: memberPkgs, activePackage: active || null };
+      }
+      setPackages(Object.values(memberMap));
+    } catch (e) { alert(e.message); }
+    finally { setLoadingPackages(false); }
+  };
+
+  const handleAddPackage = async () => {
+    if (!addPkgMember || !paymentGroup) return;
+    const sessions = parseInt(addPkgSessions) || paymentGroup.credit_sessions || 8;
+    const price    = parseFloat(addPkgPrice)  ?? paymentGroup.credit_price ?? 0;
+    setSavingPkg(true);
+    try {
+      await sb.from('club_group_member_packages').insert({
+        group_id: paymentGroup.id, club_id: clubId,
+        member_id: addPkgMember.id, member_name: addPkgMember.member_name,
+        total_sessions: sessions, used_sessions: 0,
+        amount: price, is_paid: false,
+        purchased_at: new Date().toISOString(),
+      });
+      setAddPkgVisible(false);
+      await loadPackages(paymentGroup);
+    } catch (e) { alert(e.message); }
+    finally { setSavingPkg(false); }
+  };
+
+  const handleTogglePkgPaid = async (pkg) => {
+    try {
+      const np = !pkg.is_paid;
+      await sb.from('club_group_member_packages').update({ is_paid: np, paid_at: np ? new Date().toISOString() : null }).eq('id', pkg.id);
+      await loadPackages(paymentGroup);
+    } catch (e) { alert(e.message); }
+  };
+
+  const handlePostPkgToFinance = async (pkg) => {
+    if (!pkg.is_paid) { alert('Önce paketi ödenmiş olarak işaretleyin'); return; }
+    if (!confirm('Bu paket finansa işlensin mi?')) return;
+    setPostingPkg(true);
+    try {
+      const description = `${paymentGroup.name} - ${pkg.member_name} paket`;
+      const today = todayISO();
+      const { data: groupCoaches } = await sb.from('club_group_coaches')
+        .select('coach_id,share_percentage,fixed_amount,club_coaches(full_name)').eq('group_id', paymentGroup.id);
+      let clubAmount = pkg.amount, coachAmount = 0;
+      if (groupCoaches && groupCoaches.length > 0) {
+        if (paymentGroup.split_type === 'fixed_amount') {
+          const totalCoachFixed = groupCoaches.reduce((s, gc) => s + (gc.fixed_amount || 0), 0);
+          coachAmount = Math.round(Math.min(totalCoachFixed, pkg.amount) * 100) / 100;
+          clubAmount  = Math.round((pkg.amount - coachAmount) * 100) / 100;
+          for (const gc of groupCoaches) {
+            const earning = Math.round(Math.min(gc.fixed_amount || 0, pkg.amount) * 100) / 100;
+            if (earning <= 0) continue;
+            await sb.from('coach_earnings').insert({ club_id:clubId, coach_id:gc.coach_id, coach_name:gc.club_coaches?.full_name??'', student_name:pkg.member_name, lesson_id:null, booking_id:null, amount:earning, court_fee:0, date:today, description, payment_status:'unpaid' });
+          }
+        } else {
+          clubAmount  = Math.round(pkg.amount * ((paymentGroup.club_percentage || 100) / 100) * 100) / 100;
+          coachAmount = Math.round((pkg.amount - clubAmount) * 100) / 100;
+          for (const gc of groupCoaches) {
+            const earning = Math.round(coachAmount * (gc.share_percentage / 100) * 100) / 100;
+            if (earning <= 0) continue;
+            await sb.from('coach_earnings').insert({ club_id:clubId, coach_id:gc.coach_id, coach_name:gc.club_coaches?.full_name??'', student_name:pkg.member_name, lesson_id:null, booking_id:null, amount:earning, court_fee:0, date:today, description, payment_status:'unpaid' });
+          }
+        }
+      }
+      await sb.from('club_finances').insert({ club_id:clubId, type:'income', category:'Grup Paketi', amount:clubAmount, description, date:today });
+      await sb.from('club_group_member_packages').update({ posted_to_finance: true }).eq('id', pkg.id);
+      await loadPackages(paymentGroup);
+      alert('Paket finansa işlendi');
+    } catch (e) { alert(e.message); }
+    finally { setPostingPkg(false); }
+  };
+
   // ── Computed ──────────────────────────────────────────────────
+  const allSlots = selectedDays.flatMap(dayIdx => {
+    const slots = Array.isArray(daySettings[dayIdx]) ? daySettings[dayIdx] : [daySettings[dayIdx] ?? makeSlot()];
+    return slots.map(sl => ({ day: dayIdx, start_hour: Math.floor(sl.start), start_minute: Math.round((sl.start % 1) * 60), end_hour: Math.floor(sl.end), end_minute: Math.round((sl.end % 1) * 60) }));
+  });
   const paidCount      = dues.filter(d => d.is_paid).length;
   const totalDuesAmt   = dues.reduce((s, d) => s + d.amount, 0);
   const allDuesPaid    = dues.length > 0 && paidCount === dues.length;
@@ -5634,8 +5937,24 @@ function GroupsScreen({ clubId, setScreen }) {
               <Field label="GRUP ADI *"><input placeholder="Pazartesi Sabah Grubu" value={groupName} onChange={e=>setGroupName(e.target.value)} /></Field>
               <Field label="AÇIKLAMA"><input placeholder="İsteğe bağlı not" value={groupDesc} onChange={e=>setGroupDesc(e.target.value)} /></Field>
             </div>
+            <Field label="ÖDEME MODELİ">
+              <div style={{ display:'flex', borderRadius:8, overflow:'hidden', border:'1px solid var(--border)' }}>
+                {[{v:'monthly',l:'Aylık Aidat'},{v:'credit',l:'Kredi / Paket'}].map(opt => (
+                  <button key={opt.v} type="button"
+                    style={{ flex:1, padding:'8px', fontSize:13, fontWeight:600, border:'none', cursor:'pointer', background:billingType===opt.v?'var(--brand-navy)':'transparent', color:billingType===opt.v?'#fff':'var(--text-1)' }}
+                    onClick={() => setBillingType(opt.v)}>{opt.l}</button>
+                ))}
+              </div>
+            </Field>
             <div className="fields-2">
-              <Field label="AYLIK AİDAT (₺)"><input type="number" min="0" placeholder="0" value={monthlyFee} onChange={e=>setMonthlyFee(e.target.value)} /></Field>
+              {billingType === 'monthly' ? (
+                <Field label="AYLIK AİDAT (₺)"><input type="number" min="0" placeholder="0" value={monthlyFee} onChange={e=>setMonthlyFee(e.target.value)} /></Field>
+              ) : (
+                <>
+                  <Field label="PAKET SEANS SAYISI"><input type="number" min="1" placeholder="8" value={creditSessions} onChange={e=>setCreditSessions(e.target.value)} /></Field>
+                  <Field label="PAKET FİYATI (₺)"><input type="number" min="0" placeholder="0" value={creditPrice} onChange={e=>setCreditPrice(e.target.value)} /></Field>
+                </>
+              )}
               {selectedCoachIds.length > 0 && (
                 <Field label="PAY MODELİ">
                   <div style={{ display:'flex', borderRadius:8, overflow:'hidden', border:'1px solid var(--border)' }}>
@@ -5655,7 +5974,8 @@ function GroupsScreen({ clubId, setScreen }) {
               </Field>
             )}
             {selectedCoachIds.length > 0 && splitType === 'fixed_amount' && (
-              <Field label="HOCA TUTARLARI (₺)">
+              <Field label="HOCA TUTARLARI (₺ / öğrenci başına)">
+                <div style={{ fontSize:11, color:'var(--text-2)', marginBottom:6 }}>Her öğrenci için hocanın alacağı tutar. Toplam = tutar × öğrenci sayısı.</div>
                 {selectedCoachIds.map(id => { const c=coaches.find(c=>c.id===id); return (
                   <div key={id} style={{ display:'flex', alignItems:'center', gap:8, marginBottom:6 }}>
                     <span style={{ flex:1, fontSize:13 }}>{c?.full_name??'Hoca'}</span>
@@ -5682,7 +6002,7 @@ function GroupsScreen({ clubId, setScreen }) {
                   ))}
                 </div>
               )}
-              {selectedCoachIds.length > 1 && (
+              {selectedCoachIds.length > 1 && splitType === 'percentage' && (
                 <div style={{ marginTop:10 }}>
                   <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:6 }}>
                     <span style={{ fontSize:12, fontWeight:700, color:'var(--text-2)' }}>PAYLAR (toplam %100)</span>
@@ -5890,23 +6210,30 @@ function GroupsScreen({ clubId, setScreen }) {
                         <input style={{ flex:1 }} placeholder="İletişim no" value={m.phone} onChange={e=>setMembers(p=>p.map(r=>r.key===m.key?{...r,phone:e.target.value}:r))} />
                         <input style={{ flex:1 }} placeholder="Kişi (veli vb.)" value={m.contact} onChange={e=>setMembers(p=>p.map(r=>r.key===m.key?{...r,contact:e.target.value}:r))} />
                       </div>
-                      <input type="number" min="0" placeholder={`Özel Ücret ₺ (boş: ${monthlyFee||'0'} ₺)`} value={m.fee} onChange={e=>setMembers(p=>p.map(r=>r.key===m.key?{...r,fee:e.target.value}:r))} />
-                      {selectedDays.length > 0 && (
+                      <div style={{ display:'flex', gap:6 }}>
+                        <input type="number" min="0" style={{ flex:1 }} placeholder={`Özel Ücret ₺ (boş: ${monthlyFee||'0'} ₺)`} value={m.fee} onChange={e=>setMembers(p=>p.map(r=>r.key===m.key?{...r,fee:e.target.value}:r))} />
+                        <input type="date" style={{ flex:1 }} title="Katılım Tarihi (boş: bugün)" value={m.joinDate} onChange={e=>setMembers(p=>p.map(r=>r.key===m.key?{...r,joinDate:e.target.value}:r))} />
+                      </div>
+                      {allSlots.length > 0 && (
                         <div style={{ display:'flex', gap:4, flexWrap:'wrap', marginTop:2 }}>
-                          {DAYS.filter(([,idx]) => selectedDays.includes(idx)).map(([label,idx]) => {
-                            const effectiveDays = (m.days||[]).length === 0 ? selectedDays : m.days;
-                            const active = effectiveDays.includes(idx);
+                          {allSlots.map((slot, si) => {
+                            const effectiveSlots = (m.schedule_slots||[]).length === 0 ? allSlots : m.schedule_slots;
+                            const active = effectiveSlots.some(s => s.day === slot.day && s.start_hour === slot.start_hour && (s.start_minute||0) === (slot.start_minute||0));
+                            const dayLbl = ['Paz','Pzt','Sal','Çar','Per','Cum','Cmt'][slot.day];
+                            const timeLbl = `${String(slot.start_hour).padStart(2,'0')}:${String(slot.start_minute||0).padStart(2,'0')}`;
                             return (
-                              <button key={idx} type="button"
+                              <button key={si} type="button"
                                 style={{ padding:'2px 7px', fontSize:10, fontWeight:700, borderRadius:5, border:'1px solid', cursor:'pointer',
                                   borderColor: active ? '#0D9488' : 'var(--border)',
                                   background: active ? '#0D948818' : 'var(--surface)',
                                   color: active ? '#0D9488' : 'var(--text-2)' }}
                                 onClick={() => {
-                                  const base = (m.days||[]).length === 0 ? [...selectedDays] : m.days;
-                                  const next = active ? base.filter(d=>d!==idx) : [...base,idx];
-                                  setMembers(p=>p.map(r=>r.key===m.key?{...r,days:next}:r));
-                                }}>{label}</button>
+                                  const base = (m.schedule_slots||[]).length === 0 ? [...allSlots] : m.schedule_slots;
+                                  const next = active
+                                    ? base.filter(s => !(s.day === slot.day && s.start_hour === slot.start_hour && (s.start_minute||0) === (slot.start_minute||0)))
+                                    : [...base, slot];
+                                  setMembers(p=>p.map(r=>r.key===m.key?{...r,schedule_slots:next}:r));
+                                }}>{dayLbl} {timeLbl}</button>
                             );
                           })}
                         </div>
@@ -5953,7 +6280,7 @@ function GroupsScreen({ clubId, setScreen }) {
           {detailTab === 'members' && (
             <div>
               <div style={{ display:'flex', justifyContent:'flex-end', marginBottom:12 }}>
-                <button className="btn btn-pri btn-sm" onClick={() => { setNewMember({name:'',phone:'',contact:'',fee:'',schedule_slots:[...detailGroupSlots]}); setAddMemberVisible(true); }}>
+                <button className="btn btn-pri btn-sm" onClick={() => { setNewMember({name:'',phone:'',contact:'',fee:'',schedule_slots:[...detailGroupSlots],joinDate:''}); setAddMemberVisible(true); }}>
                   <span className="material-icons" style={{fontSize:15}}>person_add</span> Üye Ekle
                 </button>
               </div>
@@ -5968,12 +6295,28 @@ function GroupsScreen({ clubId, setScreen }) {
                       <div style={{ fontSize:11, color:'var(--text-2)' }}>
                         {[member.contact_number, member.contact_person].filter(Boolean).join(' · ')}
                       </div>
-                      {member.custom_fee != null && <div style={{ fontSize:11, color:'#0D9488' }}>Özel: ₺{member.custom_fee}/ay</div>}
+                      {member.custom_fee != null && detailGroup?.billing_type !== 'credit' && <div style={{ fontSize:11, color:'#0D9488' }}>Özel: ₺{member.custom_fee}/ay</div>}
                       {(member.schedule_slots||[]).length > 0 && (
                         <div style={{ fontSize:11, color:'#0D9488', fontWeight:600, marginTop:1 }}>
                           {(member.schedule_slots||[]).slice().sort((a,b) => (a.day===0?7:a.day)-(b.day===0?7:b.day) || a.start_hour-b.start_hour).map(s => `${['Paz','Pzt','Sal','Çar','Per','Cum','Cmt'][s.day]} ${String(s.start_hour).padStart(2,'0')}:00`).join(' · ')}
                         </div>
                       )}
+                      {detailGroup?.billing_type === 'credit' && memberPackageSummary[member.id] && (() => {
+                        const pkg = memberPackageSummary[member.id];
+                        const barPct = pkg.total > 0 ? Math.round((pkg.used / pkg.total) * 100) : 0;
+                        const barColor = pkg.remaining <= 2 ? '#EF4444' : pkg.remaining <= 4 ? '#F59E0B' : '#22C55E';
+                        return (
+                          <div style={{ marginTop:4 }}>
+                            <div style={{ display:'flex', justifyContent:'space-between', fontSize:11, marginBottom:2 }}>
+                              <span style={{ fontWeight:600, color:'var(--text-2)' }}>{pkg.label}</span>
+                              <span style={{ color: barColor, fontWeight:700 }}>{pkg.used}/{pkg.total} · {pkg.remaining} kaldı</span>
+                            </div>
+                            <div style={{ height:4, background:'var(--border)', borderRadius:2, overflow:'hidden' }}>
+                              <div style={{ height:'100%', width:`${barPct}%`, background:barColor, borderRadius:2, transition:'width 0.4s' }} />
+                            </div>
+                          </div>
+                        );
+                      })()}
                     </div>
                     <button className="btn btn-ghost btn-sm btn-icon" title="Düzenle"
                       onClick={() => {
@@ -6042,7 +6385,45 @@ function GroupsScreen({ clubId, setScreen }) {
               <Field label="TELEFON"><input placeholder="İletişim no" value={newMember.phone} onChange={e=>setNewMember({...newMember,phone:e.target.value})} /></Field>
               <Field label="KİŞİ"><input placeholder="Veli adı vb." value={newMember.contact} onChange={e=>setNewMember({...newMember,contact:e.target.value})} /></Field>
             </div>
-            <Field label="ÖZEL ÜCRET (₺)"><input type="number" min="0" placeholder={`Boş: ${detailGroup?.monthly_fee??0} ₺`} value={newMember.fee} onChange={e=>setNewMember({...newMember,fee:e.target.value})} /></Field>
+            <div className="fields-2">
+              <Field label="ÖZEL ÜCRET (₺)"><input type="number" min="0" placeholder={`Boş: ${detailGroup?.monthly_fee??0} ₺`} value={newMember.fee} onChange={e=>setNewMember({...newMember,fee:e.target.value})} /></Field>
+              <Field label="KATILIM TARİHİ"><input type="date" value={newMember.joinDate} onChange={e=>setNewMember({...newMember,joinDate:e.target.value})} placeholder={todayISO()} /></Field>
+            </div>
+            {addMemberRemain.total > 0 && (() => {
+              const mn = addMemberRemain.monthName;
+              if (detailGroup?.billing_type === 'credit') {
+                const fullSess  = detailGroup.credit_sessions || 8;
+                const fullPrice = detailGroup.credit_price || 0;
+                const sessionsDone = fullSess - addMemberRemain.remaining;
+                const initSess  = addMemberRemain.remaining > 0 && addMemberRemain.remaining < fullSess
+                  ? addMemberRemain.remaining : fullSess;
+                const initAmt   = Math.round((initSess / fullSess) * fullPrice * 100) / 100;
+                const label = addMemberRemain.remaining === 0
+                  ? `Aktif pakette tüm ${fullSess} ders yapılmış → Tam yeni paket: ${fullSess} seans / ${fullPrice.toFixed(2)} ₺`
+                  : addMemberRemain.remaining < fullSess
+                    ? `Aktif pakette ${sessionsDone}/${fullSess} ders yapılmış, ${addMemberRemain.remaining} ders kaldı → İlk paket: ${initSess} seans / ${initAmt.toFixed(2)} ₺`
+                    : `Paket henüz başlamamış → Tam paket: ${fullSess} seans / ${fullPrice.toFixed(2)} ₺`;
+                return (
+                  <div style={{ background:'#EFF6FF', borderRadius:8, padding:'8px 12px', fontSize:12, color:'#1D4ED8' }}>
+                    {label}
+                  </div>
+                );
+              }
+              if (detailGroup?.billing_type === 'monthly') {
+                const feeVal2 = newMember.fee.trim() && !isNaN(parseFloat(newMember.fee)) ? parseFloat(newMember.fee) : null;
+                const baseFee = feeVal2 ?? detailGroup?.monthly_fee ?? 0;
+                const prorated = Math.round((addMemberRemain.remaining / addMemberRemain.total) * baseFee * 100) / 100;
+                const label = addMemberRemain.remaining === 0
+                  ? `${mn}'da bu tarihten sonra ders yok`
+                  : `${mn}'da ${addMemberRemain.total} ders / ${addMemberRemain.remaining} katılacak → Orantılı aidat: ${prorated.toFixed(2)} ₺`;
+                return (
+                  <div style={{ background:'#F0FDF4', borderRadius:8, padding:'8px 12px', fontSize:12, color:'#15803D' }}>
+                    {label}
+                  </div>
+                );
+              }
+              return null;
+            })()}
             {detailGroupSlots.length > 0 && (
               <Field label="SEANSLAR">
                 <div style={{ display:'flex', gap:4, flexWrap:'wrap' }}>
@@ -6329,7 +6710,8 @@ function GroupsScreen({ clubId, setScreen }) {
               </Field>
             )}
             {(detailGroup.coaches||[]).length > 0 && editSplitType === 'fixed_amount' && (
-              <Field label="HOCA TUTARLARI (₺)">
+              <Field label="HOCA TUTARLARI (₺ / öğrenci başına)">
+                <div style={{ fontSize:11, color:'var(--text-2)', marginBottom:6 }}>Her öğrenci için hocanın alacağı tutar. Toplam = tutar × öğrenci sayısı.</div>
                 {(detailGroup.coaches||[]).map(c => (
                   <div key={c.id} style={{ display:'flex', alignItems:'center', gap:8, marginBottom:6 }}>
                     <span style={{ flex:1, fontSize:13 }}>{c.full_name}</span>
@@ -6344,68 +6726,161 @@ function GroupsScreen({ clubId, setScreen }) {
 
       {/* ══ Aidat Takip Modalı ════════════════════════════════════ */}
       {paymentVisible && paymentGroup && (
-        <Modal title={`${paymentGroup.name} — Aidat Takibi`} wide onClose={() => setPaymentVisible(false)}
+        <Modal title={`${paymentGroup.name} — ${paymentGroup.billing_type === 'credit' ? 'Paket Takibi' : 'Aidat Takibi'}`} wide onClose={() => setPaymentVisible(false)}
           footer={<button className="btn btn-ghost btn-sm" onClick={() => setPaymentVisible(false)}>Kapat</button>}>
-          <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', marginBottom:16, padding:'10px 14px', background:'var(--bg)', borderRadius:10 }}>
-            <button className="btn btn-ghost btn-sm btn-icon" onClick={() => navigatePayMonth(-1)}>
-              <span className="material-icons">chevron_left</span>
-            </button>
-            <span style={{ fontWeight:700, fontSize:15 }}>{MONTHS_TR[payMonth-1]} {payYear}</span>
-            <button className="btn btn-ghost btn-sm btn-icon" onClick={() => navigatePayMonth(1)}>
-              <span className="material-icons">chevron_right</span>
-            </button>
-          </div>
-          {loadingDues ? <Spinner size={28} /> : (
-            <div>
-              <div style={{ display:'flex', gap:10, marginBottom:16 }}>
-                <div style={{ flex:1, padding:'10px 14px', background:'var(--bg)', borderRadius:10, textAlign:'center' }}>
-                  <div style={{ fontWeight:800, fontSize:20, color:'#22C55E' }}>{paidCount}/{dues.length}</div>
-                  <div style={{ fontSize:11, color:'var(--text-2)', marginTop:2 }}>Ödedi</div>
+
+          {paymentGroup.billing_type === 'credit' ? (
+            /* ── KREDİ / PAKET GÖRÜNÜMÜ ── */
+            loadingPackages ? <Spinner size={28} /> : (
+              <div>
+                <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:14 }}>
+                  <span style={{ fontSize:13, color:'var(--text-2)' }}>
+                    {paymentGroup.credit_sessions} seans / paket · ₺{paymentGroup.credit_price} / paket
+                  </span>
                 </div>
-                <div style={{ flex:1, padding:'10px 14px', background:'var(--bg)', borderRadius:10, textAlign:'center' }}>
-                  <div style={{ fontWeight:800, fontSize:20, color:'var(--brand-navy)' }}>₺{totalDuesAmt.toLocaleString('tr-TR')}</div>
-                  <div style={{ fontSize:11, color:'var(--text-2)', marginTop:2 }}>Toplam Aidat</div>
+                <div style={{ display:'flex', flexDirection:'column', gap:10 }}>
+                  {packages.map(mb => {
+                    const ap = mb.activePackage;
+                    const remaining = ap ? ap.total_sessions - ap.used_sessions : 0;
+                    return (
+                      <div key={mb.id} style={{ padding:'12px 14px', background:'var(--bg)', borderRadius:10, border:'1px solid var(--border)' }}>
+                        <div style={{ display:'flex', alignItems:'center', gap:10, marginBottom: ap ? 10 : 0 }}>
+                          <div style={{ width:34, height:34, borderRadius:17, background:'#EEF2FF', display:'grid', placeItems:'center', flexShrink:0 }}>
+                            <span style={{ fontSize:13, fontWeight:700, color:'var(--brand-navy)' }}>{mb.member_name?.charAt(0)?.toUpperCase()}</span>
+                          </div>
+                          <div style={{ flex:1 }}>
+                            <div style={{ fontWeight:600, fontSize:13 }}>{mb.member_name}</div>
+                            {ap ? (
+                              <div style={{ fontSize:12, color: remaining <= 2 ? '#EF4444' : '#22C55E', fontWeight:600 }}>
+                                {remaining} seans kaldı ({ap.used_sessions}/{ap.total_sessions})
+                              </div>
+                            ) : (
+                              <div style={{ fontSize:12, color:'var(--text-2)' }}>Aktif paket yok</div>
+                            )}
+                          </div>
+                          <button className="btn btn-ghost btn-sm" style={{ fontSize:12 }}
+                            onClick={() => { setAddPkgMember(mb); setAddPkgSessions(String(paymentGroup.credit_sessions||8)); setAddPkgPrice(String(paymentGroup.credit_price||0)); setAddPkgVisible(true); }}>
+                            <span className="material-icons" style={{fontSize:14, verticalAlign:'middle'}}>add</span> Paket
+                          </button>
+                        </div>
+                        {mb.packages.length > 0 && (
+                          <div style={{ display:'flex', flexDirection:'column', gap:6, marginTop:6 }}>
+                            {mb.packages.map(pkg => (
+                              <div key={pkg.id} style={{ display:'flex', alignItems:'center', gap:8, padding:'6px 10px', background:'var(--surface)', borderRadius:8, border:`1px solid ${pkg.posted_to_finance?'#BBF7D0':pkg.is_paid?'#C7D2FE':'var(--border)'}` }}>
+                                <span style={{ fontSize:12, flex:1, color:'var(--text-2)' }}>
+                                  {pkg.total_sessions} seans · ₺{pkg.amount}
+                                  {pkg.purchased_at && ` · ${new Date(pkg.purchased_at).toLocaleDateString('tr-TR')}`}
+                                </span>
+                                <span style={{ fontSize:11, fontWeight:600, color: pkg.used_sessions >= pkg.total_sessions ? '#6B7280' : '#22C55E' }}>
+                                  {pkg.used_sessions >= pkg.total_sessions ? 'Tükendi' : `${pkg.total_sessions - pkg.used_sessions} kaldı`}
+                                </span>
+                                {pkg.posted_to_finance ? (
+                                  <Badge cls="b-green">Finansa İşlendi</Badge>
+                                ) : pkg.is_paid ? (
+                                  <div style={{ display:'flex', gap:6 }}>
+                                    <button className="btn btn-ghost btn-sm" style={{ fontSize:11, padding:'3px 8px' }} onClick={() => handleTogglePkgPaid(pkg)}>
+                                      <span className="material-icons" style={{fontSize:12,verticalAlign:'middle',color:'#22C55E'}}>check_circle</span> Ödendi
+                                    </button>
+                                    <button className="btn btn-sm" style={{ fontSize:11, padding:'3px 8px', background:'#22C55E', color:'#fff', border:'none', borderRadius:6, cursor:'pointer', opacity:postingPkg?0.6:1 }}
+                                      onClick={() => handlePostPkgToFinance(pkg)} disabled={postingPkg}>
+                                      Finansa İşle
+                                    </button>
+                                  </div>
+                                ) : (
+                                  <button className="btn btn-ghost btn-sm" style={{ fontSize:11, padding:'3px 8px' }} onClick={() => handleTogglePkgPaid(pkg)}>
+                                    <span className="material-icons" style={{fontSize:12,verticalAlign:'middle'}}>radio_button_unchecked</span> İşaretle
+                                  </button>
+                                )}
+                              </div>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })}
                 </div>
               </div>
-              <div style={{ display:'flex', flexDirection:'column', gap:8, marginBottom:16 }}>
-                {dues.map(due => (
-                  <div key={due.id} style={{ display:'flex', alignItems:'center', gap:10, padding:'10px 12px', background:'var(--bg)', borderRadius:10, border:`1px solid ${due.is_paid?'#BBF7D0':'var(--border)'}` }}>
-                    <div style={{ width:34, height:34, borderRadius:17, background:due.is_paid?'#DCFCE7':'#EEF2FF', display:'grid', placeItems:'center', flexShrink:0 }}>
-                      <span style={{ fontSize:13, fontWeight:700, color:due.is_paid?'#22C55E':'var(--brand-navy)' }}>{due.member_name?.charAt(0)?.toUpperCase()}</span>
-                    </div>
-                    <div style={{ flex:1 }}>
-                      <div style={{ fontWeight:600, fontSize:13 }}>{due.member_name}</div>
-                      <div style={{ fontSize:12, color:'var(--text-2)' }}>₺{due.amount} / ay</div>
-                    </div>
-                    {duesPost ? (
-                      <Badge cls={due.is_paid?'b-green':''}>{due.is_paid?'Ödendi':'Bekliyor'}</Badge>
-                    ) : (
-                      <button
-                        style={{ display:'flex', alignItems:'center', gap:5, padding:'6px 12px', borderRadius:8, border:'none', cursor:'pointer', background:due.is_paid?'#DCFCE7':'#EEF2FF', color:due.is_paid?'#22C55E':'var(--brand-navy)', fontWeight:600, fontSize:12 }}
-                        onClick={() => handleToggleDuePaid(due)}>
-                        <span className="material-icons" style={{fontSize:14}}>{due.is_paid?'check_circle':'radio_button_unchecked'}</span>
-                        {due.is_paid ? 'Ödendi' : 'İşaretle'}
-                      </button>
-                    )}
-                  </div>
-                ))}
-              </div>
-              {!duesPost ? (
-                <button
-                  style={{ width:'100%', padding:'13px', borderRadius:12, border:'none', cursor:allDuesPaid?'pointer':'not-allowed', background:allDuesPaid?'#22C55E':'var(--border)', color:allDuesPaid?'#fff':'var(--text-2)', fontWeight:700, fontSize:14, opacity:postingFinance?0.6:1, display:'flex', alignItems:'center', justifyContent:'center', gap:6 }}
-                  onClick={handlePostToFinance} disabled={!allDuesPaid||postingFinance}>
-                  <span className="material-icons" style={{fontSize:16}}>account_balance_wallet</span>
-                  {postingFinance ? 'İşleniyor...' : allDuesPaid ? 'Finansa İşle' : `${dues.length-paidCount} üye ödeme bekliyor`}
+            )
+          ) : (
+            /* ── AYLIK AİDAT GÖRÜNÜMÜ ── */
+            <>
+              <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', marginBottom:16, padding:'10px 14px', background:'var(--bg)', borderRadius:10 }}>
+                <button className="btn btn-ghost btn-sm btn-icon" onClick={() => navigatePayMonth(-1)}>
+                  <span className="material-icons">chevron_left</span>
                 </button>
-              ) : (
-                <div style={{ padding:'13px', borderRadius:12, background:'#DCFCE7', textAlign:'center' }}>
-                  <span className="material-icons" style={{ color:'#22C55E', fontSize:20, verticalAlign:'middle', marginRight:6 }}>check_circle</span>
-                  <span style={{ color:'#22C55E', fontWeight:700, fontSize:14 }}>Finansa işlendi</span>
-                  <div style={{ fontSize:12, color:'#16A34A', marginTop:4 }}>Kulüp: ₺{duesPost.club_amount?.toLocaleString('tr-TR')} · Hoca: ₺{duesPost.coach_amount?.toLocaleString('tr-TR')}</div>
+                <span style={{ fontWeight:700, fontSize:15 }}>{MONTHS_TR[payMonth-1]} {payYear}</span>
+                <button className="btn btn-ghost btn-sm btn-icon" onClick={() => navigatePayMonth(1)}>
+                  <span className="material-icons">chevron_right</span>
+                </button>
+              </div>
+              {loadingDues ? <Spinner size={28} /> : (
+                <div>
+                  <div style={{ display:'flex', gap:10, marginBottom:16 }}>
+                    <div style={{ flex:1, padding:'10px 14px', background:'var(--bg)', borderRadius:10, textAlign:'center' }}>
+                      <div style={{ fontWeight:800, fontSize:20, color:'#22C55E' }}>{paidCount}/{dues.length}</div>
+                      <div style={{ fontSize:11, color:'var(--text-2)', marginTop:2 }}>Ödedi</div>
+                    </div>
+                    <div style={{ flex:1, padding:'10px 14px', background:'var(--bg)', borderRadius:10, textAlign:'center' }}>
+                      <div style={{ fontWeight:800, fontSize:20, color:'var(--brand-navy)' }}>₺{totalDuesAmt.toLocaleString('tr-TR')}</div>
+                      <div style={{ fontSize:11, color:'var(--text-2)', marginTop:2 }}>Toplam Aidat</div>
+                    </div>
+                  </div>
+                  <div style={{ display:'flex', flexDirection:'column', gap:8, marginBottom:16 }}>
+                    {dues.map(due => (
+                      <div key={due.id} style={{ display:'flex', alignItems:'center', gap:10, padding:'10px 12px', background:'var(--bg)', borderRadius:10, border:`1px solid ${due.is_paid?'#BBF7D0':'var(--border)'}` }}>
+                        <div style={{ width:34, height:34, borderRadius:17, background:due.is_paid?'#DCFCE7':'#EEF2FF', display:'grid', placeItems:'center', flexShrink:0 }}>
+                          <span style={{ fontSize:13, fontWeight:700, color:due.is_paid?'#22C55E':'var(--brand-navy)' }}>{due.member_name?.charAt(0)?.toUpperCase()}</span>
+                        </div>
+                        <div style={{ flex:1 }}>
+                          <div style={{ fontWeight:600, fontSize:13 }}>{due.member_name}</div>
+                          <div style={{ fontSize:12, color:'var(--text-2)' }}>₺{due.amount} / ay</div>
+                        </div>
+                        {duesPost ? (
+                          <Badge cls={due.is_paid?'b-green':''}>{due.is_paid?'Ödendi':'Bekliyor'}</Badge>
+                        ) : (
+                          <button
+                            style={{ display:'flex', alignItems:'center', gap:5, padding:'6px 12px', borderRadius:8, border:'none', cursor:'pointer', background:due.is_paid?'#DCFCE7':'#EEF2FF', color:due.is_paid?'#22C55E':'var(--brand-navy)', fontWeight:600, fontSize:12 }}
+                            onClick={() => handleToggleDuePaid(due)}>
+                            <span className="material-icons" style={{fontSize:14}}>{due.is_paid?'check_circle':'radio_button_unchecked'}</span>
+                            {due.is_paid ? 'Ödendi' : 'İşaretle'}
+                          </button>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                  {!duesPost ? (
+                    <button
+                      style={{ width:'100%', padding:'13px', borderRadius:12, border:'none', cursor:allDuesPaid?'pointer':'not-allowed', background:allDuesPaid?'#22C55E':'var(--border)', color:allDuesPaid?'#fff':'var(--text-2)', fontWeight:700, fontSize:14, opacity:postingFinance?0.6:1, display:'flex', alignItems:'center', justifyContent:'center', gap:6 }}
+                      onClick={handlePostToFinance} disabled={!allDuesPaid||postingFinance}>
+                      <span className="material-icons" style={{fontSize:16}}>account_balance_wallet</span>
+                      {postingFinance ? 'İşleniyor...' : allDuesPaid ? 'Finansa İşle' : `${dues.length-paidCount} üye ödeme bekliyor`}
+                    </button>
+                  ) : (
+                    <div style={{ padding:'13px', borderRadius:12, background:'#DCFCE7', textAlign:'center' }}>
+                      <span className="material-icons" style={{ color:'#22C55E', fontSize:20, verticalAlign:'middle', marginRight:6 }}>check_circle</span>
+                      <span style={{ color:'#22C55E', fontWeight:700, fontSize:14 }}>Finansa işlendi</span>
+                      <div style={{ fontSize:12, color:'#16A34A', marginTop:4 }}>Kulüp: ₺{duesPost.club_amount?.toLocaleString('tr-TR')} · Hoca: ₺{duesPost.coach_amount?.toLocaleString('tr-TR')}</div>
+                    </div>
+                  )}
                 </div>
               )}
-            </div>
+            </>
           )}
+        </Modal>
+      )}
+
+      {/* Yeni Paket Ekle Modalı */}
+      {addPkgVisible && addPkgMember && (
+        <Modal title={`${addPkgMember.member_name} — Yeni Paket`} onClose={() => setAddPkgVisible(false)}
+          footer={<><button className="btn btn-ghost btn-sm" onClick={() => setAddPkgVisible(false)}>Vazgeç</button><button className="btn btn-pri btn-sm" onClick={handleAddPackage} disabled={savingPkg}>{savingPkg?'Kaydediliyor…':'Ekle'}</button></>}>
+          <div className="fields" style={{ gap:12 }}>
+            <Field label="SEANS SAYISI">
+              <input type="number" min="1" value={addPkgSessions} onChange={e=>setAddPkgSessions(e.target.value)} />
+            </Field>
+            <Field label="PAKET ÜCRETİ (₺)">
+              <input type="number" min="0" value={addPkgPrice} onChange={e=>setAddPkgPrice(e.target.value)} />
+            </Field>
+          </div>
         </Modal>
       )}
     </div>
@@ -6428,6 +6903,8 @@ function MemberProfileView({ member, onBack, clubId }) {
   ];
 
   const [attendance,        setAttendance]        = useState([]);
+  const [isCreditGroup,     setIsCreditGroup]     = useState(false);
+  const [attendanceDetail,  setAttendanceDetail]  = useState(null);
   const [notes,             setNotes]             = useState([]);
   const [activeTab,         setActiveTab]         = useState('weekly_training');
   const [loading,           setLoading]           = useState(true);
@@ -6469,7 +6946,7 @@ function MemberProfileView({ member, onBack, clubId }) {
     setLoading(true);
     try {
       const { data: { user } } = await sb.auth.getUser();
-      const [{ data: attendRows }, { data: noteRows }, { data: coachRow }, { data: membershipsData }] = await Promise.all([
+      const [{ data: attendRows }, { data: noteRows }, { data: coachRow }, { data: membershipsData }, { data: groupRow }, { data: pkgRows }] = await Promise.all([
         sb.from('group_attendance').select('status, session_date')
           .eq('group_id', member.groupId).eq('member_id', member.id)
           .order('session_date', { ascending: false }),
@@ -6483,6 +6960,8 @@ function MemberProfileView({ member, onBack, clubId }) {
           .eq('member_name', member.member_name)
           .eq('club_groups.club_id', clubId)
           .eq('club_groups.is_active', true),
+        member.groupId ? sb.from('club_groups').select('billing_type, credit_sessions').eq('id', member.groupId).maybeSingle() : Promise.resolve({ data: null }),
+        member.groupId ? sb.from('club_group_member_packages').select('id, total_sessions, used_sessions, purchased_at, is_paid').eq('group_id', member.groupId).eq('member_id', member.id).order('purchased_at', { ascending: true }) : Promise.resolve({ data: [] }),
       ]);
 
       setCoachId(coachRow?.id ?? null);
@@ -6516,17 +6995,44 @@ function MemberProfileView({ member, onBack, clubId }) {
         setMembershipClosures(closureMap);
       }
 
-      const monthMap = {};
-      for (const row of (attendRows || [])) {
-        const d = new Date(row.session_date + 'T12:00:00');
-        const key = `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}`;
-        if (!monthMap[key]) monthMap[key] = { present:0, total:0, year:d.getFullYear(), month:d.getMonth() };
-        monthMap[key].total += 1;
-        if (row.status === 'present') monthMap[key].present += 1;
+      const isCredit = groupRow?.billing_type === 'credit';
+      setIsCreditGroup(isCredit);
+
+      let list;
+      if (isCredit && (pkgRows || []).length > 0) {
+        const pkgs = pkgRows || [];
+        const sortedRows = [...(attendRows || [])].sort((a,b) => a.session_date.localeCompare(b.session_date));
+        list = pkgs.map((pkg, i) => {
+          const start = pkg.purchased_at ? new Date(pkg.purchased_at) : null;
+          const nextPkg = pkgs[i + 1];
+          const end = nextPkg?.purchased_at ? new Date(nextPkg.purchased_at) : null;
+          const pkgRows = sortedRows.filter(r => {
+            const d = new Date(r.session_date + 'T12:00:00');
+            return (!start || d >= start) && (!end || d < end);
+          });
+          const present = pkgRows.filter(r => r.status === 'present').length;
+          const absent  = pkgRows.filter(r => r.status === 'absent').length;
+          const total = pkg.total_sessions;
+          const used = pkg.used_sessions;
+          const sessions = [...pkgRows].sort((a,b) => b.session_date.localeCompare(a.session_date))
+            .map(r => ({ date: r.session_date, status: r.status }));
+          return { key: pkg.id, label: `${i+1}. Paket`, present, absent, total, used, remaining: total - used, isPaid: pkg.is_paid, sessions };
+        }).reverse();
+      } else {
+        const monthMap = {};
+        for (const row of (attendRows || [])) {
+          const d = new Date(row.session_date + 'T12:00:00');
+          const key = `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}`;
+          if (!monthMap[key]) monthMap[key] = { present:0, total:0, year:d.getFullYear(), month:d.getMonth(), sessions:[] };
+          monthMap[key].total += 1;
+          if (row.status === 'present') monthMap[key].present += 1;
+          monthMap[key].sessions.push({ date: row.session_date, status: row.status });
+        }
+        list = Object.entries(monthMap)
+          .sort(([a],[b]) => b.localeCompare(a))
+          .map(([key, val]) => ({ key, label:`${MONTHS_TR[val.month]} ${val.year}`, present:val.present, total:val.total,
+            sessions: val.sessions.sort((a,b) => b.date.localeCompare(a.date)) }));
       }
-      const list = Object.entries(monthMap)
-        .sort(([a],[b]) => b.localeCompare(a))
-        .map(([key, val]) => ({ key, label:`${MONTHS_TR[val.month]} ${val.year}`, present:val.present, total:val.total }));
       setAttendance(list);
     } catch(e) { console.error(e); }
     finally { setLoading(false); }
@@ -6797,10 +7303,42 @@ function MemberProfileView({ member, onBack, clubId }) {
               <div style={{ minWidth:200, flex:1 }}>
                 <div style={{ fontSize:11, fontWeight:700, color:'var(--text-2)', marginBottom:8, letterSpacing:'0.05em' }}>DEVAM</div>
                 {attendance.map(m => {
+                  if (isCreditGroup) {
+                    const done = m.used ?? m.present;
+                    const remaining = m.remaining ?? (m.total - done);
+                    const pct = m.total > 0 ? Math.round((done/m.total)*100) : 0;
+                    const barColor = remaining <= 2 ? '#EF4444' : remaining <= 4 ? '#F59E0B' : '#22C55E';
+                    return (
+                      <div key={m.key} onClick={() => setAttendanceDetail(m)}
+                        style={{ marginBottom:6, cursor:'pointer', borderRadius:6, padding:'4px 2px' }}
+                        onMouseEnter={e => e.currentTarget.style.background='var(--surface-2)'}
+                        onMouseLeave={e => e.currentTarget.style.background='transparent'}>
+                        <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', fontSize:12, marginBottom:3 }}>
+                          <span style={{ fontWeight:600 }}>{m.label}</span>
+                          <div style={{ display:'flex', gap:6, alignItems:'center' }}>
+                            <span style={{ color:'var(--text-2)', fontSize:11 }}>{done}/{m.total} yapıldı</span>
+                            <span style={{ fontWeight:700, color:barColor, fontSize:11 }}>{remaining} kaldı</span>
+                          </div>
+                        </div>
+                        <div style={{ height:5, background:'var(--border)', borderRadius:3, overflow:'hidden' }}>
+                          <div style={{ height:'100%', width:`${pct}%`, background:barColor, borderRadius:3, transition:'width 0.4s' }} />
+                        </div>
+                        {(m.present > 0 || m.absent > 0) && (
+                          <div style={{ display:'flex', gap:10, marginTop:3, fontSize:11 }}>
+                            <span style={{ color:'#22C55E' }}>✓ {m.present} geldi</span>
+                            {m.absent > 0 && <span style={{ color:'#EF4444' }}>✗ {m.absent} gelmedi</span>}
+                          </div>
+                        )}
+                      </div>
+                    );
+                  }
                   const pct = m.total > 0 ? Math.round((m.present/m.total)*100) : 0;
                   const barColor = pct >= 75 ? '#22C55E' : pct >= 50 ? '#F59E0B' : '#EF4444';
                   return (
-                    <div key={m.key} style={{ marginBottom:8 }}>
+                    <div key={m.key} onClick={() => setAttendanceDetail(m)}
+                      style={{ marginBottom:8, cursor:'pointer', borderRadius:6, padding:'4px 2px' }}
+                      onMouseEnter={e => e.currentTarget.style.background='var(--surface-2)'}
+                      onMouseLeave={e => e.currentTarget.style.background='transparent'}>
                       <div style={{ display:'flex', justifyContent:'space-between', fontSize:12, marginBottom:3 }}>
                         <span style={{ fontWeight:600 }}>{m.label}</span>
                         <span style={{ color:barColor, fontWeight:700 }}>{m.present}/{m.total} antrenman</span>
@@ -7024,6 +7562,33 @@ function MemberProfileView({ member, onBack, clubId }) {
                 onChange={e => setNoteForm(p=>({...p, content:e.target.value}))}
                 style={{ width:'100%', resize:'vertical', padding:'8px 10px', borderRadius:8, border:'1px solid var(--border)', fontSize:13, fontFamily:'inherit' }} />
             </Field>
+          </div>
+        </Modal>
+      )}
+
+      {/* Attendance detail modal */}
+      {attendanceDetail && (
+        <Modal title={`${attendanceDetail.label} — Dersler`} onClose={() => setAttendanceDetail(null)}
+          footer={<button className="btn btn-ghost btn-sm" onClick={() => setAttendanceDetail(null)}>Kapat</button>}>
+          <div style={{ maxHeight:400, overflowY:'auto' }}>
+            {(!attendanceDetail.sessions || attendanceDetail.sessions.length === 0) ? (
+              <p style={{ color:'var(--text-2)', fontSize:13 }}>Henüz ders kaydı yok.</p>
+            ) : (
+              attendanceDetail.sessions.map((s, i) => {
+                const d = new Date(s.date + 'T12:00:00');
+                const formatted = d.toLocaleDateString('tr-TR', { day:'numeric', month:'long', year:'numeric', weekday:'long' });
+                return (
+                  <div key={i} style={{ display:'flex', alignItems:'center', gap:10, padding:'8px 0',
+                    borderBottom: i < attendanceDetail.sessions.length - 1 ? '1px solid var(--border)' : 'none' }}>
+                    <span style={{ fontSize:16 }}>{s.status === 'present' ? '✅' : '❌'}</span>
+                    <span style={{ flex:1, fontSize:13 }}>{formatted}</span>
+                    <span style={{ fontSize:12, fontWeight:700, color: s.status === 'present' ? '#22C55E' : '#EF4444' }}>
+                      {s.status === 'present' ? 'Geldi' : 'Gelmedi'}
+                    </span>
+                  </div>
+                );
+              })
+            )}
           </div>
         </Modal>
       )}

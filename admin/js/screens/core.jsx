@@ -591,7 +591,7 @@ function ReservationsScreen({ clubId, setScreen, clubProfile }) {
           .neq('status','cancelled').lt('start_time', endDb).gt('end_time', startDb).not('court_id','is',null),
         sb.from('club_manual_lessons').select('court_id, start_time, end_time')
           .in('court_id', allIds).eq('date', date).not('court_id','is',null),
-        sb.from('court_closures').select('court_id, closure_type, day_of_week, start_hour, start_minute, end_hour, end_minute, start_date, end_date')
+        sb.from('court_closures').select('court_id, closure_type, day_of_week, start_hour, start_minute, end_hour, end_minute, start_date, end_date, group_id')
           .in('court_id', allIds).eq('is_active', true),
       ]);
       (bRes.data  || []).forEach(r => blocked.add(r.court_id));
@@ -605,11 +605,22 @@ function ReservationsScreen({ clubId, setScreen, clubProfile }) {
         const [meh, mem] = ml.end_time.split(':').map(Number);
         if (newStart < meh * 60 + mem && newEnd > msh * 60 + msm) blocked.add(ml.court_id);
       }
+      // Tek seferlik iptal edilen grup seanslarını çek
+      const closureGroupIds = (clRes.data || []).map(c => c.group_id).filter(Boolean);
+      const exceptionSet = new Set();
+      if (closureGroupIds.length > 0) {
+        const { data: exData } = await sb.from('group_lesson_exceptions')
+          .select('group_id, start_hour, start_minute')
+          .in('group_id', closureGroupIds)
+          .eq('exception_date', date);
+        (exData || []).forEach(ex => exceptionSet.add(`${ex.group_id}_${ex.start_hour}_${ex.start_minute ?? 0}`));
+      }
       const dow = new Date(date + 'T12:00:00').getDay();
       for (const cl of clRes.data || []) {
         const clStart = (cl.start_hour||0) * 60 + (cl.start_minute||0);
         const clEnd   = (cl.end_hour||0) * 60 + (cl.end_minute||0);
         if (newStart >= clEnd || newEnd <= clStart) continue;
+        if (cl.group_id && exceptionSet.has(`${cl.group_id}_${cl.start_hour}_${cl.start_minute ?? 0}`)) continue;
         if (cl.closure_type === 'recurring_weekly' && cl.day_of_week === dow) blocked.add(cl.court_id);
         else if (cl.closure_type === 'one_time') {
           if ((!cl.start_date || cl.start_date <= date) && (!cl.end_date || cl.end_date >= date)) blocked.add(cl.court_id);
@@ -762,10 +773,20 @@ function ReservationsScreen({ clubId, setScreen, clubProfile }) {
         return newStart < leh * 60 + lem && newEnd > lsh * 60 + lsm;
       });
       if (hasManualConflict) { alert('Bu kort seçilen saatte planlanmış bir ders var.'); return; }
+      const closureGroupIds2 = (closures.data || []).map(c => c.group_id).filter(Boolean);
+      const exSet2 = new Set();
+      if (closureGroupIds2.length > 0) {
+        const { data: exData2 } = await sb.from('group_lesson_exceptions')
+          .select('group_id, start_hour, start_minute')
+          .in('group_id', closureGroupIds2)
+          .eq('exception_date', date);
+        (exData2 || []).forEach(ex => exSet2.add(`${ex.group_id}_${ex.start_hour}_${ex.start_minute ?? 0}`));
+      }
       const closureBlock = (closures.data || []).some(cl => {
         const clStart = (cl.start_hour||0) * 60 + (cl.start_minute||0);
         const clEnd   = (cl.end_hour||0) * 60 + (cl.end_minute||0);
         if (newStart >= clEnd || newEnd <= clStart) return false;
+        if (cl.group_id && exSet2.has(`${cl.group_id}_${cl.start_hour}_${cl.start_minute ?? 0}`)) return false;
         if (cl.closure_type === 'recurring_weekly') return cl.day_of_week === dow;
         return (!cl.start_date || cl.start_date <= date) && (!cl.end_date || cl.end_date >= date);
       });
@@ -934,10 +955,20 @@ function ReservationsScreen({ clubId, setScreen, clubProfile }) {
       if (hasManualConflict) { alert('Bu kort seçilen saatte planlanmış bir ders var.'); return; }
 
       const dow = new Date(dateStr + 'T12:00:00').getDay();
+      const closureGroupIds3 = (closures || []).map(c => c.group_id).filter(Boolean);
+      const exSet3 = new Set();
+      if (closureGroupIds3.length > 0) {
+        const { data: exData3 } = await sb.from('group_lesson_exceptions')
+          .select('group_id, start_hour, start_minute')
+          .in('group_id', closureGroupIds3)
+          .eq('exception_date', dateStr);
+        (exData3 || []).forEach(ex => exSet3.add(`${ex.group_id}_${ex.start_hour}_${ex.start_minute ?? 0}`));
+      }
       const closureBlock = (closures || []).some(cl => {
         const cs = String(cl.start_hour ?? 0).padStart(2,'0') + ':' + String(cl.start_minute ?? 0).padStart(2,'0');
         const ce = String(cl.end_hour   ?? 0).padStart(2,'0') + ':' + String(cl.end_minute   ?? 0).padStart(2,'0');
         if (!(cs < endHH && ce > startHH)) return false;
+        if (cl.group_id && exSet3.has(`${cl.group_id}_${cl.start_hour}_${cl.start_minute ?? 0}`)) return false;
         if (cl.closure_type === 'recurring_weekly') return cl.day_of_week === dow;
         return (!cl.start_date || cl.start_date <= dateStr) && (!cl.end_date || cl.end_date >= dateStr);
       });
@@ -1229,10 +1260,20 @@ function ReservationsScreen({ clubId, setScreen, clubProfile }) {
       if (hasManualConflict) { alert('Bu kort seçilen saatte zaten dolu. Lütfen farklı bir saat veya kort seçin.'); return; }
 
       const dow = new Date(dateStr + 'T12:00:00').getDay();
+      const closureGroupIds4 = (closures || []).map(c => c.group_id).filter(Boolean);
+      const exSet4 = new Set();
+      if (closureGroupIds4.length > 0) {
+        const { data: exData4 } = await sb.from('group_lesson_exceptions')
+          .select('group_id, start_hour, start_minute')
+          .in('group_id', closureGroupIds4)
+          .eq('exception_date', dateStr);
+        (exData4 || []).forEach(ex => exSet4.add(`${ex.group_id}_${ex.start_hour}_${ex.start_minute ?? 0}`));
+      }
       const closureBlock = (closures || []).some(cl => {
         const cs = String(cl.start_hour ?? 0).padStart(2,'0') + ':' + String(cl.start_minute ?? 0).padStart(2,'0');
         const ce = String(cl.end_hour   ?? 0).padStart(2,'0') + ':' + String(cl.end_minute   ?? 0).padStart(2,'0');
         if (!(cs < endHH && ce > startHH)) return false;
+        if (cl.group_id && exSet4.has(`${cl.group_id}_${cl.start_hour}_${cl.start_minute ?? 0}`)) return false;
         if (cl.closure_type === 'recurring_weekly') return cl.day_of_week === dow;
         return (!cl.start_date || cl.start_date <= dateStr) && (!cl.end_date || cl.end_date >= dateStr);
       });
