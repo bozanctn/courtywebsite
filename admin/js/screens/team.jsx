@@ -880,12 +880,47 @@ function LessonsScreen({ clubId }) {
         date:           form.date,
         start_time:     form.start_time,
         end_time:       form.end_time,
+        court_id:       form.court_id || null,
         location:       courtNum ? `Kort ${courtNum}` : (form.location?.trim() || null),
         notes:          form.notes?.trim() || null,
         payment_status: form.payment_status || 'unpaid',
         amount:         form.amount ? Number(form.amount) : null,
       };
       await sb.from('club_manual_lessons').insert(payload);
+
+      // Kortu bloklamak için gölge booking — mobil LessonsScreen ile birebir.
+      // start_time GERÇEK +03:00 formatında yazılır (mobil ile ve silme trigger'ı
+      // trg_delete_manual_lesson_shadow ile eşleşsin diye; localTimeToDb sahte-UTC
+      // ürettiğinden burada KULLANILMAZ). Kort seçilmediyse bloke edilemez → atla.
+      if (form.court_id) {
+        const startHH = (form.start_time || '').slice(0, 5);
+        const endHH   = (form.end_time   || '').slice(0, 5);
+        const [sh, sm] = startHH.split(':').map(Number);
+        const [eh, em] = endHH.split(':').map(Number);
+        const durationHours = (eh * 60 + em - sh * 60 - sm) / 60;
+
+        // Booking sahibi: koçun individual_coach_id'si, yoksa kulüp
+        let bookingUserId = clubId;
+        if (!form.use_manual_coach && form.coach_id) {
+          const { data: cc } = await sb.from('club_coaches')
+            .select('individual_coach_id').eq('id', form.coach_id).single();
+          if (cc?.individual_coach_id) bookingUserId = cc.individual_coach_id;
+        }
+
+        const { error: bkErr } = await sb.from('bookings').insert({
+          court_id:        form.court_id,
+          user_id:         bookingUserId,
+          start_time:      `${form.date}T${startHH}:00+03:00`,
+          end_time:        `${form.date}T${endHH}:00+03:00`,
+          status:          'confirmed',
+          is_solo_booking: false,
+          duration_hours:  durationHours,
+          total_amount:    form.amount ? Number(form.amount) : 0,
+          club_coach_id:   form.coach_id || null,
+        });
+        if (bkErr) alert('Ders kaydedildi ancak kort takvime eklenemedi: ' + bkErr.message);
+      }
+
       setModal(null);
       loadAll();
     } catch (e) { alert(e.message); }
