@@ -29,6 +29,8 @@ function MemberProfileModal({ member, clubId, packages, onClose }) {
   const { useState, useEffect } = React;
   const [bookings,     setBookings]     = useState([]);
   const [loadingBk,    setLoadingBk]    = useState(true);
+  const [lessons,      setLessons]      = useState([]);
+  const [loadingLs,    setLoadingLs]    = useState(true);
   const [playerGender, setPlayerGender] = useState(null);
   const [profileBirth, setProfileBirth] = useState(null);
 
@@ -54,6 +56,20 @@ function MemberProfileModal({ member, clubId, packages, onClose }) {
         setBookings(data || []);
       } catch (e) { console.error(e); }
       finally { setLoadingBk(false); }
+    })();
+  }, [member?.user_id, clubId]);
+
+  // Ders geçmişi (app dersleri + manuel özel dersler — kişi bağı/isim ile)
+  useEffect(() => {
+    const memberName = member.profile?.full_name || member.member_name || '';
+    if (!member?.user_id && !memberName.trim()) { setLoadingLs(false); return; }
+    (async () => {
+      setLoadingLs(true);
+      try {
+        const ls = await CustomerSvc.getCustomerLessons(member.user_id || null, clubId, memberName, null);
+        setLessons(ls || []);
+      } catch (e) { console.error(e); }
+      finally { setLoadingLs(false); }
     })();
   }, [member?.user_id, clubId]);
 
@@ -136,6 +152,37 @@ function MemberProfileModal({ member, clubId, packages, onClose }) {
             )}
           </div>
         )}
+
+        {/* Ders geçmişi */}
+        <div>
+          <div style={{ fontWeight:700, fontSize:15, marginBottom:8 }}>Son Dersler</div>
+          {loadingLs ? <Spinner /> : lessons.length === 0 ? (
+            <div style={{ fontSize:13, color:'var(--text-2)', textAlign:'center', padding:'12px 0' }}>Henüz ders yok.</div>
+          ) : (
+            <div className="table-wrap">
+              {lessons.map((l, i) => {
+                const start = l.start_time ? new Date(l.start_time) : null;
+                const paid = l.payment_status === 'paid';
+                return (
+                  <div key={l.id} style={{ display:'flex', alignItems:'center', padding:'10px 14px', gap:10, borderBottom: i < lessons.length-1 ? '1px solid var(--border)' : 'none' }}>
+                    <div style={{ flex:1 }}>
+                      <div style={{ fontWeight:600, fontSize:13 }}>{l.coach_name || 'Antrenör'}{l.location ? ` — ${l.location}` : ''}</div>
+                      <div style={{ fontSize:11, color:'var(--text-2)' }}>
+                        {start ? start.toLocaleDateString('tr-TR', { day:'2-digit', month:'short', year:'numeric' }) : '—'}
+                        {start ? ` ${start.toLocaleTimeString('tr-TR', { hour:'2-digit', minute:'2-digit' })}` : ''}
+                        {l.is_package_lesson ? ' · Paket' : ''}
+                      </div>
+                    </div>
+                    <Badge cls={paid ? 'b-success' : 'b-warning'}>{paid ? 'Ödendi' : 'Ödenmedi'}</Badge>
+                    {l.amount != null && Number(l.amount) > 0 && (
+                      <span style={{ fontWeight:700, fontSize:13 }}>{fmtMoney(l.amount)}</span>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </div>
       </div>
     </Modal>
   );

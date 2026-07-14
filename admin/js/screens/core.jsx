@@ -1054,7 +1054,7 @@ function ReservationsScreen({ clubId, setScreen, clubProfile }) {
         if (!individualCoachId) { setLessonPackages([]); return; }
         const now = new Date().toISOString();
         const { data } = await sb.from('player_lesson_packages')
-          .select('*, lesson_packages(name, total_lessons, price, validity_days, coach_percentage)')
+          .select('*, lesson_packages(name, total_lessons, price, validity_days, coach_percentage, coach_payout_mode)')
           .eq('player_id', playerId)
           .eq('coach_id', individualCoachId)
           .eq('payment_status', 'paid')
@@ -1221,10 +1221,10 @@ function ReservationsScreen({ clubId, setScreen, clubProfile }) {
       alert('Bitiş saati başlangıç saatinden sonra olmalıdır.'); return;
     }
 
-    // Geçmiş tarih kontrolü (yalnızca yeni ders)
+    // Geçmiş tarih kontrolü (yalnızca yeni ders) — engellemek yerine onay iste
     if (isNew) {
       if (new Date(`${lessonForm.date}T${lessonForm.start_time}`) < new Date()) {
-        alert('Geçmiş bir tarihe ders ekleyemezsiniz.'); return;
+        if (!confirm('Geçmiş bir tarihe ders eklensin mi?')) return;
       }
     }
 
@@ -1376,21 +1376,27 @@ function ReservationsScreen({ clubId, setScreen, clubProfile }) {
       const coachAmtVal = usingPkg ? null : isDual ? (coachAmt || null) : null;
       const payStatus   = usingPkg ? 'paid' : lessonPriceMode === 'split' ? 'paid' : (lessonForm.payment_status || 'unpaid');
 
+      // Kişi bağı: seçilen üye → player_id; seçilen müşteri → club_customer_id
+      const linkPlayerId   = lessonSelectedPlayer?.id || lessonSelectedCustomer?.user_id || null;
+      const linkCustomerId = lessonSelectedCustomer?.id || null;
+
       const payload = {
-        club_id:        clubId,
-        coach_id:       coachId,
-        coach_name:     coachName,
-        date:           lessonForm.date,
-        start_time:     lessonForm.start_time.slice(0, 5),
-        end_time:       lessonForm.end_time.slice(0, 5),
-        student_name:   lessonForm.student_name || null,
-        court_id:       lessonForm.court_id,
-        location:       courtRow ? `Kort ${courtRow.court_number}` : '',
-        notes:          lessonForm.notes?.trim() || null,
-        payment_status: payStatus,
-        amount:         amountVal,
-        coach_amount:   coachAmtVal,
-        price_mode:     lessonPriceMode === 'normal' ? 'dual' : lessonPriceMode,
+        club_id:          clubId,
+        coach_id:         coachId,
+        coach_name:       coachName,
+        date:             lessonForm.date,
+        start_time:       lessonForm.start_time.slice(0, 5),
+        end_time:         lessonForm.end_time.slice(0, 5),
+        student_name:     lessonForm.student_name || null,
+        player_id:        linkPlayerId,
+        club_customer_id: linkCustomerId,
+        court_id:         lessonForm.court_id,
+        location:         courtRow ? `Kort ${courtRow.court_number}` : '',
+        notes:            lessonForm.notes?.trim() || null,
+        payment_status:   payStatus,
+        amount:           amountVal,
+        coach_amount:     coachAmtVal,
+        price_mode:       lessonPriceMode === 'normal' ? 'dual' : lessonPriceMode,
       };
 
       if (lessonModal?.id) {
@@ -1451,41 +1457,32 @@ function ReservationsScreen({ clubId, setScreen, clubProfile }) {
                 }).eq('id', lessonSelectedPackageId);
                 if (updErr) throw updErr;
 
-                // 3. Earnings / finans kayıtları (paket fiyatından per-session hesapla)
+                // 3. Earnings / finans (tahsilat biçimi: per_session → seansta yalnız hoca payı; upfront → hiçbir kayıt)
                 const pkgDef = pkg.lesson_packages || {};
-                const perSessionTotal = (pkgDef.price ?? pkg.custom_price ?? 0) / (pkgDef.total_lessons || pkg.total_lessons || 1);
-                const coachPct = pkgDef.coach_percentage ?? pkg.custom_coach_pct ?? 70;
-                const coachEarning = perSessionTotal * (coachPct / 100);
-                const clubEarning  = perSessionTotal - coachEarning;
-
-                const coachRec = coaches.find(c => c.id === coachId);
-                const earningPromises = [];
-                if (coachRec && coachEarning > 0) {
-                  earningPromises.push(sb.from('coach_earnings').insert({
-                    club_id:        clubId,
-                    coach_id:       coachId,
-                    coach_name:     coachRec.full_name,
-                    student_name:   lessonForm.student_name || null,
-                    lesson_id:      inserted.id,
-                    booking_id:     null,
-                    amount:         Math.round(coachEarning * 100) / 100,
-                    court_fee:      0,
-                    date:           lessonForm.date,
-                    description:    'Ders Paketi Oturumu',
-                    payment_status: 'unpaid',
-                  }));
+                const mode = pkgDef.coach_payout_mode || pkg.coach_payout_mode || 'upfront';
+                if (mode === 'per_session') {
+                  const perSessionTotal = (pkgDef.price ?? pkg.custom_price ?? 0) / (pkgDef.total_lessons || pkg.total_lessons || 1);
+                  const coachRec = coaches.find(c => c.id === coachId);
+                  // Öncelik: pakette tanımlı % (varsa) → yoksa hocanın profil oranı
+                  const pkgPct   = pkgDef.coach_percentage ?? pkg.custom_coach_pct;
+                  const coachPct = Number(pkgPct) > 0 ? Number(pkgPct) : (coachRec?.coach_pay_rate || 0);
+                  const coachEarning = Math.round(perSessionTotal * (coachPct / 100) * 100) / 100;
+                  if (coachRec && coachEarning > 0) {
+                    await sb.from('coach_earnings').insert({
+                      club_id:        clubId,
+                      coach_id:       coachId,
+                      coach_name:     coachRec.full_name,
+                      student_name:   lessonForm.student_name || null,
+                      manual_lesson_id: inserted.id,
+                      booking_id:     null,
+                      amount:         coachEarning,
+                      court_fee:      0,
+                      date:           lessonForm.date,
+                      description:    'Ders Paketi Oturumu',
+                      payment_status: 'unpaid',
+                    });
+                  }
                 }
-                if (clubEarning > 0) {
-                  earningPromises.push(sb.from('club_finances').insert({
-                    club_id:     clubId,
-                    type:        'income',
-                    category:    'Ders Paketi Geliri',
-                    amount:      Math.round(clubEarning * 100) / 100,
-                    description: `${coachRec?.full_name || 'Antrenör'} - ${lessonForm.student_name || 'Öğrenci'} - Ders Paketi Oturumu`,
-                    date:        lessonForm.date,
-                  }));
-                }
-                await Promise.all(earningPromises);
               }
             } catch (pkgErr) {
               alert(`Ders kaydedildi ancak paketten düşülemedi: ${pkgErr.message}`);
@@ -2087,7 +2084,15 @@ function ReservationsScreen({ clubId, setScreen, clubProfile }) {
                   <span style={{ color:'var(--text-2)', fontWeight:600 }}>–</span>
                   <input type="time" value={bkForm.endTime || ''} step="900"
                     onChange={e => {
-                      const newForm = { ...bkForm, endTime: e.target.value };
+                      // Bitiş elle değişince süreyi de senkronla (süre ↔ bitiş tutarlı kalsın)
+                      const [eh, em] = (e.target.value || '').split(':').map(Number);
+                      const [sh, sm] = (bkForm.startTime || '').split(':').map(Number);
+                      let dur = bkForm.duration;
+                      if (![eh, em, sh, sm].some(isNaN)) {
+                        const diff = (eh * 60 + em) - (sh * 60 + sm);
+                        if (diff > 0) dur = diff / 60;
+                      }
+                      const newForm = { ...bkForm, endTime: e.target.value, duration: dur };
                       setBkForm(newForm);
                       loadBkAvailCourts(newForm.date, newForm.startTime, e.target.value);
                     }}
@@ -2339,7 +2344,17 @@ function ReservationsScreen({ clubId, setScreen, clubProfile }) {
                 <input type="time" style={{ flex:1, border:'1.5px solid var(--border)', borderRadius:12, padding:'11px 8px', fontSize:14, color:'var(--text-1)', background:'var(--bg)', boxSizing:'border-box' }}
                   placeholder="Başlangıç" value={lessonForm.start_time || ''} onChange={e => setLessonForm({...lessonForm, start_time: e.target.value})} />
                 <input type="time" style={{ flex:1, border:'1.5px solid var(--border)', borderRadius:12, padding:'11px 8px', fontSize:14, color:'var(--text-1)', background:'var(--bg)', boxSizing:'border-box' }}
-                  placeholder="Bitiş" value={lessonForm.end_time || ''} onChange={e => setLessonForm({...lessonForm, end_time: e.target.value})} />
+                  placeholder="Bitiş" value={lessonForm.end_time || ''} onChange={e => {
+                    // Bitiş elle değişince süreyi de senkronla (süre ↔ bitiş tutarlı kalsın)
+                    const [eh, em] = (e.target.value || '').split(':').map(Number);
+                    const [sh, sm] = (lessonForm.start_time || '').split(':').map(Number);
+                    let dur = lessonForm.duration;
+                    if (![eh, em, sh, sm].some(isNaN)) {
+                      const diff = (eh * 60 + em) - (sh * 60 + sm);
+                      if (diff > 0) dur = diff / 60;
+                    }
+                    setLessonForm({ ...lessonForm, end_time: e.target.value, duration: dur });
+                  }} />
               </div>
 
               {/* ── Süre hızlı seçim ─────────────────────────── */}

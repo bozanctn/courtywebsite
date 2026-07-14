@@ -424,27 +424,33 @@ function FinanceScreen({ clubId, clubProfile }) {
               {/* Earnings list */}
               {filteredEarnings.map((e, i) => {
                 const isPaid = e.payment_status === 'paid';
+                const isRefund = Number(e.amount) < 0;
                 return (
                   <div key={e.id} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '12px 0', borderBottom: i < filteredEarnings.length - 1 ? '1px solid var(--border)' : 'none' }}>
-                    <div style={{ width: 40, height: 40, borderRadius: 12, background: isPaid ? '#DCFCE7' : '#FFF7ED', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
-                      <span className="material-icons" style={{ color: isPaid ? '#22C55E' : '#F97316', fontSize: 20 }}>school</span>
+                    <div style={{ width: 40, height: 40, borderRadius: 12, background: isRefund ? '#FEE2E2' : (isPaid ? '#DCFCE7' : '#FFF7ED'), display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
+                      <span className="material-icons" style={{ color: isRefund ? '#EF4444' : (isPaid ? '#22C55E' : '#F97316'), fontSize: 20 }}>{isRefund ? 'undo' : 'school'}</span>
                     </div>
                     <div style={{ flex: 1 }}>
                       <div style={{ fontWeight: 600, fontSize: 14 }}>{e.coach_name}</div>
                       <div style={{ fontSize: 12, color: 'var(--text-2)', marginTop: 2 }}>
                         {fmtDate(e.date)}{e.student_name ? ` • ${e.student_name}` : ''}
                       </div>
-                      {e.court_fee != null && <div style={{ fontSize: 12, color: 'var(--text-2)', marginTop: 1 }}>Kort: {fmtMoney(e.court_fee)}</div>}
+                      {isRefund && e.description
+                        ? <div style={{ fontSize: 11, color: '#EF4444', marginTop: 2 }}>{e.description}</div>
+                        : (e.court_fee != null && <div style={{ fontSize: 12, color: 'var(--text-2)', marginTop: 1 }}>Kort: {fmtMoney(e.court_fee)}</div>)}
                     </div>
                     <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 4 }}>
-                      <div style={{ fontSize: 14, fontWeight: 700, color: '#F97316' }}>{fmtMoney(e.amount)}</div>
+                      <div style={{ fontSize: 14, fontWeight: 700, color: isRefund ? '#EF4444' : '#F97316' }}>{fmtMoney(e.amount)}</div>
+                      {isRefund && (
+                        <span style={{ fontSize: 9, fontWeight: 700, letterSpacing: 0.5, padding: '2px 7px', borderRadius: 999, background: '#FEE2E2', color: '#EF4444' }}>İADE</span>
+                      )}
                       {isPaid ? (
-                        <span style={{ fontSize: 9, fontWeight: 700, letterSpacing: 0.5, padding: '2px 7px', borderRadius: 999, background: '#DCFCE7', color: '#22C55E' }}>ÖDENDİ</span>
+                        <span style={{ fontSize: 9, fontWeight: 700, letterSpacing: 0.5, padding: '2px 7px', borderRadius: 999, background: '#DCFCE7', color: '#22C55E' }}>{isRefund ? 'İŞLENDİ' : 'ÖDENDİ'}</span>
                       ) : (
                         <button type="button"
                           style={{ fontSize: 9, fontWeight: 700, letterSpacing: 0.5, padding: '3px 8px', borderRadius: 999, background: '#FFF7ED', color: '#F97316', border: 'none', cursor: 'pointer' }}
                           onClick={() => markEarningPaid(e.id)}
-                        >ÖDENDİ Mİ?</button>
+                        >{isRefund ? 'İŞLE' : 'ÖDENDİ Mİ?'}</button>
                       )}
                     </div>
                   </div>

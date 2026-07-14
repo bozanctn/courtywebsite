@@ -1190,7 +1190,7 @@ const LessonPackageSvc = {
       .from('player_lesson_packages')
       .select(`
         *,
-        package:lesson_packages(id, name, total_lessons, price, validity_days, coach_percentage),
+        package:lesson_packages(id, name, total_lessons, price, validity_days, coach_percentage, coach_payout_mode),
         player:profiles!player_id(id, full_name)
       `)
       .eq('club_id', clubId)
@@ -1199,7 +1199,7 @@ const LessonPackageSvc = {
     return data ?? [];
   },
 
-  async confirmPayment(playerPackageId, validityDays, price, playerName, packageName, clubId, coachInfo) {
+  async confirmPayment(playerPackageId, validityDays, price, playerName, packageName, clubId, coachInfo, payoutMode) {
     const today = new Date().toISOString().split('T')[0];
     const expiry = new Date();
     expiry.setDate(expiry.getDate() + (validityDays || 90));
@@ -1208,9 +1208,14 @@ const LessonPackageSvc = {
       .update({ payment_status: 'paid', status: 'active', total_paid: price, expiry_date: expiry.toISOString() })
       .eq('id', playerPackageId);
     if (error) throw error;
+
+    // Kulüp her iki modda da satışta NET payını alır.
+    // Hoca payı: upfront → satışta bir kerede; per_session → seans başına birikir (burada yazılmaz).
+    const mode       = payoutMode === 'per_session' ? 'per_session' : 'upfront';
+    const total      = Math.round((price || 0) * 100) / 100;
     const coachPct   = coachInfo?.coachPayRate || 0;
-    const coachAmt   = coachPct > 0 ? Math.round((price || 0) * (coachPct / 100) * 100) / 100 : 0;
-    const clubAmt    = Math.round(((price || 0) - coachAmt) * 100) / 100;
+    const coachAmt   = coachPct > 0 ? Math.round(total * (coachPct / 100) * 100) / 100 : 0;
+    const clubAmt    = Math.round((total - coachAmt) * 100) / 100;
     const promises   = [];
     if (clubAmt > 0) {
       promises.push(sb.from('club_finances').insert({
@@ -1218,7 +1223,7 @@ const LessonPackageSvc = {
         amount: clubAmt, description: `${packageName} - ${playerName}`, date: today,
       }));
     }
-    if (coachInfo && coachAmt > 0) {
+    if (mode === 'upfront' && coachInfo && coachAmt > 0) {
       promises.push(sb.from('coach_earnings').insert({
         club_id:    clubId,
         coach_id:   coachInfo.clubCoachId || null,
@@ -1230,7 +1235,9 @@ const LessonPackageSvc = {
         payment_status: 'unpaid',
       }));
     }
-    await Promise.all(promises);
+    const cpResults = await Promise.all(promises);
+    const cpFailed = cpResults.find(r => r && r.error);
+    if (cpFailed) throw new Error(`Ödeme onaylandı ancak gelir/hoca hakediş kaydı yazılamadı: ${cpFailed.error.message}. Lütfen finans kayıtlarını elle kontrol edin.`);
   },
 
   async assignCoach(playerPackageId, coachId) {
@@ -1248,7 +1255,7 @@ const LessonPackageSvc = {
     return {
       totalRevenue: rows.filter(r => r.payment_status === 'paid').reduce((s, r) => s + (r.total_paid || 0), 0),
       activeCount:  rows.filter(r => r.status === 'active' && r.payment_status === 'paid').length,
-      pendingCount: rows.filter(r => r.payment_status === 'pending').length,
+      pendingCount: rows.filter(r => r.payment_status === 'pending' && r.status !== 'cancelled').length,
       completedCount: rows.filter(r => r.status === 'completed').length,
     };
   },
@@ -1292,6 +1299,7 @@ const LessonPackageSvc = {
         package_id:         enrollData.package_id,
         club_id:            enrollData.club_id,
         coach_id:           enrollData.coach_id ?? pkg.coach_id ?? null,
+        coach_payout_mode:  pkg.coach_payout_mode ?? 'upfront',
         total_lessons:      pkg.total_lessons,
         used_lessons:       usedLessons,
         payment_status:     isPaid ? 'paid' : 'pending',
@@ -1308,10 +1316,14 @@ const LessonPackageSvc = {
         ? (enrollData.player_name ?? 'Üye')
         : (enrollData.manual_player_name?.trim() ?? 'Üye');
       const today      = new Date().toISOString().split('T')[0];
-      const coachPct   = enrollData.coach_pay_rate || 0;
+      // Kulüp her iki modda da NET payını satışta alır; hoca payı upfront'ta satışta, per_session'da seans başına.
+      const mode       = pkg.coach_payout_mode === 'per_session' ? 'per_session' : 'upfront';
+      const total      = Math.round(totalPaid * 100) / 100;
+      // Öncelik: pakette tanımlı % (varsa) → yoksa hocanın profil oranı
+      const coachPct   = Number(pkg.coach_percentage) > 0 ? Number(pkg.coach_percentage) : (enrollData.coach_pay_rate || 0);
       const coachAmt   = (coachPct > 0 && enrollData.coach_id)
-        ? Math.round(totalPaid * (coachPct / 100) * 100) / 100 : 0;
-      const clubAmt    = Math.round((totalPaid - coachAmt) * 100) / 100;
+        ? Math.round(total * (coachPct / 100) * 100) / 100 : 0;
+      const clubAmt    = Math.round((total - coachAmt) * 100) / 100;
       const promises   = [];
       if (clubAmt > 0) {
         promises.push(sb.from('club_finances').insert({
@@ -1319,7 +1331,7 @@ const LessonPackageSvc = {
           amount: clubAmt, description: `${pkg.name} - ${displayName}`, date: today,
         }));
       }
-      if (coachAmt > 0 && enrollData.coach_name) {
+      if (mode === 'upfront' && coachAmt > 0 && enrollData.coach_name) {
         promises.push(sb.from('coach_earnings').insert({
           club_id:    enrollData.club_id,
           coach_id:   enrollData.coach_db_id || null,
@@ -1331,17 +1343,75 @@ const LessonPackageSvc = {
           payment_status: 'unpaid',
         }));
       }
-      await Promise.all(promises);
+      const meResults = await Promise.all(promises);
+      const meFailed = meResults.find(r => r && r.error);
+      if (meFailed) throw new Error(`Kayıt oluşturuldu ancak gelir/hoca hakediş kaydı yazılamadı: ${meFailed.error.message}. Lütfen finans kayıtlarını elle kontrol edin.`);
     }
     return plp;
   },
 
-  async cancelPlayerPackage(playerPackageId) {
+  async cancelPlayerPackage(playerPackageId, opts) {
     const { error } = await sb
       .from('player_lesson_packages')
       .update({ status: 'cancelled' })
       .eq('id', playerPackageId);
     if (error) throw error;
+
+    const today = new Date().toISOString().split('T')[0];
+    const refund = opts?.refund;
+    const clawback = opts?.coachClawback;
+
+    // Önce hoca clawback tutarını hesapla — gideri netleştirmek için gerekli (Model B).
+    let coachRefund = 0;
+    let cc = null;
+    if (clawback && clawback.individualCoachId && clawback.totalLessons > 0 && clawback.remaining > 0) {
+      // pp.coach_id kimi akışta club_coaches.id, kimi akışta profiles.id (individual_coach_id) olabiliyor;
+      // ikisiyle de eşleştir ki hoca kaydı garanti bulunsun.
+      const { data } = await sb.from('club_coaches')
+        .select('id, full_name, coach_pay_rate, individual_coach_id')
+        .or(`id.eq.${clawback.individualCoachId},individual_coach_id.eq.${clawback.individualCoachId}`)
+        .eq('club_id', clawback.clubId).maybeSingle();
+      cc = data || null;
+      if (cc) {
+        const pct = Number(clawback.packageCoachPct) > 0 ? Number(clawback.packageCoachPct) : (cc.coach_pay_rate || 0);
+        const coachShare = (Number(clawback.totalPaid) || 0) * (pct / 100);
+        coachRefund = Math.round(coachShare * clawback.remaining / clawback.totalLessons * 100) / 100;
+      }
+    }
+
+    // 1) Kullanılmayan derslerin ücreti iade → gider (Model B: yalnız KULÜP payı yazılır;
+    //    hocadan geri alınan pay aşağıda ayrı clawback satırıyla döner, bu yüzden giderden düşülür).
+    if (refund && refund.amount > 0) {
+      const clubExpense = Math.round((refund.amount - coachRefund) * 100) / 100;
+      if (clubExpense > 0) {
+        const { error: expErr } = await sb.from('club_finances').insert({
+          club_id:     refund.clubId,
+          type:        'expense',
+          category:    'Ders Paketi İadesi',
+          amount:      clubExpense,
+          description: `İade - ${refund.packageName} - ${refund.playerName} (${refund.remaining} kullanılmayan ders)`,
+          date:        today,
+        });
+        if (expErr) throw new Error(`Paket iptal edildi ancak iade gideri yazılamadı: ${expErr.message}. Lütfen finans kaydını elle kontrol edin.`);
+      }
+    }
+
+    // 2) Hoca toplu ödendiyse (upfront) hoca hakedişini kullanılmayan pay kadar azalt (negatif düzeltme)
+    if (cc && coachRefund > 0) {
+      const { error: cbErr } = await sb.from('coach_earnings').insert({
+        club_id:            clawback.clubId,
+        coach_id:           cc.id,
+        individual_coach_id: cc.individual_coach_id || null,
+        coach_name:         cc.full_name,
+        student_name:       clawback.playerName || null,
+        amount:             -coachRefund,
+        court_fee:          0,
+        date:               today,
+        description:        `Paket iptali - hoca iade payı - ${clawback.packageName} - ${clawback.playerName} (${clawback.remaining} kullanılmayan ders)`,
+        payment_status:     'unpaid',
+      });
+      if (cbErr) throw new Error(`Paket iptal edildi ve iade gideri yazıldı ancak hoca iade payı yazılamadı: ${cbErr.message}. Lütfen hoca hakedişini elle kontrol edin.`);
+    }
   },
 
   async enrollCustomerPackage({ clubId, customerUserId, customerName,
@@ -1358,12 +1428,23 @@ const LessonPackageSvc = {
     const paid = isPaid ? (Number(totalPaid) || 0) : 0;
     const displayName = customerName?.trim() || 'Müşteri';
 
+    // Tahsilat biçimi + hoca yüzdesi kaynağı (şablon paketse şablondan)
+    let payoutMode = 'upfront';
+    let pkgCoachPct = null;
+    if (packageId) {
+      const { data: tpl } = await sb.from('lesson_packages')
+        .select('coach_payout_mode, coach_percentage').eq('id', packageId).maybeSingle();
+      payoutMode  = tpl?.coach_payout_mode === 'per_session' ? 'per_session' : 'upfront';
+      pkgCoachPct = tpl?.coach_percentage ?? null;
+    }
+
     const { data: plp, error } = await sb.from('player_lesson_packages').insert({
       club_id:            clubId,
       package_id:         packageId || null,
       player_id:          customerUserId || null,
       manual_player_name: customerUserId ? null : (customerName?.trim() || null),
       coach_id:           coachId || null,
+      coach_payout_mode:  payoutMode,
       total_lessons:      Number(totalLessons),
       used_lessons:       0,
       payment_status:     isPaid ? 'paid' : 'pending',
@@ -1378,14 +1459,37 @@ const LessonPackageSvc = {
     if (error) throw error;
 
     if (isPaid && paid > 0) {
-      await sb.from('club_finances').insert({
-        club_id:     clubId,
-        type:        'income',
-        category:    'Ders Paketi Geliri',
-        amount:      paid,
-        description: `${packageName || 'Özel Paket'} - ${displayName}`,
-        date:        new Date().toISOString().split('T')[0],
-      });
+      const today = new Date().toISOString().split('T')[0];
+      const total = Math.round(paid * 100) / 100;
+      // Kulüp her iki modda da NET payını satışta alır; hoca payı upfront'ta satışta, per_session'da seans başına.
+      let coachRec = null;
+      if (coachId) {
+        const { data } = await sb.from('club_coaches')
+          .select('id, full_name, coach_pay_rate').eq('club_id', clubId).eq('individual_coach_id', coachId).maybeSingle();
+        coachRec = data || null;
+      }
+      // Öncelik: pakette tanımlı % (varsa) → yoksa hocanın profil oranı
+      const pkgPct   = pkgCoachPct ?? (packageId ? null : (customCoachPct != null ? Number(customCoachPct) : null));
+      const coachPct = Number(pkgPct) > 0 ? Number(pkgPct) : (coachRec?.coach_pay_rate || 0);
+      const coachAmt = (coachRec && coachPct > 0) ? Math.round(total * (coachPct / 100) * 100) / 100 : 0;
+      const clubAmt  = Math.round((total - coachAmt) * 100) / 100;
+      const proms = [];
+      if (clubAmt > 0) {
+        proms.push(sb.from('club_finances').insert({
+          club_id: clubId, type: 'income', category: 'Ders Paketi Geliri',
+          amount: clubAmt, description: `${packageName || 'Özel Paket'} - ${displayName}`, date: today,
+        }));
+      }
+      if (payoutMode === 'upfront' && coachAmt > 0 && coachRec) {
+        proms.push(sb.from('coach_earnings').insert({
+          club_id: clubId, coach_id: coachRec.id, coach_name: coachRec.full_name,
+          amount: coachAmt, court_fee: 0, date: today,
+          description: `Ders Paketi - ${packageName || 'Özel Paket'} - ${displayName}`, payment_status: 'unpaid',
+        }));
+      }
+      const ecResults = await Promise.all(proms);
+      const ecFailed = ecResults.find(r => r && r.error);
+      if (ecFailed) throw new Error(`Kayıt oluşturuldu ancak gelir/hoca hakediş kaydı yazılamadı: ${ecFailed.error.message}. Lütfen finans kayıtlarını elle kontrol edin.`);
     }
     return plp;
   },
@@ -1486,7 +1590,13 @@ const CustomerSvc = {
     const { data: coaches } = await sb.from('club_coaches').select('id').eq('club_id', clubId);
     const coachIds = (coaches ?? []).map(c => c.id);
 
-    const [bk1, bk2, pkgs, pkgsManual, lessons, lessonsName] = await Promise.all([
+    // Manuel özel dersler (kişi bağı: player_id / club_customer_id; isim = eski kayıt fallback)
+    const mlOr = [];
+    if (customerUserId) mlOr.push(`player_id.eq.${customerUserId}`);
+    if (customerId)     mlOr.push(`club_customer_id.eq.${customerId}`);
+    if (customerName?.trim() && !customerName.includes(',')) mlOr.push(`student_name.eq.${customerName.trim()}`);
+
+    const [bk1, bk2, pkgs, pkgsManual, lessons, lessonsName, manualLs] = await Promise.all([
       courtIds.length > 0
         ? sb.from('bookings').select('total_amount').eq('club_customer_id', customerId).in('court_id', courtIds).neq('status', 'cancelled')
         : { data: [] },
@@ -1494,10 +1604,10 @@ const CustomerSvc = {
         ? sb.from('bookings').select('total_amount').eq('user_id', customerUserId).in('court_id', courtIds).neq('status', 'cancelled').is('club_customer_id', null)
         : { data: [] },
       customerUserId
-        ? sb.from('player_lesson_packages').select('total_paid').eq('player_id', customerUserId).eq('club_id', clubId).eq('payment_status', 'paid')
+        ? sb.from('player_lesson_packages').select('total_paid').eq('player_id', customerUserId).eq('club_id', clubId).eq('payment_status', 'paid').neq('status', 'cancelled')
         : { data: [] },
       customerName?.trim()
-        ? sb.from('player_lesson_packages').select('total_paid').is('player_id', null).eq('manual_player_name', customerName.trim()).eq('club_id', clubId).eq('payment_status', 'paid')
+        ? sb.from('player_lesson_packages').select('total_paid').is('player_id', null).eq('manual_player_name', customerName.trim()).eq('club_id', clubId).eq('payment_status', 'paid').neq('status', 'cancelled')
         : { data: [] },
       customerUserId && coachIds.length > 0
         ? sb.from('lessons').select('amount').eq('student_id', customerUserId).in('club_coach_id', coachIds).neq('status', 'cancelled').eq('payment_status', 'paid')
@@ -1505,22 +1615,27 @@ const CustomerSvc = {
       customerName?.trim() && coachIds.length > 0
         ? sb.from('lessons').select('amount').is('student_id', null).eq('student_name', customerName.trim()).in('club_coach_id', coachIds).neq('status', 'cancelled').eq('payment_status', 'paid')
         : { data: [] },
+      mlOr.length > 0
+        ? sb.from('club_manual_lessons').select('id, amount').eq('club_id', clubId).eq('payment_status', 'paid').or(mlOr.join(','))
+        : { data: [] },
     ]);
     const allBk   = [...(bk1.data ?? []), ...(bk2.data ?? [])];
     const allPkgs = [...(pkgs.data ?? []), ...(pkgsManual.data ?? [])];
     const allLs   = [...(lessons.data ?? []), ...(lessonsName.data ?? [])];
+    const allMl   = manualLs.data ?? [];
     return {
       totalSpent: Math.round((
         allBk.reduce((s, b) => s + (b.total_amount || 0), 0) +
         allPkgs.reduce((s, p) => s + (p.total_paid || 0), 0) +
-        allLs.reduce((s, l) => s + (l.amount || 0), 0)
+        allLs.reduce((s, l) => s + (l.amount || 0), 0) +
+        allMl.reduce((s, l) => s + (l.amount || 0), 0)
       ) * 100) / 100,
       bookingCount: allBk.length,
       packageCount: allPkgs.length,
     };
   },
 
-  async getCustomerLessons(customerUserId, clubId, customerName) {
+  async getCustomerLessons(customerUserId, clubId, customerName, customerId) {
     const { data: coaches } = await sb.from('club_coaches').select('id, individual_coach_id, profiles(full_name)').eq('club_id', clubId);
     const coachIds = (coaches ?? []).map(c => c.id);
     if (coachIds.length === 0) return [];
@@ -1537,6 +1652,33 @@ const CustomerSvc = {
       queries.push(sb.from('lessons').select(sel).is('student_id', null).eq('student_name', customerName.trim()).in('club_coach_id', coachIds).neq('status', 'cancelled').order('date', { ascending: false }).limit(50));
     }
 
+    // Manuel özel dersler (kişi bağı: player_id / club_customer_id; isim = eski kayıt fallback)
+    const mlOr = [];
+    if (customerUserId) mlOr.push(`player_id.eq.${customerUserId}`);
+    if (customerId)     mlOr.push(`club_customer_id.eq.${customerId}`);
+    if (customerName?.trim() && !customerName.includes(',')) mlOr.push(`student_name.eq.${customerName.trim()}`);
+    if (mlOr.length > 0) {
+      queries.push(sb.from('club_manual_lessons')
+        .select('id, date, start_time, end_time, student_name, coach_id, coach_name, location, amount, payment_status')
+        .eq('club_id', clubId).or(mlOr.join(','))
+        .order('date', { ascending: false }).limit(50)
+        .then(res => ({
+          data: (res.data ?? []).map(m => ({
+            id:               m.id,
+            date:             m.date ?? null,
+            start_time:       `${m.date}T${(m.start_time || '').slice(0, 5)}`,
+            end_time:         m.end_time ? `${m.date}T${(m.end_time || '').slice(0, 5)}` : null,
+            student_name:     m.student_name ?? null,
+            club_coach_id:    m.coach_id ?? null,
+            location:         m.location ?? null,
+            amount:           m.amount ?? 0,
+            payment_status:   m.payment_status ?? 'unpaid',
+            coach_name_manual: m.coach_name ?? null,
+            lesson_package_sessions: [],
+          })),
+        })));
+    }
+
     const results = await Promise.all(queries);
     const seen = new Set();
     const rows = [];
@@ -1550,7 +1692,7 @@ const CustomerSvc = {
             end_time:         row.end_time ?? null,
             date:             row.date ?? null,
             student_name:     row.student_name ?? null,
-            coach_name:       coachNameMap[row.club_coach_id] ?? null,
+            coach_name:       coachNameMap[row.club_coach_id] ?? row.coach_name_manual ?? null,
             location:         row.location ?? null,
             amount:           row.amount ?? 0,
             payment_status:   row.payment_status ?? 'pending',
@@ -1599,9 +1741,11 @@ const CustomerSvc = {
     if (error) throw error;
     const name = customerName?.trim()?.toLowerCase();
     return (data ?? []).filter(p =>
-      (customerUserId && p.player_id === customerUserId) ||
-      (name && p.manual_player_name?.trim()?.toLowerCase() === name) ||
-      (name && p.player?.full_name?.trim()?.toLowerCase() === name)
+      p.status !== 'cancelled' && (
+        (customerUserId && p.player_id === customerUserId) ||
+        (name && p.manual_player_name?.trim()?.toLowerCase() === name) ||
+        (name && p.player?.full_name?.trim()?.toLowerCase() === name)
+      )
     );
   },
 

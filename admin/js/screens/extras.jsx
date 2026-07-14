@@ -633,6 +633,8 @@ function MyProgramScreen({ clubId, setScreen, clubProfile }) {
   // Ders detay / ödeme modalı
   const [lsDetail,       setLsDetail]       = useState(null);
   const [lsDetailSaving, setLsDetailSaving] = useState(false);
+  // Düzenlemede add-modal prefill'i sırasında oto-paket / oto-hoca efektlerini bastırmak için
+  const lsEditInitRef = React.useRef(null);
 
   // Blok / kapatma detay modalı
   const [clDetail,       setClDetail]       = useState(null);
@@ -694,6 +696,8 @@ function MyProgramScreen({ clubId, setScreen, clubProfile }) {
 
   // Paket yükleme — öğrenci seçilince (hoca filtresiz, tüm aktif paketler)
   React.useEffect(() => {
+    // Düzenleme prefill'i sırasında oto-paket uygulamasını atla (ücret/ödeme ezilmesin)
+    if (lsEditInitRef.current) return;
     // Müşterinin CourtyCLUB hesabı varsa onun player_id'si olarak kullan
     const playerId = lsSelectedPlayer?.id || lsSelectedCustomer?.user_id || null;
     // Sadece app hesabı olmayan müşteri için isimle sorgula
@@ -707,7 +711,7 @@ function MyProgramScreen({ clubId, setScreen, clubProfile }) {
       try {
         const now = new Date().toISOString();
         const baseQ = () => sb.from('player_lesson_packages')
-          .select('*, lesson_packages(name, total_lessons, price, validity_days, coach_percentage)')
+          .select('*, lesson_packages(name, total_lessons, price, validity_days, coach_percentage, coach_payout_mode)')
           .in('payment_status', ['paid', 'pending']).eq('status', 'active')
           .or(`expiry_date.is.null,expiry_date.gt.${now}`)
           .order('created_at', { ascending: false });
@@ -1019,7 +1023,9 @@ function MyProgramScreen({ clubId, setScreen, clubProfile }) {
         paymentStatus: m.payment_status, amount: m.amount, coachName,
         studentName: m.student_name, source: 'manual', rawId: m.id,
         lessonDate: m.date, coachId: m.coach_id, priceMode: m.price_mode || 'normal',
-        coachAmount: m.coach_amount ?? null, clubAmount: m.club_amount ?? null });
+        coachAmount: m.coach_amount ?? null, clubAmount: m.club_amount ?? null,
+        isPackageLesson: !!m.is_package_lesson,
+        pkgSessionId: m.pkg_session_id || null, playerPackageId: m.player_package_id || null });
     });
 
     // Kapatmalar — aynı grup + saat + kort için hoca listesini tek event'ta birleştir
@@ -1194,6 +1200,7 @@ function MyProgramScreen({ clubId, setScreen, clubProfile }) {
       setLsPersonMode('member');
       setLsUsePkg(false); setLsSelectedPkgId(null); setLsPackages([]);
       setLsPriceMode('normal');
+      lsEditInitRef.current = null;
       setLsModal({ type: 'add' });
       setSlotTypeModal(false);
       setSlotClickInfo(null);
@@ -1523,6 +1530,20 @@ function MyProgramScreen({ clubId, setScreen, clubProfile }) {
   };
 
   // ── Ders Detay Aksiyonları (Program Ekranı) ────────────────────
+  // Bir manuel/uygulama dersinin kortu bloklayan gölge booking'ini iptal et.
+  // Hem web (localTimeToDb) hem mobil (+03:00) formatındaki kayıtları kapatır.
+  const cancelCourtBooking = async (courtId, lessonDate, sh, sm, eh, em) => {
+    const pad = n => String(n).padStart(2,'0');
+    const startWeb = localTimeToDb(`${lessonDate}T${pad(sh)}:${pad(sm)}`);
+    const startMob = new Date(`${lessonDate}T${pad(sh)}:${pad(sm)}:00+03:00`).toISOString();
+    await Promise.all([
+      sb.from('bookings').update({ status: 'cancelled' })
+        .eq('court_id', courtId).eq('start_time', startWeb).neq('status', 'cancelled'),
+      sb.from('bookings').update({ status: 'cancelled' })
+        .eq('court_id', courtId).eq('start_time', startMob).neq('status', 'cancelled'),
+    ]);
+  };
+
   const handleLsDetailPaid = async () => {
     if (!lsDetail) return;
     const isSplitLesson = lsDetail.priceMode === 'split';
@@ -1578,14 +1599,8 @@ function MyProgramScreen({ clubId, setScreen, clubProfile }) {
     if (!confirm(`Ödeme Al\n\n${lines}\n\nÖdeme alındı olarak işaretlensin mi?`)) return;
     setLsDetailSaving(true);
     try {
-      if (lsDetail.source === 'lesson') {
-        const { error } = await sb.from('lessons').update({ payment_status: 'paid' }).eq('id', lsDetail.rawId);
-        if (error) throw error;
-      } else {
-        const { error } = await sb.from('club_manual_lessons').update({ payment_status: 'paid' }).eq('id', lsDetail.rawId);
-        if (error) throw error;
-      }
-
+      // NOT: coach_earnings / club_finances kayıtları ÖNCE oluşturulur; ödeme durumu SONRA
+      // güncellenir. Böylece club_manual_lessons trigger'ı (zaten hakediş var → atla) çift yazmaz.
       if (isNewNormal) {
         // Yeni stil: kulüp payı club_finances'a, hoca hakedişi coach_earnings'e
         if (clubAmt > 0) {
@@ -1600,7 +1615,8 @@ function MyProgramScreen({ clubId, setScreen, clubProfile }) {
           await sb.from('coach_earnings').insert({
             club_id:        clubId,
             coach_id:       lsDetail.coachId || null,
-            manual_lesson_id: lsDetail.rawId,
+            manual_lesson_id: lsDetail.source === 'manual' ? lsDetail.rawId : null,
+            lesson_id:        lsDetail.source === 'lesson' ? lsDetail.rawId : null,
             coach_name:     lsDetail.coachName,
             student_name:   lsDetail.studentName || null,
             amount:         coachAmt,
@@ -1616,7 +1632,8 @@ function MyProgramScreen({ clubId, setScreen, clubProfile }) {
           await sb.from('coach_earnings').insert({
             club_id:          clubId,
             coach_id:         lsDetail.coachId || null,
-            manual_lesson_id: lsDetail.rawId,
+            manual_lesson_id: lsDetail.source === 'manual' ? lsDetail.rawId : null,
+            lesson_id:        lsDetail.source === 'lesson' ? lsDetail.rawId : null,
             coach_name:       lsDetail.coachName,
             student_name:     lsDetail.studentName || null,
             amount:           coachAmt,
@@ -1648,7 +1665,8 @@ function MyProgramScreen({ clubId, setScreen, clubProfile }) {
           await sb.from('coach_earnings').insert({
             club_id:        clubId,
             coach_id:       lsDetail.coachId || null,
-            lesson_id:      lsDetail.source === 'lesson' ? lsDetail.rawId : null,
+            lesson_id:        lsDetail.source === 'lesson' ? lsDetail.rawId : null,
+            manual_lesson_id: lsDetail.source === 'manual' ? lsDetail.rawId : null,
             coach_name:     lsDetail.coachName,
             student_name:   lsDetail.studentName || null,
             amount:         coachAmt,
@@ -1659,6 +1677,16 @@ function MyProgramScreen({ clubId, setScreen, clubProfile }) {
           });
         }
       }
+
+      // Hakediş/gelir yazıldıktan SONRA ödeme durumunu güncelle (trigger çift yazmasın)
+      if (lsDetail.source === 'lesson') {
+        const { error } = await sb.from('lessons').update({ payment_status: 'paid' }).eq('id', lsDetail.rawId);
+        if (error) throw error;
+      } else {
+        const { error } = await sb.from('club_manual_lessons').update({ payment_status: 'paid' }).eq('id', lsDetail.rawId);
+        if (error) throw error;
+      }
+
       setLsDetail(null);
       load();
     } catch (e) { alert(e.message); }
@@ -1713,20 +1741,6 @@ function MyProgramScreen({ clubId, setScreen, clubProfile }) {
           ]);
         }
       }
-      // Booking'i hem web (localTimeToDb) hem mobil (+03:00) formatında iptal et
-      const cancelCourtBooking = async (courtId, lessonDate, sh, sm, eh, em) => {
-        const pad = n => String(n).padStart(2,'0');
-        const startWeb = localTimeToDb(`${lessonDate}T${pad(sh)}:${pad(sm)}`);
-        const endWeb   = localTimeToDb(`${lessonDate}T${pad(eh)}:${pad(em)}`);
-        const startMob = new Date(`${lessonDate}T${pad(sh)}:${pad(sm)}:00+03:00`).toISOString();
-        const endMob   = new Date(`${lessonDate}T${pad(eh)}:${pad(em)}:00+03:00`).toISOString();
-        await Promise.all([
-          sb.from('bookings').update({ status: 'cancelled' })
-            .eq('court_id', courtId).eq('start_time', startWeb).neq('status', 'cancelled'),
-          sb.from('bookings').update({ status: 'cancelled' })
-            .eq('court_id', courtId).eq('start_time', startMob).neq('status', 'cancelled'),
-        ]);
-      };
       if (lsDetail.source === 'manual') {
         await sb.from('club_manual_lessons').delete().eq('id', lsDetail.rawId);
         if (lsDetail.courtId) {
@@ -1741,6 +1755,341 @@ function MyProgramScreen({ clubId, setScreen, clubProfile }) {
       setLsDetail(null);
       load();
     } catch (e) { console.warn('Ders iptal hatası:', e.message); alert(e.message); }
+    finally { setLsDetailSaving(false); }
+  };
+
+  // Bir manuel dersin mali kayıtlarını (coach_earnings + club_finances) sıfırdan kurar.
+  // Önce derse bağlı eski kayıtları siler, sonra yeni fiyat/ödeme durumuna göre TEK sefer oluşturur.
+  // Dönüş: elle kontrol gerektiren durumların açıklama listesi.
+  const rebuildManualLessonFinance = async (oldInfo, newInfo) => {
+    const pad = n => String(n).padStart(2, '0');
+    const warnings = [];
+
+    // ── 1) Eski kayıtları temizle ──
+    // coach_earnings güvenli: manual_lesson_id ile bağlı
+    await sb.from('coach_earnings').delete().eq('manual_lesson_id', oldInfo.manualLessonId);
+
+    // club_finances'ta manual_lesson_id yok → imza (club_id + date + category + description) ile sil.
+    const oldStu = oldInfo.oldStudentName || 'Öğrenci';
+    const oldCoach = oldInfo.oldCoachName || 'Hoca';
+    const sigs = [
+      { category: 'Özel Ders Geliri',    description: `${oldCoach} - ${oldStu} - Özel Ders` },
+      { category: 'Rezervasyon Geliri',  description: `${oldCoach} - ${oldStu} - Özel ders kort ücreti` },
+    ];
+    for (const sig of sigs) {
+      const { data: rows } = await sb.from('club_finances').select('id')
+        .eq('club_id', clubId).eq('date', oldInfo.oldDate)
+        .eq('category', sig.category).eq('description', sig.description);
+      if (!rows || rows.length === 0) continue;
+      if (rows.length > 1) { warnings.push('kulüp gelir kaydı (birden fazla eşleşme)'); continue; }
+      await sb.from('club_finances').delete().eq('id', rows[0].id);
+    }
+
+    // ── 2) Yeni durumu oluştur ──
+    const stu        = newInfo.studentName || 'Öğrenci';
+    const startLabel = `${pad(newInfo.sh)}:${pad(newInfo.sm)}`;
+    const coachRec   = newInfo.coachId ? coachesList.find(c => c.id === newInfo.coachId) : null;
+    const indCoachId = coachRec?.individual_coach_id || null;
+    const proms = [];
+
+    if (newInfo.priceMode === 'split') {
+      // Pay modeli: ders var olduğu sürece (ödensin ya da ödenmesin) tek sefer oluştur
+      const rawAmt  = Math.round((Number(newInfo.amount) || 0) * 100) / 100;
+      const payRate = coachRec?.coach_pay_rate ?? 0;
+      if (newInfo.coachId && rawAmt > 0 && payRate > 0) {
+        const coachEarn = Math.round(rawAmt * (payRate / 100) * 100) / 100;
+        const clubEarn  = Math.round((rawAmt - coachEarn) * 100) / 100;
+        if (coachEarn > 0) proms.push(sb.from('coach_earnings').insert({
+          club_id: clubId, coach_id: newInfo.coachId, individual_coach_id: indCoachId,
+          manual_lesson_id: oldInfo.manualLessonId, coach_name: newInfo.coachName,
+          student_name: newInfo.studentName || null, amount: coachEarn, court_fee: 0,
+          date: newInfo.date, description: `Özel ders (pay) - ${stu} - ${startLabel}`,
+          payment_status: 'unpaid', collected_by_coach: false, court_fee_settled: false,
+        }));
+        if (clubEarn > 0) proms.push(sb.from('club_finances').insert({
+          club_id: clubId, type: 'income', category: 'Özel Ders Geliri', amount: clubEarn,
+          description: `${newInfo.coachName} - ${stu} - Özel Ders`, date: newInfo.date,
+        }));
+      }
+    } else if (newInfo.priceMode === 'dual') {
+      // Yeni normal (hoca payı + kulüp payı): yalnızca ödendiyse kayıt oluştur
+      if (newInfo.paid) {
+        const coachAmt = Math.round((Number(newInfo.coachAmount) || 0) * 100) / 100;
+        const clubAmt  = Math.round((Number(newInfo.clubAmount)  || 0) * 100) / 100;
+        if (clubAmt > 0) proms.push(sb.from('club_finances').insert({
+          club_id: clubId, type: 'income', category: 'Özel Ders Geliri', amount: clubAmt,
+          description: `${newInfo.coachName} - ${stu} - Özel Ders`, date: newInfo.date,
+        }));
+        if (coachAmt > 0) proms.push(sb.from('coach_earnings').insert({
+          club_id: clubId, coach_id: newInfo.coachId || null, individual_coach_id: indCoachId,
+          manual_lesson_id: oldInfo.manualLessonId, coach_name: newInfo.coachName,
+          student_name: newInfo.studentName || null, amount: coachAmt, court_fee: 0,
+          date: newInfo.date, description: `Özel ders - ${stu} - ${startLabel}`,
+          payment_status: 'unpaid', collected_by_coach: false, court_fee_settled: false,
+        }));
+      }
+    } else {
+      // Eski normal (tek tutar, hoca hepsini alır + kort ücreti ayrı): yalnızca ödendiyse
+      if (newInfo.paid) {
+        const court    = courts.find(c => c.id === newInfo.courtId);
+        const durH     = Math.max(0, ((newInfo.eh * 60 + newInfo.em) - (newInfo.sh * 60 + newInfo.sm)) / 60);
+        const courtFee = Math.round((court?.hourly_rate || 0) * durH * 100) / 100;
+        const coachAmt = Math.round((Number(newInfo.amount) || 0) * 100) / 100;
+        if (courtFee > 0) proms.push(sb.from('club_finances').insert({
+          club_id: clubId, type: 'income', category: 'Rezervasyon Geliri', amount: courtFee,
+          description: `${newInfo.coachName} - ${stu} - Özel ders kort ücreti`, date: newInfo.date,
+        }));
+        if (coachAmt > 0) proms.push(sb.from('coach_earnings').insert({
+          club_id: clubId, coach_id: newInfo.coachId || null, coach_name: newInfo.coachName,
+          student_name: newInfo.studentName || null, amount: coachAmt, court_fee: courtFee,
+          date: newInfo.date, description: `Özel ders - ${stu} - ${startLabel}`, payment_status: 'unpaid',
+        }));
+      }
+    }
+
+    if (proms.length) await Promise.all(proms);
+    return warnings;
+  };
+
+  // Paket dersi düzenlemesinde akıllı yeniden hesaplama:
+  // eski kişinin paket seansını/kredisini geri al, yeni kişinin uygun paketinden düş.
+  // Dönüş: kullanıcıya gösterilecek bilgi mesajı (veya null).
+  const reconcilePackageOnEdit = async ({ editId, orig, coachId, studentName, playerId, date }) => {
+    const origInd = orig.coach_id ? (coachesList.find(c => c.id === orig.coach_id)?.individual_coach_id || null) : null;
+    const newInd  = coachId ? (coachesList.find(c => c.id === coachId)?.individual_coach_id || null) : null;
+    const oldCoachDisplay = orig.coach_id
+      ? (coachesList.find(c => c.id === orig.coach_id)?.full_name || orig.coach_name)
+      : orig.coach_name;
+    const oldStu = orig.student_name || 'Öğrenci';
+
+    // ── A) Eski paket seansını + kredisini geri al ──
+    if (origInd) {
+      const { data: sess } = await sb.from('lesson_package_sessions')
+        .select('id, player_package_id')
+        .eq('session_date', orig.date).eq('coach_id', origInd).is('lesson_id', null).limit(1);
+      if (sess?.length) {
+        const { id: sessId, player_package_id } = sess[0];
+        const { data: plp } = await sb.from('player_lesson_packages').select('used_lessons').eq('id', player_package_id).single();
+        if (plp) {
+          await sb.from('player_lesson_packages').update({
+            used_lessons: Math.max(0, (plp.used_lessons || 0) - 1),
+            status: 'active', updated_at: new Date().toISOString(),
+          }).eq('id', player_package_id);
+        }
+        await sb.from('lesson_package_sessions').delete().eq('id', sessId);
+      }
+    }
+    // Eski paket mali kayıtları
+    await sb.from('coach_earnings').delete().eq('manual_lesson_id', editId).eq('description', 'Ders Paketi Oturumu');
+    const oldSig = `${oldCoachDisplay || 'Antrenör'} - ${oldStu} - Ders Paketi Oturumu`;
+    const { data: cfOld } = await sb.from('club_finances').select('id')
+      .eq('club_id', clubId).eq('date', orig.date).eq('category', 'Ders Paketi Geliri').eq('description', oldSig);
+    if (cfOld?.length === 1) await sb.from('club_finances').delete().eq('id', cfOld[0].id);
+
+    // ── B) Yeni kişinin uygun aktif paketini bul ──
+    const newManualName = !playerId ? (studentName || null) : null;
+    if (!playerId && !newManualName) {
+      return 'Paket dersinde kişi kaldırıldı; ders paketsiz kaldı. Ücret/ödeme durumunu kontrol edin.';
+    }
+    const now = new Date().toISOString();
+    const baseQ = () => sb.from('player_lesson_packages')
+      .select('*, lesson_packages(name, total_lessons, price, coach_percentage, coach_payout_mode)')
+      .in('payment_status', ['paid', 'pending']).eq('status', 'active')
+      .or(`expiry_date.is.null,expiry_date.gt.${now}`)
+      .order('created_at', { ascending: false });
+    const queries = [];
+    if (playerId)      queries.push(baseQ().eq('player_id', playerId));
+    if (newManualName) queries.push(baseQ().is('player_id', null).eq('manual_player_name', newManualName));
+    const results = await Promise.all(queries);
+    const seen = new Set();
+    const pkgs = results.flatMap(r => r.data || []).filter(r => { if (seen.has(r.id)) return false; seen.add(r.id); return true; });
+    const pkg = pkgs.find(p => ((p.total_lessons || 0) - (p.used_lessons || 0)) > 0);
+    if (!pkg) {
+      return 'Yeni kişinin uygun (kalan seanslı) paketi bulunamadı; ders paketsiz kaldı. Ücret/ödeme durumunu kontrol edin.';
+    }
+
+    // ── C) Yeni paketten düş + mali kayıt oluştur (saveNewLesson ile birebir) ──
+    const newUsed = (pkg.used_lessons || 0) + 1;
+    const isCompleted = newUsed >= (pkg.total_lessons || 0);
+    await sb.from('lesson_package_sessions').insert({
+      player_package_id: pkg.id, lesson_id: null, coach_id: newInd,
+      session_date: date, notes: null,
+    });
+    await sb.from('player_lesson_packages').update({
+      used_lessons: newUsed, status: isCompleted ? 'completed' : 'active', updated_at: new Date().toISOString(),
+    }).eq('id', pkg.id);
+
+    // Tahsilat biçimi: per_session → seansta yalnız hoca payı; upfront → seansta hiçbir kayıt
+    const pkgDef = pkg.lesson_packages || {};
+    const mode = pkgDef.coach_payout_mode || pkg.coach_payout_mode || 'upfront';
+    if (mode === 'per_session') {
+      const perSessionTotal = (pkgDef.price ?? pkg.custom_price ?? 0) / (pkgDef.total_lessons || pkg.total_lessons || 1);
+      const coachRec = coachesList.find(c => c.id === coachId);
+      // Öncelik: pakette tanımlı % (varsa) → yoksa hocanın profil oranı
+      const pkgPct   = pkgDef.coach_percentage ?? pkg.custom_coach_pct;
+      const coachPct = Number(pkgPct) > 0 ? Number(pkgPct) : (coachRec?.coach_pay_rate || 0);
+      const coachEarning = Math.round(perSessionTotal * (coachPct / 100) * 100) / 100;
+      if (coachRec && coachEarning > 0) {
+        await sb.from('coach_earnings').insert({
+          club_id: clubId, coach_id: coachId, coach_name: coachRec.full_name,
+          student_name: studentName || null, manual_lesson_id: editId,
+          amount: coachEarning, court_fee: 0, date, description: 'Ders Paketi Oturumu', payment_status: 'unpaid',
+        });
+      }
+    }
+    return `Paket düşümü güncellendi: ${pkg.lesson_packages?.name || 'Paket'} (${newUsed}/${pkg.total_lessons || '?'}).`;
+  };
+
+  // Düzenleme sonrası yan etkiler: gölge booking taşı, mali kayıtları yeniden kur.
+  const applyLessonEditSideEffects = async ({ editId, orig, payload, coachId, amountVal, startDb, endDb, startHH, endHH }) => {
+    if (!orig) return;
+    const pad = n => String(n).padStart(2, '0');
+    const [nsh, nsm] = startHH.split(':').map(Number);
+    const [neh, nem] = endHH.split(':').map(Number);
+    const courtId = payload.court_id;
+
+    // 1) Gölge booking taşı / güncelle
+    const courtChanged = courtId !== orig.court_id;
+    const timeChanged  = nsh !== orig.sh || nsm !== orig.sm || neh !== orig.eh || nem !== orig.em;
+    const coachChanged = coachId !== orig.coach_id;
+    const oldStartWeb = orig.court_id ? localTimeToDb(`${orig.date}T${pad(orig.sh)}:${pad(orig.sm)}`) : null;
+    const oldStartMob = orig.court_id ? new Date(`${orig.date}T${pad(orig.sh)}:${pad(orig.sm)}:00+03:00`).toISOString() : null;
+    if (courtChanged || timeChanged) {
+      if (orig.court_id) await cancelCourtBooking(orig.court_id, orig.date, orig.sh, orig.sm, orig.eh, orig.em);
+      const { data: { user } } = await sb.auth.getUser();
+      if (user?.id && courtId) {
+        const durH = Math.round((new Date(endDb) - new Date(startDb)) / 3600000 * 100) / 100;
+        await sb.from('bookings').insert({
+          court_id: courtId, user_id: user.id, start_time: startDb, end_time: endDb,
+          status: 'confirmed', is_solo_booking: false, duration_hours: durH,
+          total_amount: amountVal || 0, club_coach_id: coachId,
+        }).then(() => {}).catch(e => console.warn('Kort blok güncellenemedi:', e.message));
+      }
+    } else if (coachChanged && orig.court_id) {
+      await sb.from('bookings').update({ club_coach_id: coachId })
+        .eq('court_id', orig.court_id).in('start_time', [oldStartWeb, oldStartMob]).neq('status', 'cancelled');
+    }
+
+    // 2) Paket dersi → akıllı yeniden hesaplama
+    if (orig.is_package) {
+      const personChanged = (payload.player_id || null) !== (orig.player_id || null)
+                         || (payload.club_customer_id || null) !== (orig.club_customer_id || null);
+      const coachChangedPkg = coachId !== (orig.coach_id || null);
+      if (personChanged || coachChangedPkg) {
+        const msg = await reconcilePackageOnEdit({
+          editId, orig, coachId,
+          studentName: payload.student_name, playerId: payload.player_id || null, date: payload.date,
+        });
+        if (msg) alert(msg);
+      }
+      // Paket dersinde non-package mali kayıt yeniden kurma çalışmaz (paket finance ayrı yönetilir)
+      return;
+    }
+
+    // 3) Mali kayıtları yeniden kur (kişi/hoca/tutar/ödeme değişimi otomatik yansır)
+    // Mali kayıt açıklamaları hocanın GÖRÜNEN adını kullanır (coach_name kolonu roster hocalarda null).
+    const coachDisplayName = coachId
+      ? (coachesList.find(c => c.id === coachId)?.full_name || null)
+      : (payload.coach_name || null);
+    const warnings = await rebuildManualLessonFinance(
+      { manualLessonId: editId, oldCoachName: orig.coach_name, oldStudentName: orig.student_name, oldDate: orig.date },
+      { coachId, coachName: coachDisplayName, studentName: payload.student_name, date: payload.date,
+        priceMode: payload.price_mode, coachAmount: payload.coach_amount, clubAmount: payload.club_amount,
+        amount: payload.amount, paid: payload.payment_status === 'paid', courtId,
+        sh: nsh, sm: nsm, eh: neh, em: nem },
+    );
+    if (warnings.length) {
+      alert('Ders güncellendi. Not: ' + warnings.join(', ') + ' otomatik güncellenemedi, elle kontrol edilmeli.');
+    }
+  };
+
+  // "Düzenle" → mevcut özel ders ekleme modalını, dersin verisiyle önceden dolu aç.
+  // Kaydet, saveNewLesson'ın edit dalında UPDATE olarak işler.
+  const openLsEdit = async (d) => {
+    if (!d?.rawId) return;
+    setLsDetailSaving(true);
+    try {
+      const { data: row, error } = await sb.from('club_manual_lessons').select('*').eq('id', d.rawId).single();
+      if (error || !row) { alert('Ders bulunamadı: ' + (error?.message || '')); return; }
+
+      // Kişi bağını geri kur (müşteri > üye)
+      let selPlayer = null, selCustomer = null, personMode = 'member';
+      if (row.club_customer_id) {
+        const { data: cust } = await sb.from('club_customers').select('*').eq('id', row.club_customer_id).maybeSingle();
+        if (cust) {
+          selCustomer = cust; personMode = 'customer';
+          if (cust.user_id) selPlayer = { id: cust.user_id, full_name: cust.full_name, email: cust.email };
+        }
+      } else if (row.player_id) {
+        const { data: prof } = await sb.from('profiles').select('id, full_name, email').eq('id', row.player_id).maybeSingle();
+        if (prof) { selPlayer = prof; personMode = 'member'; }
+      }
+
+      const pad = n => String(n).padStart(2, '0');
+      const sh = parseInt((row.start_time || '0:0').split(':')[0], 10) || 0;
+      const sm = parseInt((row.start_time || '0:0').split(':')[1], 10) || 0;
+      const eh = parseInt((row.end_time   || '0:0').split(':')[0], 10) || 0;
+      const em = parseInt((row.end_time   || '0:0').split(':')[1], 10) || 0;
+
+      // Oto-paket/oto-hoca efektlerini bastır (senkron ref → batching'e bağlı değil)
+      lsEditInitRef.current = row.id;
+
+      const uiPriceMode = row.price_mode === 'split' ? 'split' : 'normal'; // 'dual'/eski 'normal' → 'normal' (UI)
+      setLsPriceMode(uiPriceMode);
+      if (row.price_mode === 'dual') {
+        setLsCoachAmount(row.coach_amount != null ? String(row.coach_amount) : '');
+        setLsClubAmount(row.club_amount  != null ? String(row.club_amount)  : '');
+      } else if (row.price_mode === 'split') {
+        setLsCoachAmount(''); setLsClubAmount('');
+      } else {
+        // Eski 'normal' mod (tek tutar) → hoca payı = amount, kulüp payı = 0
+        setLsCoachAmount(row.amount != null ? String(row.amount) : '');
+        setLsClubAmount('0');
+      }
+      setLsForm({
+        use_manual_coach:  !row.coach_id && !!row.coach_name,
+        coach_id:          row.coach_id || '',
+        manual_coach_name: row.coach_id ? '' : (row.coach_name || ''),
+        date:              row.date,
+        start_time:        `${pad(sh)}:${pad(sm)}`,
+        end_time:          `${pad(eh)}:${pad(em)}`,
+        duration:          null,
+        student_name:      row.student_name || '',
+        player_id:         row.player_id || null,
+        court_id:          row.court_id || '',
+        notes:             row.notes || '',
+        amount:            row.amount != null ? String(row.amount) : '',
+        payment_status:    row.payment_status || 'unpaid',
+      });
+      setLsSelectedPlayer(selPlayer);
+      setLsSelectedCustomer(selCustomer);
+      setLsPersonMode(personMode);
+      // Bağlı kişi yoksa (yalnızca isim) adı arama kutusunda göster ki görünür/edit'lenebilir kalsın
+      setLsPlayerSearch((!selPlayer && !selCustomer) ? (row.student_name || '') : '');
+      setLsPlayerResults([]);
+      setLsCustomerSearch(''); setLsCustomerResults([]);
+      setLsCourtyclubResults([]);
+      // Paket: düzenlemede otomatik uygulama yok (Katman 3). Kapalı başlat.
+      setLsUsePkg(false); setLsSelectedPkgId(null); setLsPackages([]);
+
+      setLsDetail(null);
+      setLsModal({
+        type: 'edit',
+        id: row.id,
+        orig: {
+          court_id: row.court_id || null, date: row.date,
+          sh, sm, eh, em,
+          coach_id: row.coach_id || null,
+          coach_name: row.coach_name || d.coachName || null,
+          student_name: row.student_name || null,
+          player_id: row.player_id || null,
+          club_customer_id: row.club_customer_id || null,
+          price_mode: row.price_mode || 'normal',
+          payment_status: row.payment_status || 'unpaid',
+          is_package: !!d.isPackageLesson,
+        },
+      });
+    } catch (e) { alert(e.message); }
     finally { setLsDetailSaving(false); }
   };
 
@@ -1912,6 +2261,8 @@ function MyProgramScreen({ clubId, setScreen, clubProfile }) {
 
   // Öğrenci seçilince aktif paketi varsa hocanın otomatik seçilmesi
   React.useEffect(() => {
+    // Düzenleme prefill'i sırasında oto-hoca seçimini atla (mevcut hoca korunsun)
+    if (lsEditInitRef.current) return;
     const playerId = lsSelectedPlayer?.id || lsSelectedCustomer?.user_id || null;
     const manualName = (!playerId && lsSelectedCustomer && !lsSelectedCustomer.user_id)
       ? lsSelectedCustomer.full_name : null;
@@ -1961,28 +2312,53 @@ function MyProgramScreen({ clubId, setScreen, clubProfile }) {
     lsSavingGuard.current = true;
     setLsSaving(true);
 
+    // Düzenleme modu: lsModal.id varsa INSERT yerine UPDATE + yan etkiler
+    const editId = lsModal?.id || null;
+    const orig   = lsModal?.orig || null;
+    const pad2   = n => String(n).padStart(2, '0');
+
     const dateStr = lsForm.date;
     const startHH = lsForm.start_time.slice(0, 5);
     const endHH   = lsForm.end_time.slice(0, 5);
     const startDb = localTimeToDb(`${dateStr}T${startHH}`);
     const endDb   = localTimeToDb(`${dateStr}T${endHH}`);
 
+    // Geçmiş tarih — yalnızca yeni derste onay iste (düzenlemede sorma)
+    if (!editId && new Date(startDb) < new Date()) {
+      if (!confirm('Geçmiş bir tarihe ders eklensin mi?')) {
+        lsSavingGuard.current = false; setLsSaving(false); return;
+      }
+    }
+
     // Çakışma kontrolleri
     const [{ data: bConflict }, { data: mConflict }, { data: closures }] = await Promise.all([
-      sb.from('bookings').select('id').eq('court_id', lsForm.court_id)
+      sb.from('bookings').select('id,court_id,start_time').eq('court_id', lsForm.court_id)
         .neq('status', 'cancelled').lt('start_time', endDb).gt('end_time', startDb),
-      sb.from('club_manual_lessons').select('id,start_time,end_time,court_id')
+      sb.from('club_manual_lessons').select('id,start_time,end_time,court_id,location')
         .eq('club_id', clubId).eq('date', dateStr),
       sb.from('court_closures').select('*').eq('court_id', lsForm.court_id).eq('is_active', true),
     ]);
 
     const resetGuard = () => { lsSavingGuard.current = false; setLsSaving(false); };
 
-    if (bConflict?.length > 0) { resetGuard(); alert('Bu kort seçilen saatte zaten rezerve edilmiş.'); return; }
+    // Düzenlemede: dersin kendi gölge booking'ini çakışma sayma
+    // (start_time string formatı DB'den farklı gelebildiği için epoch/ms ile karşılaştır)
+    let realBConflict = bConflict || [];
+    if (editId && orig && orig.court_id) {
+      const oldWebMs = new Date(localTimeToDb(`${orig.date}T${pad2(orig.sh)}:${pad2(orig.sm)}`)).getTime();
+      const oldMobMs = new Date(`${orig.date}T${pad2(orig.sh)}:${pad2(orig.sm)}:00+03:00`).getTime();
+      realBConflict = realBConflict.filter(b => {
+        if (b.court_id !== orig.court_id) return true;
+        const t = new Date(b.start_time).getTime();
+        return !(t === oldWebMs || t === oldMobMs);
+      });
+    }
+    if (realBConflict.length > 0) { resetGuard(); alert('Bu kort seçilen saatte zaten rezerve edilmiş.'); return; }
 
     const courtRow0 = courts.find(c => c.id === lsForm.court_id);
     const locationStr = courtRow0 ? `Kort ${courtRow0.court_number}` : '';
     const hasManualConflict = (mConflict || [])
+      .filter(l => l.id !== editId)
       .filter(l => l.court_id ? l.court_id === lsForm.court_id : l.location === locationStr)
       .some(l => {
         const ls = (l.start_time || '').slice(0, 5);
@@ -2021,7 +2397,7 @@ function MyProgramScreen({ clubId, setScreen, clubProfile }) {
 
       const { data: coachConflict } = await sb.from('club_manual_lessons')
         .select('id,start_time,end_time').eq('coach_id', lsForm.coach_id).eq('date', dateStr);
-      const hasCoachConflict = (coachConflict || []).some(l => {
+      const hasCoachConflict = (coachConflict || []).filter(l => l.id !== editId).some(l => {
         const ls = (l.start_time || '').slice(0, 5);
         const le = (l.end_time   || '').slice(0, 5);
         return ls < endHH && le > startHH;
@@ -2074,23 +2450,33 @@ function MyProgramScreen({ clubId, setScreen, clubProfile }) {
       }
     }
 
-    // Paket kullanılıyorsa kaydetmeden önce hoca/kulüp payı özetini göster
+    // Paket kullanılıyorsa kaydetmeden önce özet göster (tahsilat biçimine duyarlı).
+    // Kulüp payı HER İKİ modda da satışta alındığı için seansta club_finances kaydı OLUŞMAZ;
+    // bu yüzden özet artık yanıltıcı "Kulüp Payı" satırı göstermiyor.
     if (lsUsePkg && lsSelectedPkgId) {
       const preCoachId  = !lsForm.use_manual_coach ? (lsForm.coach_id || null) : null;
       const preCoachRec = coachesList.find(c => c.id === preCoachId);
       const prePkg      = lsPackages.find(p => p.id === lsSelectedPkgId);
       if (prePkg) {
         const pkgDef_    = prePkg.lesson_packages || {};
+        const preMode    = pkgDef_.coach_payout_mode || prePkg.coach_payout_mode || 'upfront';
         const perSession = (pkgDef_.price ?? prePkg.custom_price ?? 0) / (pkgDef_.total_lessons || prePkg.total_lessons || 1);
-        const pct_       = preCoachRec?.coach_pay_rate || prePkg.custom_coach_pct || 0;
+        // Öncelik: pakette tanımlı % (varsa) → yoksa hocanın profil oranı
+        const pkgPct_    = pkgDef_.coach_percentage ?? prePkg.custom_coach_pct;
+        const pct_       = Number(pkgPct_) > 0 ? Number(pkgPct_) : (preCoachRec?.coach_pay_rate || 0);
         const coachEarn_ = Math.round(perSession * (pct_ / 100) * 100) / 100;
-        const clubEarn_  = Math.round((perSession - coachEarn_) * 100) / 100;
         const summaryLines = [`Ders başı tutar: ₺${perSession.toLocaleString('tr-TR')}`];
-        if (preCoachRec && pct_ > 0) {
-          summaryLines.push(`Hoca Hakedişi:   ₺${coachEarn_.toLocaleString('tr-TR')} (%${pct_})`);
-          summaryLines.push(`Kulüp Payı:      ₺${clubEarn_.toLocaleString('tr-TR')}`);
+        if (preMode === 'per_session') {
+          // Seansta yalnız hoca payı işlenir; kulüp payı satışta alındı.
+          if (preCoachRec && pct_ > 0) {
+            summaryLines.push(`Hoca Hakedişi:   ₺${coachEarn_.toLocaleString('tr-TR')} (%${pct_}) — bu seansta hocaya işlenir`);
+          } else {
+            summaryLines.push(`Hoca pay oranı tanımlı değil — bu seansta hoca hakedişi oluşmaz`);
+          }
+          summaryLines.push(`Kulüp payı satışta alındı — bu seansta ek mali kayıt oluşmaz`);
         } else {
-          summaryLines.push(`Kulüp Payı:      ₺${perSession.toLocaleString('tr-TR')} (hoca pay oranı tanımlı değil)`);
+          // upfront: hoca ve kulüp payı satışta alındı; seansta hiçbir mali kayıt oluşmaz.
+          summaryLines.push(`Hoca ve kulüp payı satışta alındı — bu seansta ek mali kayıt oluşmaz`);
         }
         if (!confirm(`Ders Paketi Oturumu\n\n${summaryLines.join('\n')}\n\nKaydedilsin mi?`)) { resetGuard(); return; }
       }
@@ -2108,24 +2494,37 @@ function MyProgramScreen({ clubId, setScreen, clubProfile }) {
         : (lsForm.amount ? parseFloat(String(lsForm.amount).replace(',', '.')) : null);
       const payStatus = usingPkg ? 'paid' : (lsForm.payment_status || 'unpaid');
 
+      // Kişi bağı: seçilen üye → player_id; seçilen müşteri → club_customer_id
+      // (müşterinin CourtyCLUB hesabı varsa player_id olarak user_id de yazılır)
+      const linkPlayerId   = lsSelectedPlayer?.id || lsSelectedCustomer?.user_id || null;
+      const linkCustomerId = lsSelectedCustomer?.id || null;
+
       const payload = {
-        club_id:        clubId,
-        coach_id:       coachId,
-        coach_name:     coachName,
-        date:           lsForm.date,
-        start_time:     startHH,
-        end_time:       endHH,
-        student_name:   lsForm.student_name || null,
-        court_id:       lsForm.court_id,
-        location:       courtRow ? `Kort ${courtRow.court_number}` : '',
-        notes:          lsForm.notes?.trim() || null,
-        payment_status: payStatus,
-        amount:         amountVal,
-        price_mode:     lsPriceMode === 'normal' ? 'dual' : lsPriceMode,
-        coach_amount:   lsPriceMode === 'normal' ? (normalCoachAmt || 0) : null,
-        club_amount:    lsPriceMode === 'normal' ? (normalClubAmt  || 0) : null,
+        club_id:          clubId,
+        coach_id:         coachId,
+        coach_name:       coachName,
+        date:             lsForm.date,
+        start_time:       startHH,
+        end_time:         endHH,
+        student_name:     lsForm.student_name || null,
+        player_id:        linkPlayerId,
+        club_customer_id: linkCustomerId,
+        court_id:         lsForm.court_id,
+        location:         courtRow ? `Kort ${courtRow.court_number}` : '',
+        notes:            lsForm.notes?.trim() || null,
+        payment_status:   payStatus,
+        amount:           amountVal,
+        price_mode:       lsPriceMode === 'normal' ? 'dual' : lsPriceMode,
+        coach_amount:     lsPriceMode === 'normal' ? (normalCoachAmt || 0) : null,
+        club_amount:      lsPriceMode === 'normal' ? (normalClubAmt  || 0) : null,
       };
 
+      if (editId) {
+        // ── DÜZENLEME: UPDATE + yan etkiler (gölge booking taşı, finans rebuild, paket) ──
+        const { error: upErr } = await sb.from('club_manual_lessons').update(payload).eq('id', editId);
+        if (upErr) throw upErr;
+        await applyLessonEditSideEffects({ editId, orig, payload, coachId, amountVal, startDb, endDb, startHH, endHH });
+      } else {
       const { data: inserted, error: insErr } = await sb.from('club_manual_lessons')
         .insert(payload).select('id').single();
       if (insErr) throw insErr;
@@ -2163,30 +2562,25 @@ function MyProgramScreen({ clubId, setScreen, clubProfile }) {
                 updated_at: new Date().toISOString(),
               }).eq('id', lsSelectedPkgId);
               if (updErr) throw updErr;
+              // Tahsilat biçimi: per_session → seansta yalnız hoca payı; upfront → seansta hiçbir kayıt
               const pkgDef = pkg.lesson_packages || {};
-              const perSessionTotal = (pkgDef.price ?? pkg.custom_price ?? 0) / (pkgDef.total_lessons || pkg.total_lessons || 1);
-              const coachRec = coachesList.find(c => c.id === coachId);
-              const coachPct     = coachRec?.coach_pay_rate || pkg.custom_coach_pct || 0;
-              const coachEarning = perSessionTotal * (coachPct / 100);
-              const clubEarning  = perSessionTotal - coachEarning;
-              const earningPromises = [];
-              if (coachRec && coachEarning > 0) {
-                earningPromises.push(sb.from('coach_earnings').insert({
-                  club_id: clubId, coach_id: coachId, coach_name: coachRec.full_name,
-                  student_name: lsForm.student_name || null, lesson_id: inserted.id,
-                  amount: Math.round(coachEarning * 100) / 100, court_fee: 0,
-                  date: lsForm.date, description: 'Ders Paketi Oturumu', payment_status: 'unpaid',
-                }));
+              const mode = pkgDef.coach_payout_mode || pkg.coach_payout_mode || 'upfront';
+              if (mode === 'per_session') {
+                const perSessionTotal = (pkgDef.price ?? pkg.custom_price ?? 0) / (pkgDef.total_lessons || pkg.total_lessons || 1);
+                const coachRec = coachesList.find(c => c.id === coachId);
+                // Öncelik: pakette tanımlı % (varsa) → yoksa hocanın profil oranı
+                const pkgPct   = pkgDef.coach_percentage ?? pkg.custom_coach_pct;
+                const coachPct = Number(pkgPct) > 0 ? Number(pkgPct) : (coachRec?.coach_pay_rate || 0);
+                const coachEarning = Math.round(perSessionTotal * (coachPct / 100) * 100) / 100;
+                if (coachRec && coachEarning > 0) {
+                  await sb.from('coach_earnings').insert({
+                    club_id: clubId, coach_id: coachId, coach_name: coachRec.full_name,
+                    student_name: lsForm.student_name || null, manual_lesson_id: inserted.id,
+                    amount: coachEarning, court_fee: 0,
+                    date: lsForm.date, description: 'Ders Paketi Oturumu', payment_status: 'unpaid',
+                  });
+                }
               }
-              if (clubEarning > 0) {
-                earningPromises.push(sb.from('club_finances').insert({
-                  club_id: clubId, type: 'income', category: 'Ders Paketi Geliri',
-                  amount: Math.round(clubEarning * 100) / 100,
-                  description: `${coachRec?.full_name || 'Antrenör'} - ${lsForm.student_name || 'Öğrenci'} - Ders Paketi Oturumu`,
-                  date: lsForm.date,
-                }));
-              }
-              await Promise.all(earningPromises);
             }
           } catch (pkgErr) {
             alert(`Ders kaydedildi ancak paketten düşülemedi: ${pkgErr.message}`);
@@ -2273,6 +2667,8 @@ function MyProgramScreen({ clubId, setScreen, clubProfile }) {
           }
         }
       }
+      }
+      lsEditInitRef.current = null;
       setLsModal(null);
       setLsSelectedPlayer(null); setLsPlayerSearch(''); setLsPlayerResults([]);
       setLsSelectedCustomer(null); setLsCustomerSearch(''); setLsCustomerResults([]);
@@ -2957,7 +3353,7 @@ function MyProgramScreen({ clubId, setScreen, clubProfile }) {
                 </div>
                 <div style={{ fontSize:12, color:'var(--text-2)', marginTop:1 }}>{lsDetail.coachName}</div>
               </div>
-              <button onClick={() => setLsDetail(null)} style={{ background:'none', border:'none', cursor:'pointer', padding:8 }}>
+              <button onClick={() => setLsDetail(null)} disabled={lsDetailSaving} style={{ background:'none', border:'none', cursor:'pointer', padding:8 }}>
                 <span className="material-icons" style={{ color:'var(--text-2)' }}>close</span>
               </button>
             </div>
@@ -3005,51 +3401,64 @@ function MyProgramScreen({ clubId, setScreen, clubProfile }) {
               })()}
             </div>
             {/* Aksiyon */}
-            <div style={{ display:'flex', gap:10, padding:'0 20px 28px' }}>
-              {lsDetail.isPackageLesson ? (
-                <div style={{ flex:1, display:'flex', alignItems:'center', justifyContent:'center', gap:6, padding:'13px', borderRadius:14, background:'#EEF2FF', color:'#6366F1', fontSize:14, fontWeight:700 }}>
-                  <span className="material-icons" style={{fontSize:18}}>inventory</span>
-                  Paketten Düşüldü
+            {(
+              <div style={{ display:'flex', flexDirection:'column', gap:10, padding:'0 20px 28px' }}>
+                <div style={{ display:'flex', gap:10 }}>
+                  {lsDetail.isPackageLesson ? (
+                    <div style={{ flex:1, display:'flex', alignItems:'center', justifyContent:'center', gap:6, padding:'13px', borderRadius:14, background:'#EEF2FF', color:'#6366F1', fontSize:14, fontWeight:700 }}>
+                      <span className="material-icons" style={{fontSize:18}}>inventory</span>
+                      Paketten Düşüldü
+                    </div>
+                  ) : lsDetail.paymentStatus !== 'paid' ? (
+                    <button
+                      onClick={handleLsDetailPaid}
+                      disabled={lsDetailSaving}
+                      style={{ flex:1, display:'flex', alignItems:'center', justifyContent:'center', gap:6, padding:'13px', borderRadius:14, border:'none', cursor:lsDetailSaving?'not-allowed':'pointer', background:'#22C55E', color:'#fff', fontSize:14, fontWeight:700 }}>
+                      <span className="material-icons" style={{fontSize:18}}>payments</span>
+                      {(() => {
+                        const isDual  = lsDetail.priceMode === 'dual' ||
+                                        (lsDetail.priceMode === 'normal' && lsDetail.coachAmount != null);
+                        const isSplit = lsDetail.priceMode === 'split';
+                        let total;
+                        if (isDual) {
+                          total = Math.round((Number(lsDetail.amount) || 0) * 100) / 100;
+                        } else if (isSplit) {
+                          total = Math.round((Number(lsDetail.amount) || 0) * 100) / 100;
+                        } else {
+                          const ca = Math.round((Number(lsDetail.amount) || 0) * 100) / 100;
+                          const court = courts.find(c => c.id === lsDetail.courtId);
+                          const dh = Math.max(0, ((lsDetail.eh * 60 + lsDetail.em) - (lsDetail.sh * 60 + lsDetail.sm)) / 60);
+                          const cf = Math.round((court?.hourly_rate || 0) * dh * 100) / 100;
+                          total = Math.round((cf + ca) * 100) / 100;
+                        }
+                        return `Ödeme Al${total > 0 ? ` · ₺${total.toLocaleString('tr-TR')}` : ''}`;
+                      })()}
+                    </button>
+                  ) : (
+                    <div style={{ flex:1, display:'flex', alignItems:'center', justifyContent:'center', gap:6, padding:'13px', borderRadius:14, background:'#DCFCE7', color:'#16A34A', fontSize:14, fontWeight:700 }}>
+                      <span className="material-icons" style={{fontSize:18}}>check_circle</span>
+                      Ödendi
+                    </div>
+                  )}
+                  <button
+                    onClick={handleLsDetailCancel}
+                    disabled={lsDetailSaving}
+                    style={{ display:'flex', alignItems:'center', justifyContent:'center', gap:6, padding:'13px 16px', borderRadius:14, border:'1.5px solid #EF4444', background:'#FEF2F2', cursor: lsDetailSaving ? 'not-allowed' : 'pointer', fontSize:14, fontWeight:700, color:'#EF4444', opacity: lsDetailSaving ? 0.6 : 1, flexShrink:0 }}>
+                    <span className="material-icons" style={{fontSize:18}}>cancel</span>
+                    İptal
+                  </button>
                 </div>
-              ) : lsDetail.paymentStatus !== 'paid' ? (
-                <button
-                  onClick={handleLsDetailPaid}
-                  disabled={lsDetailSaving}
-                  style={{ flex:1, display:'flex', alignItems:'center', justifyContent:'center', gap:6, padding:'13px', borderRadius:14, border:'none', cursor:lsDetailSaving?'not-allowed':'pointer', background:'#22C55E', color:'#fff', fontSize:14, fontWeight:700 }}>
-                  <span className="material-icons" style={{fontSize:18}}>payments</span>
-                  {(() => {
-                    const isDual  = lsDetail.priceMode === 'dual' ||
-                                    (lsDetail.priceMode === 'normal' && lsDetail.coachAmount != null);
-                    const isSplit = lsDetail.priceMode === 'split';
-                    let total;
-                    if (isDual) {
-                      total = Math.round((Number(lsDetail.amount) || 0) * 100) / 100;
-                    } else if (isSplit) {
-                      total = Math.round((Number(lsDetail.amount) || 0) * 100) / 100;
-                    } else {
-                      const ca = Math.round((Number(lsDetail.amount) || 0) * 100) / 100;
-                      const court = courts.find(c => c.id === lsDetail.courtId);
-                      const dh = Math.max(0, ((lsDetail.eh * 60 + lsDetail.em) - (lsDetail.sh * 60 + lsDetail.sm)) / 60);
-                      const cf = Math.round((court?.hourly_rate || 0) * dh * 100) / 100;
-                      total = Math.round((cf + ca) * 100) / 100;
-                    }
-                    return `Ödeme Al${total > 0 ? ` · ₺${total.toLocaleString('tr-TR')}` : ''}`;
-                  })()}
-                </button>
-              ) : (
-                <div style={{ flex:1, display:'flex', alignItems:'center', justifyContent:'center', gap:6, padding:'13px', borderRadius:14, background:'#DCFCE7', color:'#16A34A', fontSize:14, fontWeight:700 }}>
-                  <span className="material-icons" style={{fontSize:18}}>check_circle</span>
-                  Ödendi
-                </div>
-              )}
-              <button
-                onClick={handleLsDetailCancel}
-                disabled={lsDetailSaving}
-                style={{ display:'flex', alignItems:'center', justifyContent:'center', gap:6, padding:'13px 16px', borderRadius:14, border:'1.5px solid #EF4444', background:'#FEF2F2', cursor: lsDetailSaving ? 'not-allowed' : 'pointer', fontSize:14, fontWeight:700, color:'#EF4444', opacity: lsDetailSaving ? 0.6 : 1, flexShrink:0 }}>
-                <span className="material-icons" style={{fontSize:18}}>cancel</span>
-                İptal
-              </button>
-            </div>
+                {lsDetail.source === 'manual' && (
+                  <button
+                    onClick={() => openLsEdit(lsDetail)}
+                    disabled={lsDetailSaving}
+                    style={{ display:'flex', alignItems:'center', justifyContent:'center', gap:6, padding:'12px', borderRadius:14, border:'1.5px solid #0891B2', background:'#F0FDFA', cursor:lsDetailSaving?'not-allowed':'pointer', fontSize:14, fontWeight:700, color:'#0E7490' }}>
+                    <span className="material-icons" style={{fontSize:18}}>edit</span>
+                    Düzenle
+                  </button>
+                )}
+              </div>
+            )}
           </div>
         </div>
       )}
@@ -3203,13 +3612,13 @@ function MyProgramScreen({ clubId, setScreen, clubProfile }) {
       {/* ── Yeni Ders Modalı ── */}
       {lsModal && (
         <div style={{ position:'fixed', inset:0, background:'rgba(0,0,0,0.45)', zIndex:1250, display:'flex', alignItems:'center', justifyContent:'center' }}
-          onClick={e => { if (e.target === e.currentTarget && !lsSaving) setLsModal(null); }}>
+          onClick={e => { if (e.target === e.currentTarget && !lsSaving) { lsEditInitRef.current = null; setLsModal(null); } }}>
           <div style={{ background:'#fff', borderRadius:20, width:'min(480px,95vw)', maxHeight:'85vh', display:'flex', flexDirection:'column', boxShadow:'0 8px 40px rgba(0,0,0,0.18)' }}>
             {/* Header */}
             <div style={{ padding:'16px 20px 12px', borderBottom:'1px solid var(--border)', flexShrink:0 }}>
               <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between' }}>
-                <span style={{ fontSize:17, fontWeight:800, color:'var(--text-1)' }}>Özel Ders Ekle</span>
-                <button style={{ background:'none', border:'none', cursor:'pointer', display:'grid', placeItems:'center' }} onClick={() => setLsModal(null)}>
+                <span style={{ fontSize:17, fontWeight:800, color:'var(--text-1)' }}>{lsModal?.type === 'edit' ? 'Özel Ders Düzenle' : 'Özel Ders Ekle'}</span>
+                <button style={{ background:'none', border:'none', cursor:'pointer', display:'grid', placeItems:'center' }} onClick={() => { lsEditInitRef.current = null; setLsModal(null); }}>
                   <span className="material-icons" style={{ fontSize:22, color:'var(--text-2)' }}>close</span>
                 </button>
               </div>
@@ -3232,6 +3641,30 @@ function MyProgramScreen({ clubId, setScreen, clubProfile }) {
               </div>
             </div>
             <div style={{ overflowY:'auto', flex:1, display:'flex', flexDirection:'column', gap:0, padding:'16px 20px' }}>
+
+              {/* KORT & SAAT — yalnızca düzenlemede editlenebilir (eklemede slot'tan gelir) */}
+              {lsModal?.type === 'edit' && (
+                <div style={{ marginBottom:16 }}>
+                  <div style={{ fontSize:12, fontWeight:700, color:'var(--text-2)', marginBottom:8, letterSpacing:0.4 }}>KORT & SAAT</div>
+                  <select value={lsForm.court_id || ''} onChange={e => setLsForm(prev => ({ ...prev, court_id: e.target.value }))}
+                    style={{ width:'100%', border:'1.5px solid var(--border)', borderRadius:10, padding:'9px 12px', fontSize:14, boxSizing:'border-box', marginBottom:8 }}>
+                    <option value="">Kort seçin</option>
+                    {courts.map(c => <option key={c.id} value={c.id}>Kort {c.court_number}</option>)}
+                  </select>
+                  <div style={{ display:'flex', gap:10 }}>
+                    <div style={{ flex:1 }}>
+                      <div style={{ fontSize:11, color:'var(--text-2)', marginBottom:4 }}>Başlangıç</div>
+                      <input type="time" value={lsForm.start_time || ''} onChange={e => setLsForm(prev => ({ ...prev, start_time: e.target.value }))}
+                        style={{ width:'100%', border:'1.5px solid var(--border)', borderRadius:10, padding:'9px 12px', fontSize:14, boxSizing:'border-box' }} />
+                    </div>
+                    <div style={{ flex:1 }}>
+                      <div style={{ fontSize:11, color:'var(--text-2)', marginBottom:4 }}>Bitiş</div>
+                      <input type="time" value={lsForm.end_time || ''} onChange={e => setLsForm(prev => ({ ...prev, end_time: e.target.value }))}
+                        style={{ width:'100%', border:'1.5px solid var(--border)', borderRadius:10, padding:'9px 12px', fontSize:14, boxSizing:'border-box' }} />
+                    </div>
+                  </div>
+                </div>
+              )}
 
               {/* ÖĞRENCİ / MÜŞTERİ */}
               <div style={{ fontSize:12, fontWeight:700, color:'var(--text-2)', marginBottom:8, letterSpacing:0.4 }}>OYUNCU</div>
@@ -3560,7 +3993,7 @@ function MyProgramScreen({ clubId, setScreen, clubProfile }) {
               <button
                 style={{ width:'100%', background:'var(--brand-navy)', color:'#fff', border:'none', borderRadius:14, padding:'15px', fontSize:15, fontWeight:800, cursor: lsSaving ? 'not-allowed' : 'pointer', opacity: lsSaving ? 0.6 : 1 }}
                 onClick={saveNewLesson} disabled={lsSaving}>
-                {lsSaving ? 'Kaydediliyor...' : 'Dersi Kaydet'}
+                {lsSaving ? 'Kaydediliyor...' : (lsModal?.type === 'edit' ? 'Değişiklikleri Kaydet' : 'Dersi Kaydet')}
               </button>
             </div>
           </div>

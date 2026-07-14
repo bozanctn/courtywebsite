@@ -1885,7 +1885,7 @@ function LessonPackagesScreen({ clubId }) {
   };
 
   const openCreate = () => {
-    setForm({ name: '', description: '', total_lessons: 10, price: '', validity_days: 90, coach_id: '', is_active: true });
+    setForm({ name: '', description: '', total_lessons: 10, price: '', validity_days: 90, coach_id: '', is_active: true, coach_payout_mode: 'upfront', coach_percentage: '' });
     setPkgModal({ type: 'add' });
   };
 
@@ -1910,6 +1910,8 @@ function LessonPackagesScreen({ clubId }) {
         validity_days:    Number(form.validity_days) || 90,
         coach_id:         coachProfileId(form.coach_id) || null,
         is_active:        form.is_active !== false,
+        coach_payout_mode: form.coach_payout_mode === 'per_session' ? 'per_session' : 'upfront',
+        coach_percentage: (form.coach_percentage === '' || form.coach_percentage == null) ? null : Number(form.coach_percentage),
       };
       if (pkgModal.type === 'add') {
         await LessonPackageSvc.createPackage(clubId, payload);
@@ -1937,13 +1939,20 @@ function LessonPackagesScreen({ clubId }) {
     const pp  = confirmModal.playerPkg;
     const pkg = pp.package;
     const coachRec = coaches.find(c => c.individual_coach_id === pp.coach_id);
-    const coachPayRate = coachRec?.coach_pay_rate || 0;
+    // Öncelik: pakette tanımlı % (varsa) → yoksa hocanın profil oranı
+    const pkgPct = pkg?.coach_percentage ?? pp.custom_coach_pct;
+    const coachPayRate = Number(pkgPct) > 0 ? Number(pkgPct) : (coachRec?.coach_pay_rate || 0);
+    const payoutMode = pp.coach_payout_mode || pkg?.coach_payout_mode || 'upfront';
+    if (payoutMode === 'upfront' && coachRec && coachPayRate <= 0) {
+      if (!confirm('Bu paket için hoca pay oranı tanımlı değil; hocaya hakediş oluşmayacak. Yine de onaylansın mı?')) return;
+    }
     setConfirming(true);
     try {
       await LessonPackageSvc.confirmPayment(
         pp.id, pkg?.validity_days, pp.total_paid ?? pkg?.price,
         pp.player?.full_name || pp.manual_player_name || 'Öğrenci', pkg?.name || 'Ders Paketi', clubId,
-        coachRec ? { clubCoachId: coachRec.id, coachName: coachRec.full_name, coachPayRate } : null
+        coachRec ? { clubCoachId: coachRec.id, coachName: coachRec.full_name, coachPayRate } : null,
+        payoutMode
       );
       setConfirmModal(null);
       loadPlayerPackages(); loadStats();
@@ -2035,14 +2044,42 @@ function LessonPackagesScreen({ clubId }) {
   const cancelPlayerPackage = async (pp) => {
     const name = pp.player?.full_name || pp.manual_player_name || 'Bu öğrenci';
     if (!confirm(`${name} için paketi iptal etmek istediğinize emin misiniz?`)) return;
-    try { await LessonPackageSvc.cancelPlayerPackage(pp.id); loadPlayerPackages(); loadStats(); }
+
+    // Ödendi + kullanılmayan ders varsa: kalan derslerin ücretini iade et (gider)
+    let opts = null;
+    const total     = pp.total_lessons ?? pp.package?.total_lessons ?? 0;
+    const used      = pp.used_lessons ?? 0;
+    const remaining = Math.max(0, total - used);
+    if (pp.payment_status === 'paid' && remaining > 0) {
+      const paid      = Number(pp.total_paid ?? pp.package?.price ?? 0);
+      const perLesson = total > 0 ? paid / total : 0;
+      const amount    = Math.round(perLesson * remaining * 100) / 100;
+      // Hoca toplu ödendiyse (upfront) hoca hakedişi de azalacak → uyarıya ekle
+      const mode = pp.coach_payout_mode || pp.package?.coach_payout_mode || 'upfront';
+      const coachAffected = mode === 'upfront' && !!pp.coach_id;
+      let msg = `Kullanılmayan ${remaining} dersin ücretini (₺${amount.toLocaleString('tr-TR')}) iade etmek istiyor musunuz?\n\nEvet derseniz bu tutar gider olarak yazılır.`;
+      if (coachAffected) msg += `\n\nNot: Hoca bu paketten toplu ödendiği için, kullanılmayan derslere düşen hoca payı da hocanın hakedişinden düşülecek.`;
+      if (amount > 0 && confirm(msg)) {
+        const packageName = pp.package?.name || pp.custom_name || 'Ders Paketi';
+        opts = { refund: { amount, clubId, packageName, playerName: name, remaining } };
+        if (coachAffected) {
+          opts.coachClawback = {
+            clubId, individualCoachId: pp.coach_id, packageName, playerName: name,
+            remaining, totalLessons: total, totalPaid: paid,
+            packageCoachPct: pp.package?.coach_percentage ?? null,
+          };
+        }
+      }
+    }
+
+    try { await LessonPackageSvc.cancelPlayerPackage(pp.id, opts); loadPlayerPackages(); loadStats(); }
     catch (e) { alert(e.message); }
   };
 
   const displayName = (pp) => pp.player?.full_name || pp.manual_player_name || '—';
 
   const activeStudents  = playerPkgs.filter(p => p.payment_status === 'paid' && p.status !== 'cancelled');
-  const pendingStudents = playerPkgs.filter(p => p.payment_status === 'pending');
+  const pendingStudents = playerPkgs.filter(p => p.payment_status === 'pending' && p.status !== 'cancelled');
   const perLesson = (pkg) => pkg.total_lessons > 0 ? pkg.price / pkg.total_lessons : 0;
   // lesson_packages.coach_id = profiles.id = club_coaches.individual_coach_id
   const coachName = (coachId) => {
@@ -2051,10 +2088,15 @@ function LessonPackagesScreen({ clubId }) {
     return c?.full_name ?? null;
   };
   // Kaydetme için: club_coaches.id → individual_coach_id (profiles.id)
-  const coachProfileId = (clubCoachId) => {
-    if (!clubCoachId) return null;
-    const c = coaches.find(c => c.id === clubCoachId);
-    return c?.individual_coach_id ?? clubCoachId;
+  // FK: player_lesson_packages.coach_id / lesson_packages.coach_id → profiles(id).
+  // Uygulama hesabı (individual_coach_id) olmayan manuel hoca için null döndür (FK ihlali olmasın).
+  const coachProfileId = (id) => {
+    if (!id) return null;
+    const byClub = coaches.find(c => c.id === id);
+    if (byClub) return byClub.individual_coach_id ?? null;       // club_coaches.id → profil (yoksa null)
+    const byProfile = coaches.find(c => c.individual_coach_id === id);
+    if (byProfile) return id;                                    // zaten geçerli bir profil id'si
+    return null;                                                 // tanınmıyor → FK ihlaline izin verme
   };
 
   return (
@@ -2143,6 +2185,10 @@ function LessonPackagesScreen({ clubId }) {
                       {coachName(pkg.coach_id)}
                     </span>
                   )}
+                  <span style={{ fontSize:12, background:'#FFF7ED', color:'#EA580C', border:'1px solid #FED7AA', borderRadius:8, padding:'4px 9px', fontWeight:600 }}>
+                    {pkg.coach_payout_mode === 'per_session' ? 'Hoca payı: ders başına' : 'Hoca payı: toptan'}
+                    {Number(pkg.coach_percentage) > 0 ? ` · %${pkg.coach_percentage}` : ''}
+                  </span>
                 </div>
 
                 <div style={{ fontSize:12, color:'var(--text-2)' }}>
@@ -2245,10 +2291,15 @@ function LessonPackagesScreen({ clubId }) {
                   </div>
                   <div style={{ display:'flex', flexDirection:'column', alignItems:'flex-end', gap:8, flexShrink:0 }}>
                     <div style={{ fontWeight:800, fontSize:18, color:'#22C55E' }}>{fmtMoney(pp.total_paid ?? pkg?.price)}</div>
-                    <button className="btn btn-pri btn-sm" onClick={() => setConfirmModal({ playerPkg: pp })}>
-                      <span className="material-icons" style={{fontSize:14}}>check_circle</span>
-                      Ödemeyi Onayla
-                    </button>
+                    <div style={{ display:'flex', gap:6 }}>
+                      <button className="btn btn-pri btn-sm" onClick={() => setConfirmModal({ playerPkg: pp })}>
+                        <span className="material-icons" style={{fontSize:14}}>check_circle</span>
+                        Ödemeyi Onayla
+                      </button>
+                      <button className="btn btn-danger btn-sm btn-icon" title="Sil" onClick={() => cancelPlayerPackage(pp)}>
+                        <span className="material-icons" style={{fontSize:14}}>delete</span>
+                      </button>
+                    </div>
                   </div>
                 </div>
               );
@@ -2434,6 +2485,32 @@ function LessonPackagesScreen({ clubId }) {
                 Ders başı: {fmtMoney(Number(form.price) / Number(form.total_lessons))}
               </div>
             )}
+
+            <Field label="Hoca Payı (%)">
+              <input type="number" min={0} max={100} placeholder="Örn: 50" value={form.coach_percentage ?? ''}
+                onChange={e => setForm({...form, coach_percentage: e.target.value})} />
+            </Field>
+
+            <Field label="Hoca Payı Tahsilat Biçimi">
+              <div style={{ display:'flex', gap:8 }}>
+                {[{v:'upfront',l:'Toptan (peşin)'},{v:'per_session',l:'Ders başına'}].map(o => {
+                  const sel = (form.coach_payout_mode || 'upfront') === o.v;
+                  return (
+                    <button key={o.v} type="button" onClick={() => setForm({...form, coach_payout_mode: o.v})}
+                      style={{ flex:1, padding:'10px', borderRadius:10, fontSize:13, fontWeight: sel ? 700 : 500, cursor:'pointer',
+                        border: sel ? '1.5px solid var(--brand-navy)' : '1.5px solid var(--border)',
+                        background: sel ? '#EEF2FF' : 'var(--bg)', color: sel ? 'var(--brand-navy)' : 'var(--text-2)' }}>
+                      {o.l}
+                    </button>
+                  );
+                })}
+              </div>
+              <div style={{ fontSize:11, color:'var(--text-2)', marginTop:6 }}>
+                {(form.coach_payout_mode || 'upfront') === 'per_session'
+                  ? 'Satışta kulüp yalnız kendi payını (net) alır; hocanın payı paketten ders işlendikçe hakedişine yazılır.'
+                  : 'Toptan: satışta kulüp payı kulübe, hoca payı da bir kerede hocanın hakedişine yazılır.'}
+              </div>
+            </Field>
 
             <Switch on={form.is_active !== false} onChange={v => setForm({...form, is_active: v})} label="Aktif Paket" />
           </div>

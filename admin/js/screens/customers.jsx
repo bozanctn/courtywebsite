@@ -30,7 +30,7 @@ function CustomerDetailModal({ customer, clubId, onClose, onReservation, onLinke
       const [s, b, l, p] = await Promise.all([
         CustomerSvc.getCustomerStats(customer.id, clubId, customer.user_id, customer.full_name),
         CustomerSvc.getCustomerBookings(customer.id, clubId, customer.user_id),
-        CustomerSvc.getCustomerLessons(customer.user_id, clubId, customer.full_name),
+        CustomerSvc.getCustomerLessons(customer.user_id, clubId, customer.full_name, customer.id),
         CustomerSvc.getCustomerLessonPackages(customer.id, clubId, customer.user_id, customer.full_name),
       ]);
       setStats(s);
