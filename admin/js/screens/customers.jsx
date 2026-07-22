@@ -19,6 +19,11 @@ function CustomerDetailModal({ customer, clubId, onClose, onReservation, onLinke
   const [linkResults, setLinkResults] = useState([]);
   const [linkTarget,  setLinkTarget]  = useState(null);
   const [linkSaving,  setLinkSaving]  = useState(false);
+  const [accountLink, setAccountLink] = useState(null); // rıza durumu (pending/confirmed)
+  const [revertBusy,  setRevertBusy]  = useState(false);
+  const [suggestedProfile, setSuggestedProfile] = useState(null); // telefon-eşleşme önerisi
+  const [suggestBusy,      setSuggestBusy]      = useState(false);
+  const [membership,       setMembership]       = useState(null); // aktif üyelik paketi rozeti
 
   useEffect(() => {
     load();
@@ -37,6 +42,13 @@ function CustomerDetailModal({ customer, clubId, onClose, onReservation, onLinke
       setBookings(b);
       setLessons(l);
       setPackages(p);
+      setAccountLink(await CustomerSvc.getAccountLink(customer.id));
+      if (customer.suggested_user_id && !customer.user_id) {
+        setSuggestedProfile(await CustomerSvc.getProfileBrief(customer.suggested_user_id));
+      } else {
+        setSuggestedProfile(null);
+      }
+      setMembership(await CustomerSvc.getCustomerMembership(clubId, customer.user_id, customer.full_name, customer.phone));
     } catch (e) { console.error(e); }
     finally { setLoading(false); }
   };
@@ -44,9 +56,10 @@ function CustomerDetailModal({ customer, clubId, onClose, onReservation, onLinke
   const searchProfiles = async (q) => {
     setLinkQuery(q);
     if (q.length < 2) { setLinkResults([]); return; }
+    const safe = q.replace(/[,()]/g, ' ').trim();
     const { data } = await sb.from('profiles')
       .select('id, full_name, email')
-      .ilike('full_name', `%${q}%`)
+      .or(`full_name.ilike.%${safe}%,email.ilike.%${safe}%`)
       .eq('user_type', 'player')
       .limit(8);
     setLinkResults(data || []);
@@ -56,14 +69,59 @@ function CustomerDetailModal({ customer, clubId, onClose, onReservation, onLinke
     if (!linkTarget) return;
     setLinkSaving(true);
     try {
-      await CustomerSvc.linkToProfile(customer.id, linkTarget.id);
+      await CustomerSvc.requestAccountLink(customer.id, linkTarget.id);
       setLinkStep('idle');
       setLinkTarget(null);
       setLinkQuery('');
       setLinkResults([]);
       onLinked();
-    } catch (e) { alert(e.message); }
+      load();
+      alert('Davet gönderildi. Hesap sahibi mobil uygulamadan kabul edince geçmiş kayıtlar birleşir ve bilgiler güncellenir.');
+    } catch (e) {
+      alert((e.message || '').includes('pending_exists')
+        ? 'Bu müşteri için bekleyen bir eşleme daveti zaten var.' : e.message);
+    }
     finally { setLinkSaving(false); }
+  };
+
+  const handleRevert = async () => {
+    if (!accountLink) return;
+    if (!confirm('Hesap eşlemesi geri alınacak: müşteri bilgileri eski hâline döner, birleştirilen ders/rezervasyon/gruplar ayrılır. Eşlemeden sonraki yeni işlemler etkilenmez. Emin misiniz?')) return;
+    setRevertBusy(true);
+    try {
+      await CustomerSvc.revertAccountLink(accountLink.id);
+      onLinked();
+      load();
+      alert('Eşleme geri alındı, müşteri eski hâline döndü.');
+    } catch (e) { alert(e.message); }
+    finally { setRevertBusy(false); }
+  };
+
+  const acceptSuggestion = async () => {
+    if (!customer.suggested_user_id) return;
+    if (!confirm('Hesap sahibine eşleme daveti gönderilecek. Kabul edince geçmiş kayıtlar birleşir ve bilgiler güncellenir. Gönderilsin mi?')) return;
+    setSuggestBusy(true);
+    try {
+      await CustomerSvc.requestAccountLink(customer.id, customer.suggested_user_id);
+      await CustomerSvc.dismissSuggestion(customer.id);
+      onLinked();
+      load();
+      alert('Davet gönderildi. Hesap sahibi mobilden kabul edince eşleşme tamamlanır.');
+    } catch (e) {
+      alert((e.message || '').includes('pending_exists')
+        ? 'Bu müşteri için bekleyen bir eşleme daveti zaten var.' : e.message);
+    }
+    finally { setSuggestBusy(false); }
+  };
+
+  const rejectSuggestion = async () => {
+    setSuggestBusy(true);
+    try {
+      await CustomerSvc.dismissSuggestion(customer.id);
+      setSuggestedProfile(null);
+      onLinked();
+    } catch (e) { alert(e.message); }
+    finally { setSuggestBusy(false); }
   };
 
   const tabItems = [
@@ -97,13 +155,32 @@ function CustomerDetailModal({ customer, clubId, onClose, onReservation, onLinke
         <div style={{ flex: 1 }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', marginBottom: 6 }}>
             <span style={{ fontWeight: 800, fontSize: 16 }}>{customer.full_name}</span>
-            {customer.user_id
-              ? <span style={{ background: '#EEF2FF', color: 'var(--brand-navy)', fontSize: 11, fontWeight: 700, padding: '2px 8px', borderRadius: 20 }}>CourtyCLUB</span>
-              : <button className="btn btn-ghost btn-sm" style={{ fontSize: 11, padding: '2px 10px', height: 'auto' }}
-                  onClick={() => setLinkStep('search')}>
-                  <span className="material-icons" style={{ fontSize: 12 }}>link</span> Eşleştir
-                </button>
-            }
+            {customer.user_id ? (
+              <>
+                <span style={{ background: '#EEF2FF', color: 'var(--brand-navy)', fontSize: 11, fontWeight: 700, padding: '2px 8px', borderRadius: 20 }}>CourtyCLUB</span>
+                {accountLink && accountLink.status === 'confirmed' && (
+                  <button className="btn btn-ghost btn-sm" style={{ fontSize: 11, padding: '2px 10px', height: 'auto', color: '#DC2626' }}
+                    onClick={handleRevert} disabled={revertBusy}>
+                    <span className="material-icons" style={{ fontSize: 12 }}>link_off</span> {revertBusy ? 'Geri alınıyor…' : 'Eşlemeyi Geri Al'}
+                  </button>
+                )}
+              </>
+            ) : accountLink && accountLink.status === 'pending' ? (
+              <span style={{ background: '#FFFBEB', color: '#92400E', fontSize: 11, fontWeight: 700, padding: '2px 8px', borderRadius: 20, display: 'inline-flex', alignItems: 'center', gap: 3 }}>
+                <span className="material-icons" style={{ fontSize: 12 }}>schedule</span> Eşleme daveti bekliyor
+              </span>
+            ) : (
+              <button className="btn btn-ghost btn-sm" style={{ fontSize: 11, padding: '2px 10px', height: 'auto' }}
+                onClick={() => setLinkStep('search')}>
+                <span className="material-icons" style={{ fontSize: 12 }}>link</span> Eşleştir
+              </button>
+            )}
+            {membership && (
+              <span style={{ display: 'inline-flex', alignItems: 'center', gap: 3, background: '#F3EEFF', color: '#7C3AED', fontSize: 11, fontWeight: 700, padding: '2px 8px', borderRadius: 20 }}>
+                <span className="material-icons" style={{ fontSize: 12 }}>card_membership</span>
+                {membership.packageName || 'Üye'}{membership.status === 'pending' ? ' (bekliyor)' : ''}
+              </span>
+            )}
           </div>
           <div style={{ display: 'flex', flexWrap: 'wrap', gap: 12, fontSize: 12, color: 'var(--text-2)' }}>
             <span><span className="material-icons" style={{ fontSize: 12, verticalAlign: 'middle' }}>phone</span> {customer.phone}</span>
@@ -118,6 +195,27 @@ function CustomerDetailModal({ customer, clubId, onClose, onReservation, onLinke
           )}
         </div>
       </div>
+
+      {/* Otomatik telefon-eşleşme önerisi */}
+      {!customer.user_id && !accountLink && suggestedProfile && (
+        <div style={{ marginBottom: 16, padding: 14, background: '#EEF2FF', borderRadius: 12, border: '1px solid #C7D2FE' }}>
+          <div style={{ display: 'flex', alignItems: 'flex-start', gap: 8 }}>
+            <span className="material-icons" style={{ fontSize: 18, color: 'var(--brand-navy)' }}>person_search</span>
+            <div style={{ flex: 1 }}>
+              <div style={{ fontWeight: 700, fontSize: 13, color: 'var(--brand-navy)' }}>Telefon bir hesapla eşleşti</div>
+              <div style={{ fontSize: 13, color: 'var(--text-1)', marginTop: 2 }}>
+                <strong>{suggestedProfile.full_name}</strong>{suggestedProfile.email ? ` (${suggestedProfile.email})` : ''} — bu müşteriyle aynı numarayı kullanıyor. Eşleme daveti gönderilsin mi?
+              </div>
+            </div>
+          </div>
+          <div style={{ display: 'flex', gap: 8, marginTop: 10 }}>
+            <button className="btn btn-ghost btn-sm" onClick={rejectSuggestion} disabled={suggestBusy}>Yoksay</button>
+            <button className="btn btn-pri btn-sm" onClick={acceptSuggestion} disabled={suggestBusy}>
+              <span className="material-icons" style={{ fontSize: 14 }}>link</span> {suggestBusy ? 'Gönderiliyor…' : 'Davet Gönder'}
+            </button>
+          </div>
+        </div>
+      )}
 
       {/* Eşleştir akışı */}
       {linkStep === 'search' && (
@@ -154,13 +252,13 @@ function CustomerDetailModal({ customer, clubId, onClose, onReservation, onLinke
             Eşleştirmeyi Onayla
           </div>
           <div style={{ fontSize: 13, marginBottom: 12, color: 'var(--text-1)' }}>
-            <strong>{customer.full_name}</strong> müşterisi ile <strong>{linkTarget.full_name}</strong> ({linkTarget.email}) hesabını eşleştirmek istediğinize emin misiniz?
-            Eski rezervasyonlar da bu hesaba bağlanacak.
+            <strong>{customer.full_name}</strong> müşterisi ile <strong>{linkTarget.full_name}</strong> ({linkTarget.email}) hesabını eşlemek için <strong>davet</strong> gönderilecek.
+            Hesap sahibi mobil uygulamadan kabul edince geçmiş ders/rezervasyon/gruplar bu hesaba bağlanır ve hesabın bilgileri (isim, e-posta, doğum, cinsiyet) müşteri kaydının üstüne yazılır.
           </div>
           <div style={{ display: 'flex', gap: 8 }}>
             <button className="btn btn-ghost btn-sm" onClick={() => { setLinkStep('idle'); setLinkTarget(null); }}>Vazgeç</button>
             <button className="btn btn-pri btn-sm" onClick={confirmLink} disabled={linkSaving}>
-              {linkSaving ? 'Eşleştiriliyor…' : 'Evet, Eşleştir'}
+              {linkSaving ? 'Gönderiliyor…' : 'Davet Gönder'}
             </button>
           </div>
         </div>
@@ -540,6 +638,7 @@ function CustomersScreen({ clubId, setScreen }) {
   const [form,          setForm]          = useState({});
   const [saving,        setSaving]        = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(null);
+  const [broadcastOpen, setBroadcastOpen] = useState(false);
 
   // Email ile CourtyCLUB eşleşme kontrolü (add modunda)
   const [emailMatch,      setEmailMatch]      = useState(null);  // null | { id, full_name, email }
@@ -550,6 +649,13 @@ function CustomersScreen({ clubId, setScreen }) {
   const [ccQuery,         setCcQuery]         = useState('');
   const [ccResults,       setCcResults]       = useState([]);
   const [ccSelected,      setCcSelected]      = useState(null); // { id, full_name, email }
+
+  // Telefon-otoriter dedup (add modunda) — mobil CustomersScreen ile birebir
+  const [dupCustomer,     setDupCustomer]     = useState(null);  // aynı numaralı mevcut müşteri (sert engel)
+  const [lockedMatch,     setLockedMatch]     = useState(null);  // telefon→tek hesap: kilitli eşleşme
+  const [phoneMatches,    setPhoneMatches]    = useState([]);    // telefon→çok hesap: seçim listesi
+  const [phoneChecking,   setPhoneChecking]   = useState(false);
+  const [phoneDebounce,   setPhoneDebounce]   = useState(null);
 
   useEffect(() => { if (clubId) load(); }, [clubId]);
 
@@ -576,6 +682,7 @@ function CustomersScreen({ clubId, setScreen }) {
     setForm({ full_name: '', phone: '', email: '', gender: '', birth_date: '', notes: '' });
     setEmailMatch(null);
     setCcQuery(''); setCcResults([]); setCcSelected(null);
+    setDupCustomer(null); setLockedMatch(null); setPhoneMatches([]);
     setModal('add');
   };
 
@@ -593,6 +700,7 @@ function CustomersScreen({ clubId, setScreen }) {
     setEmailMatch(null);
     setCcQuery(''); setCcResults([]);
     setCcSelected(c.user_id ? { id: c.user_id, full_name: c.full_name, email: c.email } : null);
+    setDupCustomer(null); setLockedMatch(null); setPhoneMatches([]);
     setModal('edit');
   };
 
@@ -604,11 +712,17 @@ function CustomersScreen({ clubId, setScreen }) {
   const save = async () => {
     if (!form.full_name?.trim()) { alert('Ad soyad zorunludur.'); return; }
     if (!form.phone?.trim())     { alert('Telefon numarası zorunludur.'); return; }
+    // Aynı numaralı müşteri varsa ikinci kayıt engellenir (mobil ile birebir).
+    if (dupCustomer) {
+      alert(`"${dupCustomer.full_name}" bu telefon numarasıyla zaten müşteri. Aynı numarayla ikinci kayıt oluşturulamaz.`);
+      return;
+    }
     setSaving(true);
     try {
-      // Hangi CourtyCLUB profili bağlanacak: manuel seçim öncelikli, yoksa email eşleşmesi
-      // alreadyLinkedTo varsa o eşleşmeyi kullanma
-      const profileToLink = ccSelected || (emailMatch?.alreadyLinkedTo ? null : emailMatch);
+      // Bağ önceliği (mobil ile aynı): telefon-kilitli eşleşme > manuel seçim > email eşleşmesi.
+      // alreadyLinkedTo varsa o email eşleşmesini kullanma.
+      const emailLink = emailMatch && !emailMatch.alreadyLinkedTo ? emailMatch : null;
+      const profileToLink = lockedMatch || ccSelected || emailLink;
 
       if (modal === 'add') {
         const created = await CustomerSvc.createCustomer(clubId, form);
@@ -625,8 +739,14 @@ function CustomersScreen({ clubId, setScreen }) {
       setModal(null);
       setEmailMatch(null);
       setCcSelected(null); setCcQuery(''); setCcResults([]);
+      setDupCustomer(null); setLockedMatch(null); setPhoneMatches([]);
       load();
-    } catch (e) { alert(e.message); }
+    } catch (e) {
+      const msg = e?.message || '';
+      alert(/uq_club_customer_name/.test(msg)
+        ? 'Bu ad ve telefona sahip aktif bir müşteri zaten var. Aynı kişiyse mevcut kaydı düzenleyin.'
+        : msg);
+    }
     finally { setSaving(false); }
   };
 
@@ -668,6 +788,47 @@ function CustomersScreen({ clubId, setScreen }) {
       finally { setEmailChecking(false); }
     }, 500);
     setEmailDebounce(t);
+  };
+
+  // Eşleşen hesabı uygula: ad + e-posta otomatik dolar, alanlar kilitlenir, bağ zorunlu olur.
+  const applyPhoneMatch = (acc) => {
+    setForm(f => ({ ...f, full_name: acc.full_name, email: acc.email || f.email }));
+    setLockedMatch(acc);
+    setPhoneMatches([]);
+    setDupCustomer(null);
+    setEmailMatch(null);
+  };
+  // Eşleşmeyi/formu sıfırla (bağsız, tamamen manuel eklemek için baştan başla)
+  const resetPhoneMatch = () => {
+    if (phoneDebounce) clearTimeout(phoneDebounce);
+    setLockedMatch(null);
+    setPhoneMatches([]);
+    setDupCustomer(null);
+    setForm(f => ({ ...f, full_name: '', phone: '', email: '' }));
+  };
+
+  // Telefon değişince debounce ile (mobil ile birebir):
+  // 1) Bu numara zaten bir müşteride mi? → dupCustomer (kaydetmeyi engeller)
+  // 2) Bu numara bir oyuncu hesabına ait mi? → tek: kilitli eşleşme, çok: seçim listesi
+  const handlePhoneChange = (val) => {
+    formField('phone', val);
+    // Kilitli / mevcut bağlı / elle seçili iken telefon araması yapma
+    if (lockedMatch || form.user_id_original || ccSelected) return;
+    if (phoneDebounce) clearTimeout(phoneDebounce);
+    setDupCustomer(null); setPhoneMatches([]);
+    if (val.replace(/\D/g, '').length < 7) return;
+    const t = setTimeout(async () => {
+      setPhoneChecking(true);
+      try {
+        const dup = await CustomerSvc.findCustomerByPhone(val, clubId, form.id || null);
+        if (dup) { setDupCustomer(dup); return; }
+        const accounts = await CustomerSvc.findAccountsByPhone(val);
+        if (accounts.length === 1) applyPhoneMatch(accounts[0]);
+        else if (accounts.length > 1) setPhoneMatches(accounts);
+      } catch (_) { /* sessizce geç — telefon kontrolü kaydı engellemesin */ }
+      finally { setPhoneChecking(false); }
+    }, 500);
+    setPhoneDebounce(t);
   };
 
   const softDelete = async (id) => {
@@ -724,9 +885,14 @@ function CustomersScreen({ clubId, setScreen }) {
           <h1>Müşteriler</h1>
           <div className="sub">{customers.length} müşteri kayıtlı</div>
         </div>
-        <button className="btn btn-pri" onClick={openAdd}>
-          <span className="material-icons">person_add</span> Müşteri Ekle
-        </button>
+        <div style={{ display: 'flex', gap: 8 }}>
+          <button className="btn btn-ghost" onClick={() => setBroadcastOpen(true)} title="Toplu bildirim gönder">
+            <span className="material-icons">campaign</span> Toplu Bildirim
+          </button>
+          <button className="btn btn-pri" onClick={openAdd}>
+            <span className="material-icons">person_add</span> Müşteri Ekle
+          </button>
+        </div>
       </div>
 
       {/* Arama */}
@@ -815,7 +981,7 @@ function CustomersScreen({ clubId, setScreen }) {
               <button className="btn btn-ghost btn-sm" onClick={() => setModal(null)}>Vazgeç</button>
               <button className="btn btn-pri btn-sm" onClick={save} disabled={saving}>
                 {saving ? 'Kaydediliyor…'
-                  : (ccSelected || emailMatch) && modal === 'add' ? 'Kaydet & Eşleştir'
+                  : (lockedMatch || ccSelected || (emailMatch && !emailMatch.alreadyLinkedTo)) && modal === 'add' ? 'Kaydet & Eşleştir'
                   : ccSelected && ccSelected.id !== form.user_id_original ? 'Kaydet & Eşleştir'
                   : 'Kaydet'}
               </button>
@@ -824,23 +990,70 @@ function CustomersScreen({ clubId, setScreen }) {
         >
           <div className="fields" style={{ gap: 14 }}>
             <Field label="Ad Soyad *">
-              <input value={form.full_name || ''} placeholder="Örn: Ahmet Yılmaz"
-                onChange={e => formField('full_name', e.target.value)} />
+              <input value={form.full_name || ''} placeholder="Örn: Ahmet Yılmaz" disabled={!!lockedMatch}
+                onChange={e => formField('full_name', e.target.value)}
+                style={lockedMatch ? { background: '#F1F5F9', color: 'var(--text-2)' } : undefined} />
             </Field>
             <Field label="Telefon *">
-              <input type="tel" value={form.phone || ''} placeholder="0532 000 00 00"
-                onChange={e => formField('phone', e.target.value)} />
+              <div style={{ position: 'relative' }}>
+                <input type="tel" value={form.phone || ''} placeholder="0532 000 00 00" disabled={!!lockedMatch}
+                  onChange={e => handlePhoneChange(e.target.value)}
+                  style={{ width: '100%', boxSizing: 'border-box', paddingRight: phoneChecking ? 32 : undefined, ...(lockedMatch ? { background: '#F1F5F9', color: 'var(--text-2)' } : {}) }} />
+                {phoneChecking && (
+                  <span className="material-icons" style={{ position: 'absolute', right: 10, top: '50%', transform: 'translateY(-50%)', fontSize: 16, color: 'var(--text-2)', animation: 'spin 1s linear infinite' }}>refresh</span>
+                )}
+              </div>
+              {/* Telefon→tek hesap: kilitli eşleşme (mobil applyMatch) */}
+              {lockedMatch && (
+                <div style={{ marginTop: 8, padding: '10px 12px', background: '#EEF2FF', borderRadius: 10, border: '1px solid #C7D2FE', display: 'flex', alignItems: 'center', gap: 8 }}>
+                  <span className="material-icons" style={{ fontSize: 16, color: 'var(--brand-navy)', flexShrink: 0 }}>verified_user</span>
+                  <div style={{ flex: 1, fontSize: 12 }}>
+                    <div style={{ fontWeight: 700, color: 'var(--brand-navy)' }}>Hesap eşleşti: {lockedMatch.full_name}</div>
+                    <div style={{ color: 'var(--text-2)', marginTop: 1 }}>Bu numaraya ait CourtyCLUB hesabı. Ad/e-posta hesaptan alındı; kayıt bu hesapla eşleştirilecek.</div>
+                  </div>
+                  <button type="button" onClick={resetPhoneMatch}
+                    style={{ background: 'none', border: '1px solid #C7D2FE', borderRadius: 8, cursor: 'pointer', color: 'var(--brand-navy)', fontSize: 11, fontWeight: 700, padding: '4px 8px', whiteSpace: 'nowrap' }}>
+                    Farklı kişi
+                  </button>
+                </div>
+              )}
+              {/* Aynı numaralı mevcut müşteri: sert engel (kaydedilemez) */}
+              {dupCustomer && !lockedMatch && (
+                <div style={{ marginTop: 8, padding: '10px 12px', background: '#FEF2F2', borderRadius: 10, border: '1px solid #FECACA', display: 'flex', alignItems: 'center', gap: 8 }}>
+                  <span className="material-icons" style={{ fontSize: 16, color: '#EF4444', flexShrink: 0 }}>block</span>
+                  <div style={{ flex: 1, fontSize: 12 }}>
+                    <div style={{ fontWeight: 700, color: '#EF4444' }}>Bu numara zaten kayıtlı: {dupCustomer.full_name}</div>
+                    <div style={{ color: 'var(--text-2)', marginTop: 1 }}>Aynı numarayla ikinci müşteri oluşturulamaz. Aynı kişiyse mevcut kaydı düzenleyin.</div>
+                  </div>
+                </div>
+              )}
+              {/* Telefon→çok hesap: seçim listesi (mobil phoneMatches) */}
+              {phoneMatches.length > 1 && !lockedMatch && (
+                <div style={{ marginTop: 8, padding: '10px 12px', background: '#F1F5F9', borderRadius: 10, border: '1px solid #CBD5E1' }}>
+                  <div style={{ fontSize: 12, fontWeight: 700, color: 'var(--text-1)', marginBottom: 6 }}>Bu numarayla {phoneMatches.length} hesap eşleşti — doğru kişiyi seçin</div>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                    {phoneMatches.map(acc => (
+                      <button key={acc.id} type="button" onClick={() => applyPhoneMatch(acc)}
+                        style={{ display: 'flex', alignItems: 'center', gap: 8, textAlign: 'left', background: '#fff', border: '1px solid var(--border)', borderRadius: 8, cursor: 'pointer', padding: '8px 10px' }}>
+                        <span className="material-icons" style={{ fontSize: 15, color: 'var(--brand-navy)' }}>person</span>
+                        <span style={{ flex: 1, fontSize: 12, fontWeight: 600 }}>{acc.full_name}</span>
+                        {acc.email && <span style={{ fontSize: 11, color: 'var(--text-2)' }}>{acc.email}</span>}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              )}
             </Field>
             <Field label="E-posta">
               <div style={{ position: 'relative' }}>
-                <input type="email" value={form.email || ''} placeholder="ornek@email.com"
+                <input type="email" value={form.email || ''} placeholder="ornek@email.com" disabled={!!lockedMatch}
                   onChange={e => handleEmailChange(e.target.value)}
-                  style={{ width: '100%', boxSizing: 'border-box', paddingRight: emailChecking ? 32 : undefined }} />
+                  style={{ width: '100%', boxSizing: 'border-box', paddingRight: emailChecking ? 32 : undefined, ...(lockedMatch ? { background: '#F1F5F9', color: 'var(--text-2)' } : {}) }} />
                 {emailChecking && (
                   <span className="material-icons" style={{ position: 'absolute', right: 10, top: '50%', transform: 'translateY(-50%)', fontSize: 16, color: 'var(--text-2)', animation: 'spin 1s linear infinite' }}>refresh</span>
                 )}
               </div>
-              {emailMatch && !ccSelected && (
+              {emailMatch && !ccSelected && !lockedMatch && (
                 emailMatch.alreadyLinkedTo ? (
                   <div style={{ marginTop: 8, padding: '10px 12px', background: '#FEF2F2', borderRadius: 10, border: '1px solid #FECACA', display: 'flex', alignItems: 'center', gap: 8 }}>
                     <span className="material-icons" style={{ fontSize: 16, color: '#EF4444', flexShrink: 0 }}>warning</span>
@@ -879,7 +1092,8 @@ function CustomersScreen({ clubId, setScreen }) {
                 onChange={e => formField('notes', e.target.value)} style={{ resize: 'vertical' }} />
             </Field>
 
-            {/* CourtyCLUB Hesabı Bağla */}
+            {/* CourtyCLUB Hesabı Bağla — telefon-kilitli eşleşme varken gizli (mobil ile birebir) */}
+            {!lockedMatch && (
             <div>
               <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--text-2)', marginBottom: 8, textTransform: 'uppercase', letterSpacing: '0.05em' }}>
                 CourtyCLUB Hesabı (opsiyonel)
@@ -933,6 +1147,7 @@ function CustomersScreen({ clubId, setScreen }) {
                 </div>
               )}
             </div>
+            )}
           </div>
         </Modal>
       )}
@@ -972,6 +1187,11 @@ function CustomersScreen({ clubId, setScreen }) {
             Rezervasyon geçmişi korunur, müşteri listeden kaldırılır.
           </p>
         </Modal>
+      )}
+
+      {/* Toplu Bildirim */}
+      {broadcastOpen && (
+        <ClubBroadcastModal clubId={clubId} initialAudience="customers" onClose={() => setBroadcastOpen(false)} />
       )}
     </div>
   );

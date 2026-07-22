@@ -2,6 +2,21 @@
 // Kaynak: C:\Users\Ozan Çetin\Courtly\src\lib\supabase\*Service.ts
 // TypeScript → plain JS, `supabase` → global `sb`
 
+// İki ismin "aynı kişi" olabilecek kadar benzer olup olmadığı (mobil ile aynı).
+// Tam eşit / biri diğerini içeriyor / anlamlı (2+ harf) ortak kelime → true.
+function namesLookSimilar(a, b) {
+  const norm = (s) => (s || '').toLocaleLowerCase('tr').replace(/[^a-zçğıöşü0-9\s]/g, ' ').trim();
+  const na = norm(a), nb = norm(b);
+  if (!na || !nb) return false;
+  if (na === nb) return true;
+  if (na.includes(nb) || nb.includes(na)) return true;
+  const stop = new Set(['bey', 'hanim', 'hanım', 'hn', 'bay', 'sn', 'the']);
+  const toks = (s) => new Set(s.split(/\s+/).filter(w => w.length >= 2 && !stop.has(w)));
+  const ta = toks(na), tb = toks(nb);
+  for (const w of ta) if (tb.has(w)) return true;
+  return false;
+}
+
 // ── Zaman yardımcıları ─────────────────────────────────────────
 // Rezervasyonlar DB'de +3 saat ofsetle saklanıyor (Türkiye saati).
 // Okurken −3, yazarken +3 uygulanıyor.
@@ -1749,40 +1764,142 @@ const CustomerSvc = {
     );
   },
 
+  // ANINDA eşleme — paylaşımlı RPC (ders/paket/rezervasyon/grup tam birleşme +
+  // hesap bilgilerini müşteri üstüne yazma). Mobil ile birebir aynı.
   async linkToProfile(customerId, userId) {
-    const [{ data: cust }, { data: prof }, { data: pp }] = await Promise.all([
-      sb.from('club_customers').select('email, birth_date, gender').eq('id', customerId).single(),
-      sb.from('profiles').select('email, birth_date').eq('id', userId).single(),
-      sb.from('player_profiles').select('gender').eq('user_id', userId).maybeSingle(),
+    const { error } = await sb.rpc('link_customer_to_account', {
+      p_customer_id: customerId, p_user_id: userId,
+    });
+    if (error) throw error;
+  },
+
+  // ── Rıza tabanlı eşleme (kulüp davet gönderir → oyuncu mobilden Kabul/Ret) ──
+  async requestAccountLink(customerId, userId) {
+    const { error } = await sb.rpc('request_customer_account_link', {
+      p_customer_id: customerId, p_user_id: userId,
+    });
+    if (error) throw error;
+  },
+  // Müşterinin mevcut eşleme kaydı (bekleyen/onaylı) — durum + Geri Al için
+  async getAccountLink(customerId) {
+    const { data } = await sb.from('customer_account_links')
+      .select('id, status, user_id')
+      .eq('customer_id', customerId)
+      .in('status', ['pending', 'confirmed'])
+      .order('created_at', { ascending: false })
+      .limit(1).maybeSingle();
+    return data || null;
+  },
+  async revertAccountLink(linkId) {
+    const { error } = await sb.rpc('revert_customer_account_link', { p_link_id: linkId });
+    if (error) throw error;
+  },
+
+  // ── Otomatik telefon-eşleşme önerisi (suggested_user_id) ──
+  async getProfileBrief(userId) {
+    const { data } = await sb.from('profiles').select('id, full_name, email').eq('id', userId).maybeSingle();
+    return data || null;
+  },
+  async dismissSuggestion(customerId) {
+    await sb.from('club_customers').update({ suggested_user_id: null }).eq('id', customerId);
+  },
+
+  // ── Telefon-otoriter dedup (müşteri ekleme) ──
+  // Bu kulüpte aynı numaralı aktif müşteri var mı (mükerrer uyarısı).
+  async findCustomerByPhone(phone, clubId, excludeId) {
+    const norm = (p) => { const d = (p || '').replace(/\D/g, ''); return d.length > 10 ? d.slice(-10) : d; };
+    const target = norm(phone);
+    if (target.length < 7 || /^(\d)\1*$/.test(target)) return null;  // eksik/placeholder
+    let q = sb.from('club_customers').select('id, full_name, phone')
+      .eq('club_id', clubId).eq('is_active', true).ilike('phone', `%${target.slice(-7)}%`);
+    if (excludeId) q = q.neq('id', excludeId);
+    const { data } = await q;
+    const hit = (data || []).find(c => norm(c.phone) === target);
+    return hit ? { id: hit.id, full_name: hit.full_name } : null;
+  },
+  // Aynı numaralı CourtyCLUB oyuncu hesapları (0/1/çok).
+  async findAccountsByPhone(phone) {
+    const norm = (p) => { const d = (p || '').replace(/\D/g, ''); return d.length > 10 ? d.slice(-10) : d; };
+    const target = norm(phone);
+    if (target.length < 7 || /^(\d)\1*$/.test(target)) return [];
+    const { data } = await sb.from('profiles').select('id, full_name, email, phone')
+      .eq('user_type', 'player').not('phone', 'is', null).ilike('phone', `%${target.slice(-7)}%`).limit(20);
+    return (data || []).filter(p => norm(p.phone) === target)
+      .map(p => ({ id: p.id, full_name: p.full_name, email: p.email || '' }));
+  },
+
+  // ── Grup "aynı kişi mi?" onayı için aday listeleri ──
+  // Bu kulüpte aynı numaralı (gerçek telefon) TÜM aktif müşteriler.
+  async findCustomersByPhone(phone, clubId) {
+    const norm = (p) => { const d = (p || '').replace(/\D/g, ''); return d.length > 10 ? d.slice(-10) : d; };
+    const target = norm(phone);
+    if (target.length < 7 || /^(\d)\1*$/.test(target)) return [];
+    const { data } = await sb.from('club_customers').select('id, full_name, phone')
+      .eq('club_id', clubId).eq('is_active', true).ilike('phone', `%${target.slice(-7)}%`);
+    return (data || []).filter(c => norm(c.phone) === target)
+      .map(c => ({ id: c.id, full_name: c.full_name }));
+  },
+  // İsmi BENZER aktif müşteriler (telefonsuz "çocuk" için "aynı çocuk mu?" onayı).
+  async findSimilarCustomersByName(name, clubId) {
+    const nm = (name || '').trim();
+    const first = nm.split(/\s+/)[0] || '';
+    if (first.length < 2) return [];
+    const { data } = await sb.from('club_customers').select('id, full_name')
+      .eq('club_id', clubId).eq('is_active', true).ilike('full_name', `%${first}%`).limit(30);
+    return (data || []).filter(c => namesLookSimilar(c.full_name, nm))
+      .map(c => ({ id: c.id, full_name: c.full_name }));
+  },
+
+  // Müşterinin aktif kulüp üyeliği + paketi (rozet için). Hesap → telefon → isim ile eşler.
+  async getCustomerMembership(clubId, userId, fullName, phone) {
+    const nowIso = new Date().toISOString();
+    const { data } = await sb.from('club_memberships')
+      .select('user_id, member_name, member_phone, status, expires_at, package:club_membership_packages(name)')
+      .eq('club_id', clubId)
+      .in('status', ['active', 'pending'])
+      .or(`expires_at.is.null,expires_at.gt.${nowIso}`)   // süresi geçenleri gösterme
+      .order('created_at', { ascending: false });          // en güncel üyelik önce
+    if (!data || data.length === 0) return null;
+    const norm = (p) => { const d = (p || '').replace(/\D/g, ''); return d.length > 10 ? d.slice(-10) : d; };
+    const p10 = norm(phone);
+    const realPhone = p10.length === 10 && !/^(\d)\1{9}$/.test(p10);
+    const nm = (fullName || '').trim().toLowerCase();
+    const hit = data.find(m =>
+      (userId && m.user_id === userId) ||
+      (realPhone && norm(m.member_phone) === p10) ||
+      (nm && (m.member_name || '').trim().toLowerCase() === nm)
+    );
+    if (!hit) return null;
+    return { packageName: hit.package?.name || null, status: hit.status };
+  },
+};
+
+// ── Toplu Bildirim (Custom Push) ───────────────────────────────
+// Kaynak: src/lib/supabase/clubBroadcastService.ts — mobil ile birebir.
+// send_club_broadcast SECURITY DEFINER RPC ile hedef kullanıcılara notifications
+// satırı ekler; push tetikleyicisi otomatik gönderir. Yalnız aktif + hesabı olanlar.
+const BroadcastSvc = {
+  // Alıcı sayıları (yalnız aktif + uygulama hesabı olan). Kulüp RLS ile okuyabildiği için istemcide sayılır.
+  async getRecipientCounts(clubId) {
+    const [membersRes, customersRes] = await Promise.all([
+      sb.from('club_memberships').select('user_id')
+        .eq('club_id', clubId).eq('status', 'active').not('user_id', 'is', null),
+      sb.from('club_customers').select('user_id')
+        .eq('club_id', clubId).eq('is_active', true).not('user_id', 'is', null),
     ]);
-
-    // club_customers tablosunu güncelle
-    const upd = { user_id: userId };
-    if (!cust?.email      && prof?.email)      upd.email      = prof.email;
-    if (!cust?.birth_date && prof?.birth_date) upd.birth_date = prof.birth_date;
-    if (!cust?.gender     && pp?.gender)       upd.gender     = pp.gender;
-    const { error: e1 } = await sb.from('club_customers').update(upd).eq('id', customerId);
-    if (e1) throw e1;
-
-    // Bu müşteriye ait mevcut bookingleri bul
-    const { data: existingBk } = await sb.from('bookings')
-      .select('id').eq('club_customer_id', customerId);
-    const bkIds = (existingBk ?? []).map(b => b.id);
-
-    if (bkIds.length > 0) {
-      // Zaten booking_players'da olan satırları al (çift kayıt olmasın)
-      const { data: alreadyLinked } = await sb.from('booking_players')
-        .select('booking_id').in('booking_id', bkIds).eq('player_id', userId);
-      const linkedSet = new Set((alreadyLinked ?? []).map(p => p.booking_id));
-
-      const toInsert = bkIds
-        .filter(id => !linkedSet.has(id))
-        .map(id => ({ booking_id: id, player_id: userId, is_primary_player: true, status: 'confirmed' }));
-
-      if (toInsert.length > 0) {
-        const { error: e3 } = await sb.from('booking_players').insert(toInsert);
-        if (e3) throw e3;
-      }
-    }
+    if (membersRes.error) throw membersRes.error;
+    if (customersRes.error) throw customersRes.error;
+    const memberIds   = new Set((membersRes.data   || []).map(r => r.user_id));
+    const customerIds = new Set((customersRes.data || []).map(r => r.user_id));
+    const bothIds     = new Set([...memberIds, ...customerIds]);
+    return { members: memberIds.size, customers: customerIds.size, both: bothIds.size };
+  },
+  // Seçili kitleye özel push gönderir. Dönen: gerçekten gönderilen kişi sayısı.
+  async sendBroadcast(audience, title, message) {
+    const { data, error } = await sb.rpc('send_club_broadcast', {
+      p_audience: audience, p_title: title, p_message: message,
+    });
+    if (error) throw error;
+    return data?.sent ?? 0;
   },
 };

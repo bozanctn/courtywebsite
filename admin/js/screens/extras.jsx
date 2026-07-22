@@ -5313,6 +5313,7 @@ function GroupsScreen({ clubId, setScreen }) {
   const [coachShares,        setCoachShares]        = useState({});
   const [coachFixedAmounts,  setCoachFixedAmounts]  = useState({});
   const [monthlyFee,         setMonthlyFee]         = useState('0');
+  const [duesDueDay,         setDuesDueDay]         = useState('1');
   const [billingType,        setBillingType]        = useState('monthly');
   const [creditSessions,     setCreditSessions]     = useState('8');
   const [creditPrice,        setCreditPrice]        = useState('0');
@@ -5358,6 +5359,7 @@ function GroupsScreen({ clubId, setScreen }) {
   const [editFeeVisible,  setEditFeeVisible]  = useState(false);
   const [editFee,         setEditFee]         = useState('0');
   const [editPct,         setEditPct]         = useState('100');
+  const [editDuesDueDay,  setEditDuesDueDay]  = useState('1');
   const [editSplitType,   setEditSplitType]   = useState('percentage');
   const [editCoachFixed,  setEditCoachFixed]  = useState({});
   const [savingFee,       setSavingFee]       = useState(false);
@@ -5512,9 +5514,12 @@ function GroupsScreen({ clubId, setScreen }) {
   };
 
   // ── Create group ──────────────────────────────────────────────
+  // Aidat son ödeme günü 1–28 ile sınırlı (her ayda mevcut olsun); yazarken 28'i aşmaz.
+  const clampDueDay = (v) => { const d = (v || '').replace(/\D/g, '').slice(0, 2); return d && parseInt(d, 10) > 28 ? '28' : d; };
+
   const openCreate = () => {
     setGroupName(''); setGroupDesc(''); setSelectedCoachIds([]); setCoachShares({});
-    setCoachFixedAmounts({}); setMonthlyFee('0'); setClubPercentage('100');
+    setCoachFixedAmounts({}); setMonthlyFee('0'); setDuesDueDay('1'); setClubPercentage('100');
     setSplitType('percentage'); setSelectedDays([]); setDaySettings({});
     setDiffCoachesPerDay(false); setDayCoachIds({}); setUse15Min(false);
     setMembers([makeMember(), makeMember()]);
@@ -5550,7 +5555,7 @@ function GroupsScreen({ clubId, setScreen }) {
       const pct = Math.min(100, Math.max(0, parseFloat(clubPercentage) || 100));
       const primaryCoachId = allCoachIds[0] || null;
       const { data: group, error: groupErr } = await sb.from('club_groups')
-        .insert([{ club_id:clubId, name:groupName.trim(), coach_id:primaryCoachId, description:groupDesc.trim()||null, monthly_fee:fee, club_percentage:pct, split_type:splitType, billing_type:billingType, credit_sessions: billingType==='credit'?(parseInt(creditSessions)||8):null, credit_price: billingType==='credit'?(parseFloat(creditPrice)||0):null }])
+        .insert([{ club_id:clubId, name:groupName.trim(), coach_id:primaryCoachId, description:groupDesc.trim()||null, monthly_fee:fee, dues_due_day: Math.min(28, Math.max(1, parseInt(duesDueDay) || 1)), club_percentage:pct, split_type:splitType, billing_type:billingType, credit_sessions: billingType==='credit'?(parseInt(creditSessions)||8):null, credit_price: billingType==='credit'?(parseFloat(creditPrice)||0):null }])
         .select().single();
       if (groupErr) throw groupErr;
       const { error: membErr } = await sb.from('club_group_members').insert(
@@ -5755,7 +5760,29 @@ function GroupsScreen({ clubId, setScreen }) {
     try {
       const feeVal = newMember.fee.trim() && !isNaN(parseFloat(newMember.fee)) ? parseFloat(newMember.fee) : null;
       const joinDateVal = newMember.joinDate.trim() || todayISO();
-      await sb.from('club_group_members').insert([{ group_id:detailGroup.id, member_name:newMember.name.trim(), contact_number:newMember.phone.trim()||null, contact_person:newMember.contact.trim()||null, custom_fee:feeVal, schedule_slots:newMember.schedule_slots, join_date:joinDateVal }]);
+      // "Aynı kişi mi?" onayı — mevcut müşteriye bağla (mükerrer kayıt açma).
+      // Telefon varsa: aynı numaralı + benzer isimli müşteri sorulur.
+      // Telefon yoksa (velisiz çocuk): aynı isimli müşteri sorulur.
+      // Onaylanırsa club_customer_id verilir → trigger otomatik oluşturmayı atlar.
+      const nm = newMember.name.trim();
+      const ph = newMember.phone.trim();
+      let manualCustomerId = null;
+      try {
+        if (ph) {
+          const matches = await CustomerSvc.findCustomersByPhone(ph, clubId);
+          const similar = matches.find(m => namesLookSimilar(m.full_name, nm));
+          if (similar && confirm(`"${similar.full_name}" ile aynı telefon numarası kullanıyor. Aynı kişi mi?\n\nTamam: mevcut müşteriye bağlanır.\nİptal: yeni kişi oluşturulur.`)) {
+            manualCustomerId = similar.id;
+          }
+        } else {
+          const matches = await CustomerSvc.findSimilarCustomersByName(nm, clubId);
+          const similar = matches[0];
+          if (similar && confirm(`"${similar.full_name}" zaten kayıtlı. Aynı çocuk mu?\n\nTamam: mevcut kayda bağlanır.\nİptal: yeni kayıt oluşturulur.`)) {
+            manualCustomerId = similar.id;
+          }
+        }
+      } catch (_) { /* onay kontrolü kaydı engellemesin */ }
+      await sb.from('club_group_members').insert([{ group_id:detailGroup.id, member_name:nm, contact_number:ph||null, contact_person:newMember.contact.trim()||null, custom_fee:feeVal, schedule_slots:newMember.schedule_slots, join_date:joinDateVal, club_customer_id:manualCustomerId }]);
       const { data: newMemberRow } = await sb.from('club_group_members').select('id, member_name')
         .eq('group_id', detailGroup.id).eq('member_name', newMember.name.trim())
         .order('created_at', { ascending: false }).limit(1).maybeSingle();
@@ -5904,6 +5931,7 @@ function GroupsScreen({ clubId, setScreen }) {
   const openEditFee = () => {
     setEditFee(String(detailGroup?.monthly_fee ?? 0));
     setEditPct(String(detailGroup?.club_percentage ?? 100));
+    setEditDuesDueDay(String(detailGroup?.dues_due_day ?? 1));
     setEditSplitType(detailGroup?.split_type ?? 'percentage');
     const fm = {};
     (detailGroup?.coaches || []).forEach(c => { fm[c.id] = c.fixed_amount != null ? String(c.fixed_amount) : ''; });
@@ -5916,7 +5944,7 @@ function GroupsScreen({ clubId, setScreen }) {
     try {
       const fee = parseFloat(editFee) || 0;
       const pct = Math.min(100, Math.max(0, parseFloat(editPct) || 100));
-      await sb.from('club_groups').update({ monthly_fee:fee, club_percentage:pct, split_type:editSplitType }).eq('id', detailGroup.id);
+      await sb.from('club_groups').update({ monthly_fee:fee, dues_due_day: Math.min(28, Math.max(1, parseInt(editDuesDueDay) || 1)), club_percentage:pct, split_type:editSplitType }).eq('id', detailGroup.id);
       for (const coach of (detailGroup?.coaches || [])) {
         const faStr = editCoachFixed[coach.id] ?? '';
         const fa = faStr.trim() && !isNaN(parseFloat(faStr)) ? parseFloat(faStr) : null;
@@ -6381,7 +6409,12 @@ function GroupsScreen({ clubId, setScreen }) {
             </Field>
             <div className="fields-2">
               {billingType === 'monthly' ? (
-                <Field label="AYLIK AİDAT (₺)"><input type="number" min="0" placeholder="0" value={monthlyFee} onChange={e=>setMonthlyFee(e.target.value)} /></Field>
+                <>
+                  <Field label="AYLIK AİDAT (₺)"><input type="number" min="0" placeholder="0" value={monthlyFee} onChange={e=>setMonthlyFee(e.target.value)} /></Field>
+                  <Field label="AİDAT SON ÖDEME GÜNÜ (1–28)" hint="Üyelere bu tarihe 7 ve 1 gün kala, geçince de hatırlatma bildirimi gider (hesabı olanlara).">
+                    <input type="number" min="1" max="28" placeholder="1" value={duesDueDay} onChange={e=>setDuesDueDay(clampDueDay(e.target.value))} />
+                  </Field>
+                </>
               ) : (
                 <>
                   <Field label="PAKET SEANS SAYISI"><input type="number" min="1" placeholder="8" value={creditSessions} onChange={e=>setCreditSessions(e.target.value)} /></Field>
@@ -6789,6 +6822,9 @@ function GroupsScreen({ clubId, setScreen }) {
               </div>
               <div style={{ display:'flex', flexDirection:'column', gap:8 }}>
                 <div className="kv"><span className="k">Aylık Aidat</span><span className="v">₺{detailGroup.monthly_fee ?? 0}/ay</span></div>
+                {detailGroup.billing_type === 'monthly' && (
+                  <div className="kv"><span className="k">Aidat Son Ödeme</span><span className="v">Ayın {detailGroup.dues_due_day ?? 1}. günü</span></div>
+                )}
                 <div className="kv"><span className="k">Kulüp Payı</span><span className="v">%{detailGroup.club_percentage ?? 100}</span></div>
                 <div className="kv"><span className="k">Pay Modeli</span><span className="v">{detailGroup.split_type === 'fixed_amount' ? '₺ Sabit Tutar' : '% Yüzde'}</span></div>
                 {(detailGroup.coaches||[]).length > 0 && (
@@ -7125,6 +7161,11 @@ function GroupsScreen({ clubId, setScreen }) {
           footer={<><button className="btn btn-ghost btn-sm" onClick={() => setEditFeeVisible(false)}>Vazgeç</button><button className="btn btn-pri btn-sm" onClick={handleSaveFee} disabled={savingFee}>{savingFee?'Kaydediliyor…':'Kaydet'}</button></>}>
           <div className="fields" style={{ gap:12 }}>
             <Field label="AYLIK AİDAT (₺)"><input type="number" min="0" value={editFee} onChange={e=>setEditFee(e.target.value)} /></Field>
+            {detailGroup.billing_type === 'monthly' && (
+              <Field label="AİDAT SON ÖDEME GÜNÜ (1–28)" hint="Üyelere bu tarihe 7 ve 1 gün kala, geçince de hatırlatma bildirimi gider (hesabı olanlara).">
+                <input type="number" min="1" max="28" value={editDuesDueDay} onChange={e=>setEditDuesDueDay(clampDueDay(e.target.value))} />
+              </Field>
+            )}
             {(detailGroup.coaches||[]).length > 0 && (
               <Field label="PAY MODELİ">
                 <div style={{ display:'flex', borderRadius:8, overflow:'hidden', border:'1px solid var(--border)' }}>

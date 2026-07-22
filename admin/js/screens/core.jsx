@@ -333,6 +333,7 @@ function ReservationsScreen({ clubId, setScreen, clubProfile }) {
   const [lessonCourts, setLessonCourts] = useState([]);
   const [loadingL,     setLoadingL]     = useState(false);
   const [lessonModal,  setLessonModal]  = useState(null);
+  const [recurringOpen, setRecurringOpen] = useState(false);
   const [lessonForm,   setLessonForm]   = useState({});
   const [lessonMarkingId,    setLessonMarkingId]    = useState(null);
   const [lessonPlayerSearch,    setLessonPlayerSearch]    = useState('');
@@ -588,7 +589,7 @@ function ReservationsScreen({ clubId, setScreen, clubProfile }) {
         sb.from('bookings').select('court_id').in('court_id', allIds)
           .in('status',['pending','confirmed']).lt('start_time', endDb).gt('end_time', startDb),
         sb.from('lessons').select('court_id').in('court_id', allIds)
-          .neq('status','cancelled').lt('start_time', endDb).gt('end_time', startDb).not('court_id','is',null),
+          .neq('status','cancelled').lt('start_time', endDb.replace('Z','+03:00')).gt('end_time', startDb.replace('Z','+03:00')).not('court_id','is',null),
         sb.from('club_manual_lessons').select('court_id, start_time, end_time')
           .in('court_id', allIds).eq('date', date).not('court_id','is',null),
         sb.from('court_closures').select('court_id, closure_type, day_of_week, start_hour, start_minute, end_hour, end_minute, start_date, end_date, group_id')
@@ -757,9 +758,9 @@ function ReservationsScreen({ clubId, setScreen, clubProfile }) {
         sb.from('club_manual_lessons').select('id, start_time, end_time')
           .eq('court_id', courtId).eq('date', date),
         sb.from('court_closures').select('*').eq('court_id', courtId).eq('is_active', true),
-        // startDb/endDb localTimeToDb ile oluşturuldu — lessons da aynı offset konvansiyonunu kullanıyor
+        // bookings=fake-UTC (Z), lessons=GERÇEK +03:00 saklanır → lessons sınırlarını +03:00 ile kur (mobil ile aynı)
         sb.from('lessons').select('id').eq('court_id', courtId)
-          .neq('status','cancelled').lt('start_time', endDb).gt('end_time', startDb).not('court_id','is',null),
+          .neq('status','cancelled').lt('start_time', endDb.replace('Z','+03:00')).gt('end_time', startDb.replace('Z','+03:00')).not('court_id','is',null),
       ]);
       if ((bConflict.data || []).length > 0) {
         alert('Bu kort seçilen saatte zaten rezerve edilmiş.'); return;
@@ -941,7 +942,7 @@ function ReservationsScreen({ clubId, setScreen, clubProfile }) {
         sb.from('club_manual_lessons').select('id, start_time, end_time')
           .eq('court_id', form.court_id).eq('date', dateStr),
         sb.from('lessons').select('id').eq('court_id', form.court_id)
-          .neq('status', 'cancelled').lt('start_time', endDb).gt('end_time', startDb),
+          .neq('status', 'cancelled').lt('start_time', endDb.replace('Z','+03:00')).gt('end_time', startDb.replace('Z','+03:00')),
         sb.from('court_closures').select('*').eq('court_id', form.court_id).eq('is_active', true),
       ]);
 
@@ -1244,7 +1245,7 @@ function ReservationsScreen({ clubId, setScreen, clubProfile }) {
         sb.from('club_manual_lessons').select('id,start_time,end_time,court_id,location')
           .eq('club_id', clubId).eq('date', dateStr),
         sb.from('lessons').select('id').eq('court_id', lessonForm.court_id)
-          .neq('status', 'cancelled').lt('start_time', endDb).gt('end_time', startDb),
+          .neq('status', 'cancelled').lt('start_time', endDb.replace('Z','+03:00')).gt('end_time', startDb.replace('Z','+03:00')),
         sb.from('court_closures').select('*').eq('court_id', lessonForm.court_id).eq('is_active', true),
       ]);
 
@@ -1304,8 +1305,8 @@ function ReservationsScreen({ clubId, setScreen, clubProfile }) {
           .select('id')
           .or(`coach_id.eq.${lessonForm.coach_id},club_coach_id.eq.${lessonForm.coach_id}`)
           .neq('status', 'cancelled')
-          .lt('start_time', endDb)
-          .gt('end_time', startDb);
+          .lt('start_time', endDb.replace('Z','+03:00'))
+          .gt('end_time', startDb.replace('Z','+03:00'));
         if (lessonCoachConflict?.length > 0) { alert('Bu antrenörün seçilen saatte başka bir dersi var.'); return; }
 
         // Grup dersi / program bloğu çakışması (court_closures.coach_id) — mobil ile aynı
@@ -1746,9 +1747,14 @@ function ReservationsScreen({ clubId, setScreen, clubProfile }) {
         </div>
         {mainTab === 'bookings'
           ? <button className="btn btn-pri" onClick={openAdd}><span className="material-icons">add</span> Yeni Rezervasyon</button>
-          : <button className="btn btn-pri" onClick={() => { setLessonForm({ date: selDate, start_time:'09:00', end_time:'10:00', payment_status:'unpaid', use_manual_coach: false }); setLessonPriceMode('normal'); setLessonCoachAmountInput(''); setLessonClubAmountInput(''); setLessonModal({ type:'add' }); }}>
-              <span className="material-icons">add</span> Ders Ekle
-            </button>
+          : <div style={{ display: 'flex', gap: 8 }}>
+              <button className="btn btn-ghost" onClick={() => setRecurringOpen(true)}>
+                <span className="material-icons">repeat</span> Tekrarlayan Ders
+              </button>
+              <button className="btn btn-pri" onClick={() => { setLessonForm({ date: selDate, start_time:'09:00', end_time:'10:00', payment_status:'unpaid', use_manual_coach: false }); setLessonPriceMode('normal'); setLessonCoachAmountInput(''); setLessonClubAmountInput(''); setLessonModal({ type:'add' }); }}>
+                <span className="material-icons">add</span> Ders Ekle
+              </button>
+            </div>
         }
       </div>
 
@@ -1763,6 +1769,11 @@ function ReservationsScreen({ clubId, setScreen, clubProfile }) {
           Özel Dersler
         </button>
       </div>
+
+      {/* Tekrarlayan Ders (mobil ile birebir) */}
+      {recurringOpen && (
+        <RecurringLessonModal clubId={clubId} onClose={() => setRecurringOpen(false)} onCreated={() => { loadLessons(); }} />
+      )}
 
       {/* ── Rezervasyonlar sekmesi ── */}
       {mainTab === 'bookings' && (

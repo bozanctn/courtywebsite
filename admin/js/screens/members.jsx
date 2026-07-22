@@ -25,7 +25,7 @@ function pkgMeta(pkg) {
   return parts.join(' · ');
 }
 
-function MemberProfileModal({ member, clubId, packages, onClose }) {
+function MemberProfileModal({ member, clubId, packages, onClose, onUpdated }) {
   const { useState, useEffect } = React;
   const [bookings,     setBookings]     = useState([]);
   const [loadingBk,    setLoadingBk]    = useState(true);
@@ -33,6 +33,8 @@ function MemberProfileModal({ member, clubId, packages, onClose }) {
   const [loadingLs,    setLoadingLs]    = useState(true);
   const [playerGender, setPlayerGender] = useState(null);
   const [profileBirth, setProfileBirth] = useState(null);
+  const [curPkgId,     setCurPkgId]     = useState(member.package_id || '');
+  const [savingPkg,    setSavingPkg]    = useState(false);
 
   useEffect(() => {
     if (!member?.user_id) { setLoadingBk(false); return; }
@@ -74,8 +76,20 @@ function MemberProfileModal({ member, clubId, packages, onClose }) {
   }, [member?.user_id, clubId]);
 
   const name  = member.profile?.full_name || member.member_name || 'İsimsiz Üye';
-  const pkg   = packages.find(p => p.id === member.package_id);
+  const pkg   = packages.find(p => p.id === curPkgId);
   const STATUS_CLS = { confirmed:'b-success', completed:'b-muted', cancelled:'b-danger', pending:'b-warning' };
+
+  const changePackage = async (newId) => {
+    setSavingPkg(true);
+    try {
+      const { error } = await sb.from('club_memberships')
+        .update({ package_id: newId || null }).eq('id', member.id);
+      if (error) throw error;
+      setCurPkgId(newId);
+      onUpdated && onUpdated();
+    } catch (e) { alert(e.message || 'Paket güncellenemedi.'); }
+    finally { setSavingPkg(false); }
+  };
 
   return (
     <Modal title="Üye Profili" wide onClose={onClose} footer={
@@ -98,14 +112,22 @@ function MemberProfileModal({ member, clubId, packages, onClose }) {
         <div className="card" style={{ gap:0, padding:0, overflow:'hidden' }}>
           {[
             { label:'Durum',         value: STATUS_LABELS[member.status] || member.status },
-            { label:'Üyelik Paketi', value: pkg?.name || 'Paketsiz' },
+            { label:'Üyelik Paketi', pkg: true },
             { label:'Katılım Tarihi',value: member.join_date ? fmtDate(member.join_date) : '—' },
             { label:'Cinsiyet',      value: GENDER_LABELS[playerGender || member.gender] || '—' },
             { label:'Doğum Tarihi',  value: (profileBirth || member.birth_date) ? fmtDate(profileBirth || member.birth_date) : '—' },
           ].map((row, i) => (
-            <div key={i} style={{ display:'flex', justifyContent:'space-between', padding:'10px 14px', borderBottom:'1px solid var(--border)' }}>
+            <div key={i} style={{ display:'flex', justifyContent:'space-between', alignItems:'center', padding:'10px 14px', borderBottom:'1px solid var(--border)' }}>
               <span style={{ fontSize:13, color:'var(--text-2)' }}>{row.label}</span>
-              <span style={{ fontSize:13, fontWeight:600 }}>{row.value}</span>
+              {row.pkg ? (
+                <select value={curPkgId} onChange={e => changePackage(e.target.value)} disabled={savingPkg}
+                  style={{ fontSize:13, fontWeight:600, padding:'3px 8px', border:'1px solid var(--border)', borderRadius:6, background:'#fff', cursor: savingPkg ? 'wait' : 'pointer', maxWidth:220 }}>
+                  <option value="">Paketsiz</option>
+                  {packages.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
+                </select>
+              ) : (
+                <span style={{ fontSize:13, fontWeight:600 }}>{row.value}</span>
+              )}
             </div>
           ))}
           {pkg && (
@@ -220,6 +242,7 @@ function MembersScreen({ clubId }) {
   const [editPkg,         setEditPkg]         = useState(null);
   const [pkgForm,         setPkgForm]         = useState({});
   const [savingPkg,       setSavingPkg]       = useState(false);
+  const [broadcastOpen,   setBroadcastOpen]   = useState(false);
 
   // ── Veri yükleme ─────────────────────────────────────────────
   const loadData = useCallback(async () => {
@@ -257,7 +280,7 @@ function MembersScreen({ clubId }) {
         const uid = m.profile?.id || m.user_id;
         const { data: club } = await sb.from('club_profiles').select('club_name').eq('id', clubId).single();
         await sb.from('notifications').insert({
-          user_id: uid, type: 'membership_accepted',
+          user_id: uid, type: 'membership_approved',
           title: 'Üyelik Onaylandı',
           message: `${club?.club_name ?? 'Kulüp'} kulübüne üyeliğiniz onaylandı.`,
           is_read: false,
@@ -295,9 +318,10 @@ function MembersScreen({ clubId }) {
     if (q.length < 2) { setSearchResults([]); return; }
     setSearching(true);
     try {
+      const safe = q.replace(/[,()]/g, ' ').trim();
       const { data, error } = await sb.from('profiles')
-        .select('id, full_name, profile_photo_url')
-        .ilike('full_name', `%${q}%`)
+        .select('id, full_name, profile_photo_url, phone, email, birth_date')
+        .or(`full_name.ilike.%${safe}%,email.ilike.%${safe}%`)
         .eq('user_type', 'player')
         .limit(10);
       if (error) throw error;
@@ -348,15 +372,37 @@ function MembersScreen({ clubId }) {
   const handleAddFromSearch = async (profile) => {
     setSaving(true);
     try {
+      // Cinsiyet player_profiles'ta (profiles'ta değil) — seçilen kişi için ayrı çek
+      let gender = null;
+      try {
+        const { data: pp } = await sb.from('player_profiles').select('gender').eq('id', profile.id).maybeSingle();
+        gender = pp?.gender || null;
+      } catch (_) { /* sessiz */ }
+
       const { error } = await sb.from('club_memberships').insert({
-        club_id:     clubId,
-        package_id:  manualPkgId || null,
-        user_id:     profile.id,
-        member_name: profile.full_name,
-        status:      'active',
-        join_date:   new Date().toISOString().split('T')[0],
+        club_id:      clubId,
+        package_id:   manualPkgId || null,
+        user_id:      profile.id,
+        member_name:  profile.full_name,
+        member_phone: profile.phone || null,
+        member_email: profile.email || null,
+        birth_date:   profile.birth_date || null,
+        gender:       gender,
+        status:       'active',
+        join_date:    new Date().toISOString().split('T')[0],
       });
       if (error) throw error;
+      // Hesaplı üyeye bildirim (push) — mobil ile birebir
+      try {
+        const { data: club } = await sb.from('club_profiles').select('club_name').eq('id', clubId).single();
+        await sb.from('notifications').insert({
+          user_id: profile.id,
+          type:    'membership_approved',
+          title:   'Kulüp Üyeliği',
+          message: `${club?.club_name || 'Bir kulüp'} sizi üye olarak ekledi. Bir sorun varsa kulüple iletişime geçin.`,
+          is_read: false,
+        });
+      } catch (_) { /* bildirim başarısız olsa da üye ekleme bozulmasın */ }
       setAddVisible(false);
       resetAddForm();
       loadData();
@@ -461,6 +507,9 @@ function MembersScreen({ clubId }) {
             <button className={view === 'members'  ? 'active' : ''} onClick={() => setView('members')}>Üyeler</button>
             <button className={view === 'packages' ? 'active' : ''} onClick={() => setView('packages')}>Paketler</button>
           </div>
+          <button className="btn btn-ghost" onClick={() => setBroadcastOpen(true)} title="Toplu bildirim gönder">
+            <span className="material-icons">campaign</span> Toplu Bildirim
+          </button>
           {view === 'members' && (
             <button className="btn btn-pri" onClick={() => { resetAddForm(); setAddVisible(true); }}>
               <span className="material-icons">person_add</span> Üye Ekle
@@ -702,6 +751,7 @@ function MembersScreen({ clubId }) {
           clubId={clubId}
           packages={packages}
           onClose={() => setProfileMember(null)}
+          onUpdated={loadData}
         />
       )}
 
@@ -820,6 +870,11 @@ function MembersScreen({ clubId }) {
             <Switch on={pkgForm.is_active !== false} onChange={v => setPkgForm({...pkgForm, is_active: v})} label="Aktif Paket" />
           </div>
         </Modal>
+      )}
+
+      {/* Toplu Bildirim */}
+      {broadcastOpen && (
+        <ClubBroadcastModal clubId={clubId} initialAudience="members" onClose={() => setBroadcastOpen(false)} />
       )}
     </div>
   );
