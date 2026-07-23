@@ -314,124 +314,10 @@ const LessonSvc = {
 
 // ═══════════════════════════════════════════════════════════════
 // TOURNAMENT SERVICE
+// Maç üretimi ve turnuva yönetim mantığı screens/tournament_detail.jsx
+// içindedir (takım/manuel-isim bazlı güncel model). Buradaki eski
+// üretim kopyası kaldırıldı — burada yalnız CRUD/sorgu yardımcıları kalır.
 // ═══════════════════════════════════════════════════════════════
-
-// Yardımcı: Fisher-Yates karıştırma
-function _shuffle(arr) {
-  const a = [...arr];
-  for (let i = a.length - 1; i > 0; i--) {
-    const j = Math.floor(Math.random() * (i + 1));
-    [a[i], a[j]] = [a[j], a[i]];
-  }
-  return a;
-}
-
-// Berger round-robin (singles)
-function _buildRRSingles(players) {
-  const n = players.length % 2 === 0 ? players.length : players.length + 1;
-  const t = players.length % 2 === 0 ? [...players] : [...players, '__BYE__'];
-  const result = [];
-  for (let r = 0; r < n - 1; r++) {
-    for (let i = 0; i < n / 2; i++) {
-      const a = t[i], b = t[n - 1 - i];
-      if (a !== '__BYE__' && b !== '__BYE__') result.push({ round: r + 1, a, b });
-    }
-    const last = t[n - 1];
-    for (let i = n - 1; i > 1; i--) t[i] = t[i - 1];
-    t[1] = last;
-  }
-  return result;
-}
-
-// Americano match builder
-function _buildAmericano(tournamentId, playerIds, rounds, courts, isTeams) {
-  const n = playerIds.length;
-  const shuffled = _shuffle(playerIds);
-  const step = Math.max(1, Math.floor(n / Math.max(rounds, 1)));
-  const rows = [];
-  for (let r = 0; r < rounds; r++) {
-    const offset = (r * step) % n;
-    const rot = [...shuffled.slice(offset), ...shuffled.slice(0, offset)];
-    for (let c = 0; c < courts; c++) {
-      const base = c * (isTeams ? 4 : 2);
-      if (isTeams) {
-        if (base + 3 >= n) break;
-        rows.push({ tournament_id: tournamentId, round_number: r + 1, court_name: `Kort ${c + 1}`, bracket_position: c,
-          team_a_player1_id: rot[base], team_a_player2_id: rot[base + 1],
-          team_b_player1_id: rot[base + 2], team_b_player2_id: rot[base + 3],
-          score_a: 0, score_b: 0, sets_data: [], status: 'upcoming' });
-      } else {
-        if (base + 1 >= n) break;
-        rows.push({ tournament_id: tournamentId, round_number: r + 1, court_name: `Kort ${c + 1}`, bracket_position: c,
-          team_a_player1_id: rot[base], team_b_player1_id: rot[base + 1],
-          score_a: 0, score_b: 0, sets_data: [], status: 'upcoming' });
-      }
-    }
-  }
-  return rows;
-}
-
-// Knockout round 1
-function _buildKnockout1(tournamentId, playerIds, isDoubles) {
-  const shuffled = _shuffle(playerIds);
-  const rows = [];
-  if (isDoubles) {
-    const pairs = [];
-    for (let i = 0; i + 1 < shuffled.length; i += 2) pairs.push([shuffled[i], shuffled[i + 1]]);
-    const half = Math.floor(pairs.length / 2);
-    for (let i = 0; i < half; i++) {
-      rows.push({ tournament_id: tournamentId, round_number: 1, court_name: `Kort ${i + 1}`, bracket_position: i,
-        team_a_player1_id: pairs[i][0], team_a_player2_id: pairs[i][1],
-        team_b_player1_id: pairs[pairs.length - 1 - i][0], team_b_player2_id: pairs[pairs.length - 1 - i][1],
-        score_a: 0, score_b: 0, sets_data: [], status: 'upcoming' });
-    }
-  } else {
-    const half = Math.floor(shuffled.length / 2);
-    for (let i = 0; i < half; i++) {
-      rows.push({ tournament_id: tournamentId, round_number: 1, court_name: `Kort ${i + 1}`, bracket_position: i,
-        team_a_player1_id: shuffled[i], team_b_player1_id: shuffled[shuffled.length - 1 - i],
-        score_a: 0, score_b: 0, sets_data: [], status: 'upcoming' });
-    }
-  }
-  return rows;
-}
-
-// League (round-robin) matches
-function _buildLeague(tournamentId, playerIds, isDoubles, courts) {
-  const rows = [];
-  if (isDoubles) {
-    const shuffled = _shuffle(playerIds);
-    const pairs = [];
-    for (let i = 0; i + 1 < shuffled.length; i += 2) pairs.push([shuffled[i], shuffled[i + 1]]);
-    const n = pairs.length % 2 === 0 ? pairs.length : pairs.length + 1;
-    const indices = Array.from({ length: n }, (_, i) => i < pairs.length ? i : -1);
-    let idx = 0;
-    for (let r = 0; r < n - 1; r++) {
-      for (let i = 0; i < n / 2; i++) {
-        const iA = indices[i], iB = indices[n - 1 - i];
-        if (iA !== -1 && iB !== -1) {
-          rows.push({ tournament_id: tournamentId, round_number: r + 1,
-            court_name: `Kort ${(idx % courts) + 1}`, bracket_position: idx++,
-            team_a_player1_id: pairs[iA][0], team_a_player2_id: pairs[iA][1],
-            team_b_player1_id: pairs[iB][0], team_b_player2_id: pairs[iB][1],
-            score_a: 0, score_b: 0, sets_data: [], status: 'upcoming' });
-        }
-      }
-      const last = indices[n - 1];
-      for (let i = n - 1; i > 1; i--) indices[i] = indices[i - 1];
-      indices[1] = last;
-    }
-  } else {
-    const matches = _buildRRSingles(_shuffle(playerIds));
-    matches.forEach(({ round, a, b }, i) => {
-      rows.push({ tournament_id: tournamentId, round_number: round,
-        court_name: `Kort ${(i % courts) + 1}`, bracket_position: i,
-        team_a_player1_id: a, team_b_player1_id: b,
-        score_a: 0, score_b: 0, sets_data: [], status: 'upcoming' });
-    });
-  }
-  return rows;
-}
 
 const TournamentSvc = {
 
@@ -470,35 +356,6 @@ const TournamentSvc = {
       .eq('tournament_id', tournamentId).order('registered_at', { ascending: true });
     if (error) throw error;
     return data ?? [];
-  },
-
-  async generateAndSaveMatches(tournament, participants) {
-    await sb.from('tournament_matches').delete().eq('tournament_id', tournament.id);
-    await sb.from('tournament_standings').delete().eq('tournament_id', tournament.id);
-
-    const playerIds = participants.map(p => p.player_id);
-    const n = playerIds.length;
-    const type = tournament.tournament_type;
-    const minPlayers = { americano_teams: 4, americano_singles: 2, singles_knockout: 2, doubles_knockout: 4, singles_league: 2, doubles_league: 4 };
-    if (n < (minPlayers[type] ?? 2)) throw new Error(`Bu format için en az ${minPlayers[type]} oyuncu gerekli. Şu an: ${n}`);
-
-    let matchRows = [];
-    if (type === 'americano_teams')    matchRows = _buildAmericano(tournament.id, playerIds, tournament.rounds_count, tournament.courts_count, true);
-    else if (type === 'americano_singles') matchRows = _buildAmericano(tournament.id, playerIds, tournament.rounds_count, tournament.courts_count, false);
-    else if (type === 'singles_knockout')  matchRows = _buildKnockout1(tournament.id, playerIds, false);
-    else if (type === 'doubles_knockout')  matchRows = _buildKnockout1(tournament.id, playerIds, true);
-    else if (type === 'singles_league')    matchRows = _buildLeague(tournament.id, playerIds, false, tournament.courts_count);
-    else if (type === 'doubles_league')    matchRows = _buildLeague(tournament.id, playerIds, true, tournament.courts_count);
-
-    if (matchRows.length === 0) throw new Error('Maç oluşturulamadı.');
-    const { error: me } = await sb.from('tournament_matches').insert(matchRows);
-    if (me) throw me;
-
-    const standingRows = playerIds.map(pid => ({
-      tournament_id: tournament.id, player1_id: pid,
-      points: 0, wins: 0, losses: 0, draws: 0, games_won: 0, games_lost: 0,
-    }));
-    await sb.from('tournament_standings').insert(standingRows);
   },
 
   async getMatches(tournamentId) {

@@ -1,4 +1,6 @@
-// ── Tournament helpers (ported from tournamentService.ts) ────────
+// ── Tournament helpers (mobil tournamentService.ts ile birebir port) ─
+// Üye modeli: hesabı olan oyuncu { id }, kulübün manuel eklediği isim { name }.
+// Maç/sıralama satırlarında id'li üye *_id, manuel üye *_name kolonuna yazılır.
 
 function getSetsWon(sets) {
   return sets.reduce((acc, s) => {
@@ -21,9 +23,53 @@ function shuffleArr(arr) {
   return a;
 }
 
-function buildAmericanoMatches(tid, playerIds, rounds, courts, isTeams) {
-  const n = playerIds.length;
-  const shuffled = shuffleArr(playerIds);
+function assignSlot(row, slot, m) {
+  if (!m) return;
+  if (m.id) row[slot + '_id'] = m.id;
+  else if (m.name) row[slot + '_name'] = m.name;
+}
+
+/** Minimum kişi sayısı (partnerler dahil gerçek oyuncu sayısı) */
+function minPlayersFor(type) {
+  const min = { americano_teams: 4, americano_singles: 2, singles_knockout: 2, doubles_knockout: 4, singles_league: 2, doubles_league: 4 };
+  return min[type] ?? 2;
+}
+
+/** Katılımcı satırlarını bireysel üyelere açar (partner ve manuel isimler dahil) */
+function toMembers(participants) {
+  const members = [];
+  for (const p of participants) {
+    if (p.player_id) members.push({ id: p.player_id });
+    else if (p.manual_name) members.push({ name: p.manual_name });
+    if (p.partner_id) members.push({ id: p.partner_id });
+  }
+  return members;
+}
+
+/**
+ * Çift formatları için takımlar: partnerli kayıt hazır takımdır; tekil üyeler
+ * (manuel eklenenler veya partnersiz kayıtlar) rastgele eşlenir. Eşleşemeyen
+ * tek üye kalırsa hata — sessizce turnuva dışı bırakmak yerine net mesaj.
+ */
+function toTeams(participants) {
+  const teams = [];
+  const solos = [];
+  for (const p of participants) {
+    if (p.player_id && p.partner_id) teams.push([{ id: p.player_id }, { id: p.partner_id }]);
+    else if (p.player_id) solos.push({ id: p.player_id });
+    else if (p.manual_name) solos.push({ name: p.manual_name });
+  }
+  const shuffledSolos = shuffleArr(solos);
+  if (shuffledSolos.length % 2 === 1) {
+    throw new Error('Çift formatında eşleşemeyen 1 oyuncu kaldı. Bir oyuncu daha ekleyin veya bir oyuncuyu çıkarın.');
+  }
+  for (let i = 0; i + 1 < shuffledSolos.length; i += 2) teams.push([shuffledSolos[i], shuffledSolos[i + 1]]);
+  return shuffleArr(teams);
+}
+
+function buildAmericanoMatches(tid, members, rounds, courts, isTeams) {
+  const n = members.length;
+  const shuffled = shuffleArr(members);
   const step = Math.max(1, Math.floor(n / Math.max(rounds, 1)));
   const rows = [];
   for (let r = 0; r < rounds; r++) {
@@ -31,66 +77,62 @@ function buildAmericanoMatches(tid, playerIds, rounds, courts, isTeams) {
     const rotated = [...shuffled.slice(offset), ...shuffled.slice(0, offset)];
     for (let c = 0; c < courts; c++) {
       const base = c * (isTeams ? 4 : 2);
+      if (base + (isTeams ? 3 : 1) >= n) break;
+      const row = { tournament_id: tid, round_number: r + 1, court_name: `Kort ${c + 1}`, bracket_position: c,
+        score_a: 0, score_b: 0, sets_data: [], status: 'upcoming' };
       if (isTeams) {
-        if (base + 3 >= n) break;
-        rows.push({ tournament_id: tid, round_number: r + 1, court_name: `Kort ${c + 1}`, bracket_position: c,
-          team_a_player1_id: rotated[base], team_a_player2_id: rotated[base + 1],
-          team_b_player1_id: rotated[base + 2], team_b_player2_id: rotated[base + 3],
-          score_a: 0, score_b: 0, sets_data: [], status: 'upcoming' });
+        assignSlot(row, 'team_a_player1', rotated[base]);
+        assignSlot(row, 'team_a_player2', rotated[base + 1]);
+        assignSlot(row, 'team_b_player1', rotated[base + 2]);
+        assignSlot(row, 'team_b_player2', rotated[base + 3]);
       } else {
-        if (base + 1 >= n) break;
-        rows.push({ tournament_id: tid, round_number: r + 1, court_name: `Kort ${c + 1}`, bracket_position: c,
-          team_a_player1_id: rotated[base], team_b_player1_id: rotated[base + 1],
-          score_a: 0, score_b: 0, sets_data: [], status: 'upcoming' });
+        assignSlot(row, 'team_a_player1', rotated[base]);
+        assignSlot(row, 'team_b_player1', rotated[base + 1]);
       }
+      rows.push(row);
     }
   }
   return rows;
 }
 
-function buildKnockoutRound1(tid, playerIds, isDoubles) {
-  const shuffled = shuffleArr(playerIds);
+/**
+ * Eleme 1. tur — takım sayısı 2'nin kuvveti değilse fazla takımlar bay geçer:
+ * rakipsiz, otomatik tamamlanmış (1-0) maç satırı yazılır ve tur ilerletme
+ * bunları normal kazanan gibi taşır.
+ */
+function buildKnockoutRound1(tid, teams) {
+  const shuffled = shuffleArr(teams);
+  const n = shuffled.length;
+  const bracketSize = Math.pow(2, Math.ceil(Math.log2(Math.max(n, 2))));
+  const byes = bracketSize - n;
   const rows = [];
-  if (isDoubles) {
-    const pairs = [];
-    for (let i = 0; i + 1 < shuffled.length; i += 2) pairs.push([shuffled[i], shuffled[i + 1]]);
-    const half = Math.floor(pairs.length / 2);
-    for (let i = 0; i < half; i++) {
-      rows.push({ tournament_id: tid, round_number: 1, court_name: `Kort ${i + 1}`, bracket_position: i,
-        team_a_player1_id: pairs[i][0], team_a_player2_id: pairs[i][1],
-        team_b_player1_id: pairs[pairs.length - 1 - i][0], team_b_player2_id: pairs[pairs.length - 1 - i][1],
-        score_a: 0, score_b: 0, sets_data: [], status: 'upcoming' });
-    }
-  } else {
-    const half = Math.floor(shuffled.length / 2);
-    for (let i = 0; i < half; i++) {
-      rows.push({ tournament_id: tid, round_number: 1, court_name: `Kort ${i + 1}`, bracket_position: i,
-        team_a_player1_id: shuffled[i], team_b_player1_id: shuffled[shuffled.length - 1 - i],
-        score_a: 0, score_b: 0, sets_data: [], status: 'upcoming' });
-    }
+
+  for (let i = 0; i < byes; i++) {
+    const row = { tournament_id: tid, round_number: 1, court_name: 'Bay', bracket_position: i,
+      score_a: 1, score_b: 0, sets_data: [], status: 'completed' };
+    assignSlot(row, 'team_a_player1', shuffled[i][0]);
+    assignSlot(row, 'team_a_player2', shuffled[i][1]);
+    rows.push(row);
+  }
+
+  const rest = shuffled.slice(byes);
+  for (let i = 0; i + 1 < rest.length; i += 2) {
+    const matchIdx = i / 2;
+    const row = { tournament_id: tid, round_number: 1, court_name: `Kort ${matchIdx + 1}`, bracket_position: byes + matchIdx,
+      score_a: 0, score_b: 0, sets_data: [], status: 'upcoming' };
+    assignSlot(row, 'team_a_player1', rest[i][0]);
+    assignSlot(row, 'team_a_player2', rest[i][1]);
+    assignSlot(row, 'team_b_player1', rest[i + 1][0]);
+    assignSlot(row, 'team_b_player2', rest[i + 1][1]);
+    rows.push(row);
   }
   return rows;
 }
 
-function buildRRSingles(players) {
-  const n = players.length % 2 === 0 ? players.length : players.length + 1;
-  const t = players.length % 2 === 0 ? [...players] : [...players, '__BYE__'];
-  const result = [];
-  for (let r = 0; r < n - 1; r++) {
-    for (let i = 0; i < n / 2; i++) {
-      const a = t[i], b = t[n - 1 - i];
-      if (a !== '__BYE__' && b !== '__BYE__') result.push({ round: r + 1, a, b });
-    }
-    const last = t[n - 1];
-    for (let i = n - 1; i > 1; i--) t[i] = t[i - 1];
-    t[1] = last;
-  }
-  return result;
-}
-
-function buildRRPairs(pairs) {
-  const n = pairs.length % 2 === 0 ? pairs.length : pairs.length + 1;
-  const indices = Array.from({ length: n }, (_, i) => i < pairs.length ? i : -1);
+/** Berger round-robin over team indices (tek sayıda takım bay ile) */
+function buildRoundRobin(teamCount) {
+  const n = teamCount % 2 === 0 ? teamCount : teamCount + 1;
+  const indices = Array.from({ length: n }, (_, i) => (i < teamCount ? i : -1));
   const result = [];
   for (let r = 0; r < n - 1; r++) {
     for (let i = 0; i < n / 2; i++) {
@@ -104,26 +146,42 @@ function buildRRPairs(pairs) {
   return result;
 }
 
-function buildLeagueMatches(tid, playerIds, isDoubles, courts) {
+function buildLeagueMatches(tid, teams, courts) {
   const rows = [];
-  if (isDoubles) {
-    const shuffled = shuffleArr(playerIds);
-    const pairs = [];
-    for (let i = 0; i + 1 < shuffled.length; i += 2) pairs.push([shuffled[i], shuffled[i + 1]]);
-    buildRRPairs(pairs).forEach(({ round, iA, iB }, idx) => {
-      rows.push({ tournament_id: tid, round_number: round, court_name: `Kort ${(idx % courts) + 1}`, bracket_position: idx,
-        team_a_player1_id: pairs[iA][0], team_a_player2_id: pairs[iA][1],
-        team_b_player1_id: pairs[iB][0], team_b_player2_id: pairs[iB][1],
-        score_a: 0, score_b: 0, sets_data: [], status: 'upcoming' });
-    });
-  } else {
-    buildRRSingles(shuffleArr(playerIds)).forEach(({ round, a, b }, idx) => {
-      rows.push({ tournament_id: tid, round_number: round, court_name: `Kort ${(idx % courts) + 1}`, bracket_position: idx,
-        team_a_player1_id: a, team_b_player1_id: b,
-        score_a: 0, score_b: 0, sets_data: [], status: 'upcoming' });
-    });
-  }
+  buildRoundRobin(teams.length).forEach(({ round, iA, iB }, idx) => {
+    const row = { tournament_id: tid, round_number: round, court_name: `Kort ${(idx % courts) + 1}`, bracket_position: idx,
+      score_a: 0, score_b: 0, sets_data: [], status: 'upcoming' };
+    assignSlot(row, 'team_a_player1', teams[iA][0]);
+    assignSlot(row, 'team_a_player2', teams[iA][1]);
+    assignSlot(row, 'team_b_player1', teams[iB][0]);
+    assignSlot(row, 'team_b_player2', teams[iB][1]);
+    rows.push(row);
+  });
   return rows;
+}
+
+/** Maç satırının bir tarafını üye listesi olarak okur (id + manuel isim) */
+function sideTeam(m, side) {
+  const team = [];
+  const p1Id = side === 'a' ? m.team_a_player1_id : m.team_b_player1_id;
+  const p1Name = side === 'a' ? m.team_a_player1_name : m.team_b_player1_name;
+  const p2Id = side === 'a' ? m.team_a_player2_id : m.team_b_player2_id;
+  const p2Name = side === 'a' ? m.team_a_player2_name : m.team_b_player2_name;
+  if (p1Id || p1Name) team.push({ id: p1Id || undefined, name: p1Name || undefined });
+  if (p2Id || p2Name) team.push({ id: p2Id || undefined, name: p2Name || undefined });
+  return team;
+}
+
+/** Manuel isimleri profil objesi gibi sun — ekran tek tip `full_name` okur */
+function hydrateMatchNames(m) {
+  return {
+    ...m,
+    sets_data: m.sets_data || [],
+    team_a_player1: m.team_a_player1 || (m.team_a_player1_name ? { full_name: m.team_a_player1_name } : null),
+    team_a_player2: m.team_a_player2 || (m.team_a_player2_name ? { full_name: m.team_a_player2_name } : null),
+    team_b_player1: m.team_b_player1 || (m.team_b_player1_name ? { full_name: m.team_b_player1_name } : null),
+    team_b_player2: m.team_b_player2 || (m.team_b_player2_name ? { full_name: m.team_b_player2_name } : null),
+  };
 }
 
 // ═══════════════════════════════════════════════════════════════
@@ -182,15 +240,21 @@ function ManageTournamentScreen({ tournamentId, onBack }) {
           .order('round_number', { ascending: true })
           .order('bracket_position', { ascending: true }),
         sb.from('tournament_standings')
-          .select('*, player1_profile:profiles!tournament_standings_player1_id_fkey(full_name)')
+          .select('*, player1_profile:profiles!tournament_standings_player1_id_fkey(full_name), player2_profile:profiles!tournament_standings_player2_id_fkey(full_name)')
           .eq('tournament_id', tournamentId)
-          .order('points', { ascending: false }),
+          .order('points', { ascending: false })
+          .order('wins', { ascending: false })
+          .order('games_won', { ascending: false }),
       ]);
       if (tRes.error) throw tRes.error;
       setTournament(tRes.data);
       setParticipants(pRes.data || []);
-      setMatches((mRes.data || []).map(m => ({ ...m, sets_data: m.sets_data || [] })));
-      setStandings(sRes.data || []);
+      setMatches((mRes.data || []).map(hydrateMatchNames));
+      setStandings((sRes.data || []).map(s => ({
+        ...s,
+        player1_profile: s.player1_profile || (s.player1_name ? { full_name: s.player1_name } : null),
+        player2_profile: s.player2_profile || (s.player2_name ? { full_name: s.player2_name } : null),
+      })));
     } catch (e) { console.error(e); }
   }, [tournamentId]);
 
@@ -201,6 +265,7 @@ function ManageTournamentScreen({ tournamentId, onBack }) {
     if (!manualName.trim()) return;
     setAddingManual(true);
     try {
+      // current_players DB trigger'ı ile otomatik güncellenir
       const { error } = await sb.from('tournament_participants').insert({
         tournament_id: tournamentId,
         player_id: null,
@@ -208,7 +273,6 @@ function ManageTournamentScreen({ tournamentId, onBack }) {
         status: 'registered',
       });
       if (error) throw error;
-      await sb.rpc('increment_tournament_players', { t_id: tournamentId });
       setManualName('');
       setAddPModal(false);
       await load();
@@ -224,52 +288,113 @@ function ManageTournamentScreen({ tournamentId, onBack }) {
     if (!confirm(`${displayName} turnuvadan çıkarılsın mı?`)) return;
     setRemovingId(p.id);
     try {
+      // current_players DB trigger'ı ile otomatik güncellenir
       const { error } = await sb.from('tournament_participants').delete().eq('id', p.id);
       if (error) throw error;
-      await sb.rpc('decrement_tournament_players', { t_id: tournamentId });
       await load();
     } catch (e) { alert(e.message); }
     finally { setRemovingId(null); }
   };
 
+  // ── Turnuva bildirimleri (mobil oyunculara) ───────────────────
+  // Best-effort: bildirim hatası ana akışı bloklamaz. data.notif_key mobil
+  // i18n çözümü için; title/message ham yedek. Manuel katılımcılara (hesapsız)
+  // bildirim gitmez.
+  const tournamentAccountIds = async () => {
+    const { data } = await sb.from('tournament_participants')
+      .select('player_id, partner_id').eq('tournament_id', tournamentId);
+    const ids = new Set();
+    (data || []).forEach(r => { if (r.player_id) ids.add(r.player_id); if (r.partner_id) ids.add(r.partner_id); });
+    return [...ids];
+  };
+  const insertNotifs = async (rows) => {
+    try {
+      if (!rows || rows.length === 0) return;
+      const { error } = await sb.from('notifications').insert(rows);
+      if (error) console.error('turnuva bildirimi:', error);
+    } catch (e) { console.error(e); }
+  };
+
+  // ── Tahsilat (katılım ücreti) ─────────────────────────────────
+  const hasFee = (tournament?.entry_fee ?? 0) > 0;
+  const paidCount = participants.filter(p => p.payment_status === 'paid').length;
+  const paidTotal = participants.reduce((s, p) => s + (p.payment_status === 'paid' ? Number(p.total_paid || 0) : 0), 0);
+
+  const markPaid = async (p) => {
+    const name = p.player_profile?.full_name || p.manual_name || 'Katılımcı';
+    const raw = prompt(`${name} için alınan tutarı girin (TL). Kasaya "Turnuva Geliri" olarak işlenecek.`, String(tournament?.entry_fee ?? ''));
+    if (raw === null) return;
+    const amount = parseFloat(String(raw).replace(',', '.'));
+    if (isNaN(amount) || amount <= 0) { alert('Geçerli bir tutar girin.'); return; }
+    try {
+      const { error } = await sb.rpc('set_tournament_payment', {
+        p_participant_id: p.id, p_paid: true, p_amount: amount,
+      });
+      if (error) throw error;
+      await load();
+    } catch (e) { alert(e.message); }
+  };
+
+  const undoPay = async (p) => {
+    const name = p.player_profile?.full_name || p.manual_name || 'Bu katılımcı';
+    if (!confirm(`${name} için tahsilat geri alınsın mı? Kasadaki ${Number(p.total_paid || 0).toFixed(2)} TL'lik gelir kaydı silinecek.`)) return;
+    try {
+      const { error } = await sb.rpc('set_tournament_payment', {
+        p_participant_id: p.id, p_paid: false, p_amount: null,
+      });
+      if (error) throw error;
+      await load();
+    } catch (e) { alert(e.message); }
+  };
+
   // ── Generate matches ──────────────────────────────────────────
+  // Takım/üye bazlı: partnerler ve manuel isimler de programa girer.
   const generateMatches = async () => {
     if (!tournament) return;
-    const eligible = participants.filter(p => p.player_id);
-    if (eligible.length < 4) {
-      alert(`Maç oluşturmak için en az 4 kayıtlı oyuncu gerekli.\nŞu an: ${eligible.length} oyuncu`);
+    const members = toMembers(participants);
+    const minNeeded = minPlayersFor(tournament.tournament_type);
+    if (members.length < minNeeded) {
+      alert(`Bu format için en az ${minNeeded} oyuncu gerekli.\nŞu an: ${members.length} oyuncu`);
       return;
     }
     const msg = matches.length > 0
       ? 'Maçlar zaten oluşturulmuş. Yeniden oluşturmak mevcut maçları silecek. Devam edilsin mi?'
-      : `${eligible.length} oyuncu için ${tournament.rounds_count} tur, ${tournament.courts_count} kortluk maç programı oluşturulsun mu?`;
+      : `${members.length} oyuncu için ${tournament.rounds_count} tur, ${tournament.courts_count} kortluk maç programı oluşturulsun mu?`;
     if (!confirm(msg)) return;
 
     setGenerating(true);
     try {
-      await sb.from('tournament_matches').delete().eq('tournament_id', tournament.id);
-      await sb.from('tournament_standings').delete().eq('tournament_id', tournament.id);
-
-      const playerIds = eligible.map(p => p.player_id);
       const type = tournament.tournament_type;
       let matchRows = [];
 
-      if      (type === 'americano_teams')   matchRows = buildAmericanoMatches(tournament.id, playerIds, tournament.rounds_count, tournament.courts_count, true);
-      else if (type === 'americano_singles') matchRows = buildAmericanoMatches(tournament.id, playerIds, tournament.rounds_count, tournament.courts_count, false);
-      else if (type === 'singles_knockout')  matchRows = buildKnockoutRound1(tournament.id, playerIds, false);
-      else if (type === 'doubles_knockout')  matchRows = buildKnockoutRound1(tournament.id, playerIds, true);
-      else if (type === 'singles_league')    matchRows = buildLeagueMatches(tournament.id, playerIds, false, tournament.courts_count);
-      else if (type === 'doubles_league')    matchRows = buildLeagueMatches(tournament.id, playerIds, true, tournament.courts_count);
+      if      (type === 'americano_teams')   matchRows = buildAmericanoMatches(tournament.id, members, tournament.rounds_count, tournament.courts_count, true);
+      else if (type === 'americano_singles') matchRows = buildAmericanoMatches(tournament.id, members, tournament.rounds_count, tournament.courts_count, false);
+      else if (type === 'singles_knockout')  matchRows = buildKnockoutRound1(tournament.id, members.map(m => [m]));
+      else if (type === 'doubles_knockout')  matchRows = buildKnockoutRound1(tournament.id, toTeams(participants));
+      else if (type === 'singles_league')    matchRows = buildLeagueMatches(tournament.id, members.map(m => [m]), tournament.courts_count);
+      else if (type === 'doubles_league')    matchRows = buildLeagueMatches(tournament.id, toTeams(participants), tournament.courts_count);
 
       if (matchRows.length === 0) throw new Error('Maç oluşturulamadı.');
+
+      await sb.from('tournament_matches').delete().eq('tournament_id', tournament.id);
+      await sb.from('tournament_standings').delete().eq('tournament_id', tournament.id);
+
       const { error: me } = await sb.from('tournament_matches').insert(matchRows);
       if (me) throw me;
 
-      const standingRows = playerIds.map(pid => ({
-        tournament_id: tournament.id, player1_id: pid,
-        points: 0, wins: 0, losses: 0, draws: 0, games_won: 0, games_lost: 0,
-      }));
-      await sb.from('tournament_standings').insert(standingRows);
+      // Sıralamayı maç programından kur — programdaki herkes (manuel/partner
+      // dahil) 0 istatistikle listelenir, bay maçları galibiyet olarak işlenir.
+      const { error: se } = await sb.rpc('recalculate_tournament_standings', { t_id: tournament.id });
+      if (se) throw se;
+
+      // Maç programı yayınlandı bildirimi (hesabı olan tüm katılımcılara)
+      const ids = await tournamentAccountIds();
+      await insertNotifs(ids.map(uid => ({
+        user_id: uid, type: 'general', is_read: false,
+        title: '📋 Maç Programı Hazır',
+        message: `${tournament.title} turnuvasının maç programı açıklandı.`,
+        data: { notif_key: 'tournamentMatchesPublished', notif_vars: { title: tournament.title } },
+      })));
 
       await load();
       setActiveTab('matches');
@@ -279,8 +404,32 @@ function ManageTournamentScreen({ tournamentId, onBack }) {
   };
 
   // ── Status change ─────────────────────────────────────────────
+  // Bitirme ayrı akış: kazanan sunucuda sıralamadan belirlenip winner_info yazılır
+  const finishTournament = async () => {
+    if (!confirm('Kazanan güncel sıralamaya göre belirlenecek ve turnuva tamamlanacak. Devam edilsin mi?')) return;
+    try {
+      const { data: winner, error } = await sb.rpc('complete_tournament', { t_id: tournamentId });
+      if (error) throw error;
+      const winnerName = winner?.player1_name
+        ? `${winner.player1_name}${winner.player2_name ? ` & ${winner.player2_name}` : ''}`
+        : '';
+      // Turnuva tamamlandı + kazanan duyurusu (hesabı olan tüm katılımcılara)
+      if (winnerName) {
+        const ids = await tournamentAccountIds();
+        await insertNotifs(ids.map(uid => ({
+          user_id: uid, type: 'general', is_read: false,
+          title: '🏁 Turnuva Sona Erdi',
+          message: `${tournament.title} tamamlandı. Kazanan: ${winnerName}.`,
+          data: { notif_key: 'tournamentCompleted', notif_vars: { title: tournament.title, winner: winnerName } },
+        })));
+      }
+      await load();
+      alert(winnerName ? `🏆 Kazanan: ${winnerName}` : 'Turnuva tamamlandı.');
+    } catch (e) { alert(e.message); }
+  };
+
   const changeStatus = async (status) => {
-    const labels = { ongoing: 'Devam Ediyor', completed: 'Tamamlandı', cancelled: 'İptal Edildi' };
+    const labels = { ongoing: 'Devam Ediyor', cancelled: 'İptal Edildi' };
     if (!confirm(`Turnuvayı "${labels[status]}" olarak işaretlemek istiyor musunuz?`)) return;
     try {
       const { error } = await sb.from('tournaments').update({ status }).eq('id', tournamentId);
@@ -363,27 +512,66 @@ function ManageTournamentScreen({ tournamentId, onBack }) {
     if (!confirm(`Tur ${maxRound + 1} oluşturulsun mu?`)) return;
     setGenerating(true);
     try {
+      // Kazananlar: bay maçında tek taraf; beraberlikte açık hata (sessiz A galibiyeti yok)
       const winners = roundMatches.map(m => {
+        const teamA = sideTeam(m, 'a');
+        const teamB = sideTeam(m, 'b');
+        if (teamB.length === 0) return teamA; // bay maçı
+
         const sets = m.sets_data || [];
-        const winnerIsA = sets.length > 0 ? getSetsWon(sets).a > getSetsWon(sets).b : m.score_a >= m.score_b;
-        return winnerIsA
-          ? { p1: m.team_a_player1_id, p2: m.team_a_player2_id || undefined }
-          : { p1: m.team_b_player1_id, p2: m.team_b_player2_id || undefined };
+        let winnerIsA;
+        if (sets.length > 0) {
+          const w = getSetsWon(sets);
+          if (w.a === w.b) throw new Error(`${m.court_name || 'Maç'} (Tur ${maxRound}) beraberlikle bitmiş görünüyor. Eleme turunda beraberlik olamaz — skoru düzeltin.`);
+          winnerIsA = w.a > w.b;
+        } else {
+          if (m.score_a === m.score_b) throw new Error(`${m.court_name || 'Maç'} (Tur ${maxRound}) beraberlikle bitmiş görünüyor. Eleme turunda beraberlik olamaz — skoru düzeltin.`);
+          winnerIsA = m.score_a > m.score_b;
+        }
+        return winnerIsA ? teamA : teamB;
       });
       if (winners.length < 2) { alert('Turnuva tamamlandı!'); return; }
+
       const nextRound = maxRound + 1;
       const newMatches = [];
+      const advancing = new Set(); // gerçek (upcoming) maça çıkan hesaplar
+      let pos = 0;
       for (let i = 0; i + 1 < winners.length; i += 2) {
-        const wA = winners[i], wB = winners[i + 1];
-        newMatches.push({ tournament_id: tournamentId, round_number: nextRound,
-          court_name: `Kort ${Math.floor(i / 2) + 1}`, bracket_position: Math.floor(i / 2),
-          team_a_player1_id: wA.p1, team_a_player2_id: wA.p2,
-          team_b_player1_id: wB.p1, team_b_player2_id: wB.p2,
-          score_a: 0, score_b: 0, sets_data: [], status: 'upcoming' });
+        const row = { tournament_id: tournamentId, round_number: nextRound,
+          court_name: `Kort ${pos + 1}`, bracket_position: pos,
+          score_a: 0, score_b: 0, sets_data: [], status: 'upcoming' };
+        assignSlot(row, 'team_a_player1', winners[i][0]);
+        assignSlot(row, 'team_a_player2', winners[i][1]);
+        assignSlot(row, 'team_b_player1', winners[i + 1][0]);
+        assignSlot(row, 'team_b_player2', winners[i + 1][1]);
+        [...winners[i], ...winners[i + 1]].forEach(m => { if (m && m.id) advancing.add(m.id); });
+        newMatches.push(row);
+        pos++;
       }
+      // Tek sayıda kazanan: sonuncusu bay geçer (rakipsiz, tamamlanmış 1-0)
+      if (winners.length % 2 === 1) {
+        const byeTeam = winners[winners.length - 1];
+        const row = { tournament_id: tournamentId, round_number: nextRound,
+          court_name: 'Bay', bracket_position: pos,
+          score_a: 1, score_b: 0, sets_data: [], status: 'completed' };
+        assignSlot(row, 'team_a_player1', byeTeam[0]);
+        assignSlot(row, 'team_a_player2', byeTeam[1]);
+        newMatches.push(row);
+      }
+
       if (newMatches.length > 0) {
         const { error } = await sb.from('tournament_matches').insert(newMatches);
         if (error) throw error;
+      }
+      // Yeni tur bildirimi — yalnız gerçek maça çıkan (hesabı olan) oyunculara
+      const advIds = [...advancing];
+      if (advIds.length > 0) {
+        await insertNotifs(advIds.map(uid => ({
+          user_id: uid, type: 'general', is_read: false,
+          title: '➡️ Yeni Tur',
+          message: `${tournament.title} turnuvasında ${nextRound}. tur başladı. Maçın hazır!`,
+          data: { notif_key: 'tournamentNextRound', notif_vars: { title: tournament.title, round: nextRound } },
+        })));
       }
       await load();
       alert(`Tur ${nextRound} oluşturuldu!`);
@@ -399,7 +587,9 @@ function ManageTournamentScreen({ tournamentId, onBack }) {
       return acc;
     }, {}), [matches]);
 
-  const eligibleCount = participants.filter(p => p.player_id).length;
+  // Partnerler ve manuel isimler dahil gerçek kişi sayısı
+  const peopleCount = toMembers(participants).length;
+  const minNeeded = tournament ? minPlayersFor(tournament.tournament_type) : 4;
 
   const statusMeta = () => {
     const s = tournament?.status;
@@ -495,6 +685,14 @@ function ManageTournamentScreen({ tournamentId, onBack }) {
                 </button>
               )}
             </div>
+            {hasFee && participants.length > 0 && (
+              <div style={{ display:'flex', alignItems:'center', gap:6, background:'var(--bg)', borderRadius:10, padding:'8px 10px', marginBottom:8 }}>
+                <span className="material-icons" style={{ fontSize:14, color: paidCount === participants.length ? '#22C55E' : '#E65100' }}>payments</span>
+                <span style={{ fontSize:12, fontWeight:600 }}>
+                  Tahsilat: {paidCount}/{participants.length} katılımcı · {paidTotal.toFixed(2)} TL
+                </span>
+              </div>
+            )}
             {participants.length === 0 ? (
               <div style={{ textAlign:'center', padding:'20px 0', color:'var(--text-2)', fontSize:13 }}>Henüz kayıt yok.</div>
             ) : participants.map((p, i) => (
@@ -513,7 +711,21 @@ function ManageTournamentScreen({ tournamentId, onBack }) {
                 {!p.player_id && (
                   <span style={{ fontSize:11, fontWeight:600, background:'#FFF3E0', color:'#E65100', borderRadius:10, padding:'2px 8px' }}>Manuel</span>
                 )}
-                <span style={{ fontSize:11, fontWeight:600, background:'#E8F5E9', color:'#22C55E', borderRadius:10, padding:'2px 8px' }}>Kayıtlı</span>
+                {hasFee ? (
+                  p.payment_status === 'paid' ? (
+                    <button type="button" onClick={() => undoPay(p)} title="Ödemeyi geri al"
+                      style={{ fontSize:11, fontWeight:600, background:'#E8F5E9', color:'#22C55E', borderRadius:10, padding:'2px 8px', border:'none', cursor:'pointer' }}>
+                      Ödendi ✓
+                    </button>
+                  ) : (
+                    <button type="button" onClick={() => markPaid(p)} title="Tahsilat işaretle"
+                      style={{ fontSize:11, fontWeight:600, background:'#FFF3E0', color:'#E65100', borderRadius:10, padding:'2px 8px', border:'none', cursor:'pointer' }}>
+                      Ödenmedi
+                    </button>
+                  )
+                ) : (
+                  <span style={{ fontSize:11, fontWeight:600, background:'#E8F5E9', color:'#22C55E', borderRadius:10, padding:'2px 8px' }}>Kayıtlı</span>
+                )}
                 {tournament.status === 'upcoming' && (
                   <button type="button" onClick={() => removeParticipant(p)} disabled={removingId === p.id}
                     style={{ background:'none', border:'none', cursor: removingId === p.id ? 'default' : 'pointer', padding:2, display:'flex' }}
@@ -526,7 +738,7 @@ function ManageTournamentScreen({ tournamentId, onBack }) {
           </div>
 
           {/* Generate matches */}
-          {(tournament.status === 'upcoming' || tournament.status === 'ongoing') && eligibleCount >= 4 && (
+          {(tournament.status === 'upcoming' || tournament.status === 'ongoing') && peopleCount >= minNeeded && (
             <button className="btn btn-sm" onClick={generateMatches} disabled={generating}
               style={{ background:'#8B5CF6', color:'#fff', padding:'12px', justifyContent:'center', borderRadius:12, gap:8 }}>
               <span className="material-icons">shuffle</span>
@@ -543,7 +755,7 @@ function ManageTournamentScreen({ tournamentId, onBack }) {
               </button>
             )}
             {tournament.status === 'ongoing' && (
-              <button className="btn btn-pri" onClick={() => changeStatus('completed')}
+              <button className="btn btn-pri" onClick={finishTournament}
                 style={{ padding:'12px', justifyContent:'center', borderRadius:12, gap:8 }}>
                 <span className="material-icons">flag</span> Turnuvayı Bitir
               </button>
@@ -579,7 +791,10 @@ function ManageTournamentScreen({ tournamentId, onBack }) {
                 {standings.map((s, i) => (
                   <tr key={s.id}>
                     <td style={{ textAlign:'center', fontWeight:800 }}>{i + 1}</td>
-                    <td>{s.player1_profile?.full_name || '-'}</td>
+                    <td>
+                      {s.player1_profile?.full_name || '-'}
+                      {s.player2_profile ? ` & ${s.player2_profile.full_name}` : ''}
+                    </td>
                     <td style={{ textAlign:'center', fontWeight:800, color:'var(--brand-navy)' }}>{s.points}</td>
                     <td style={{ textAlign:'center', fontWeight:700, color:'#22C55E' }}>{s.wins}</td>
                     <td style={{ textAlign:'center', fontWeight:700, color:'#EF4444' }}>{s.losses}</td>
@@ -613,7 +828,7 @@ function ManageTournamentScreen({ tournamentId, onBack }) {
 
           {matches.length === 0 ? (
             <EmptyState icon="sports_tennis" title="Henüz maç oluşturulmadı"
-              sub={eligibleCount >= 4 ? 'Bilgi sekmesinden maç programı oluşturun.' : `Maç oluşturmak için ${Math.max(0, 4 - eligibleCount)} daha kayıtlı oyuncu gerekli.`} />
+              sub={peopleCount >= minNeeded ? 'Bilgi sekmesinden maç programı oluşturun.' : `Maç oluşturmak için ${Math.max(0, minNeeded - peopleCount)} oyuncu daha gerekli.`} />
           ) : Object.entries(groupedMatches).map(([round, roundMatches]) => {
             const allDone = roundMatches.every(m => m.status === 'completed');
             return (
