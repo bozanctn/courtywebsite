@@ -155,6 +155,7 @@ function ManageTournamentScreen({ tournamentId, onBack }) {
   const [addPModal,    setAddPModal]    = useState(false);
   const [manualName,   setManualName]   = useState('');
   const [addingManual, setAddingManual] = useState(false);
+  const [removingId,   setRemovingId]   = useState(null);
 
   // Score modal
   const [scoreModal,    setScoreModal]    = useState(null);
@@ -213,6 +214,22 @@ function ManageTournamentScreen({ tournamentId, onBack }) {
       await load();
     } catch (e) { alert(e.message); }
     finally { setAddingManual(false); }
+  };
+
+  // ── Remove participant (mobil ManageTournamentScreen ile birebir) ──
+  // Katılımcı satırını (kayıt/eş dahil) kaydırma birimi olarak siler — manuel kayıtların
+  // player_id'si olmadığından participant.id ile silinir.
+  const removeParticipant = async (p) => {
+    const displayName = p.player_profile?.full_name || p.manual_name || 'Bu oyuncu';
+    if (!confirm(`${displayName} turnuvadan çıkarılsın mı?`)) return;
+    setRemovingId(p.id);
+    try {
+      const { error } = await sb.from('tournament_participants').delete().eq('id', p.id);
+      if (error) throw error;
+      await sb.rpc('decrement_tournament_players', { t_id: tournamentId });
+      await load();
+    } catch (e) { alert(e.message); }
+    finally { setRemovingId(null); }
   };
 
   // ── Generate matches ──────────────────────────────────────────
@@ -497,6 +514,13 @@ function ManageTournamentScreen({ tournamentId, onBack }) {
                   <span style={{ fontSize:11, fontWeight:600, background:'#FFF3E0', color:'#E65100', borderRadius:10, padding:'2px 8px' }}>Manuel</span>
                 )}
                 <span style={{ fontSize:11, fontWeight:600, background:'#E8F5E9', color:'#22C55E', borderRadius:10, padding:'2px 8px' }}>Kayıtlı</span>
+                {tournament.status === 'upcoming' && (
+                  <button type="button" onClick={() => removeParticipant(p)} disabled={removingId === p.id}
+                    style={{ background:'none', border:'none', cursor: removingId === p.id ? 'default' : 'pointer', padding:2, display:'flex' }}
+                    title="Turnuvadan çıkar">
+                    <span className="material-icons" style={{ fontSize:18, color: removingId === p.id ? '#CBD5E1' : '#EF4444' }}>person_remove</span>
+                  </button>
+                )}
               </div>
             ))}
           </div>

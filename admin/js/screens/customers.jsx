@@ -455,6 +455,7 @@ function AddPackageModal({ customer, clubId, onClose, onSaved }) {
     try {
       await LessonPackageSvc.enrollCustomerPackage({
         clubId,
+        clubCustomerId: customer.id,
         customerUserId: customer.user_id || null,
         customerName:   customer.full_name,
         packageId:      mode === 'predefined' ? selectedPkg.id : null,

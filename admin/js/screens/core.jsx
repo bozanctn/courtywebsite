@@ -1472,6 +1472,7 @@ function ReservationsScreen({ clubId, setScreen, clubProfile }) {
                     await sb.from('coach_earnings').insert({
                       club_id:        clubId,
                       coach_id:       coachId,
+                      individual_coach_id: coachRec.individual_coach_id || null,
                       coach_name:     coachRec.full_name,
                       student_name:   lessonForm.student_name || null,
                       manual_lesson_id: inserted.id,
@@ -1611,6 +1612,8 @@ function ReservationsScreen({ clubId, setScreen, clubProfile }) {
     const courtFee      = Math.round((courtRow?.hourly_rate || 0) * durationH * 100) / 100;
     const coachAmount   = Math.round((Number(lesson.amount) || 0) * 100) / 100;
     const total         = Math.round((courtFee + coachAmount) * 100) / 100;
+    // Hoca hakedişine yazılacak individual_coach_id (mobil ile birebir alan)
+    const individualCoachId = coaches.find(c => c.id === lesson.coach_id)?.individual_coach_id || null;
 
     // Kaynak 'booking' ise sadece ödeme durumunu güncelle (rezervasyon ödemesi, koru bölünmez)
     if (lesson.source === 'booking') {
@@ -1641,25 +1644,23 @@ function ReservationsScreen({ clubId, setScreen, clubProfile }) {
       if (!confirm(`Ödeme Al\n\n${lines}\n\nÖdeme alındı olarak işaretlensin mi?`)) return;
       setLessonMarkingId(lesson.id);
       try {
-        if (lesson.source === 'lesson') {
-          const { error } = await sb.from('lessons').update({ payment_status: 'paid' }).eq('id', lesson.id);
-          if (error) throw error;
-        } else {
-          const { error } = await sb.from('club_manual_lessons').update({ payment_status: 'paid' }).eq('id', lesson.id);
-          if (error) throw error;
-        }
+        // Mobil ile birebir: önce coach_earnings + club_finances, SONRA payment_status='paid'
+        // (hakediş 'paid'den önce yazılır → DB trigger "zaten var" görüp çift yazmaz)
         if (dualCoachAmt > 0) {
           const { error } = await sb.from('coach_earnings').insert({
-            club_id:        clubId,
-            coach_id:       lesson.coach_id || null,
+            club_id:             clubId,
+            coach_id:            lesson.coach_id || null,
+            individual_coach_id: individualCoachId,
             ...(lesson.source === 'manual' ? { manual_lesson_id: lesson.id } : { lesson_id: lesson.id }),
-            coach_name:     lesson.coach_name,
-            student_name:   lesson.student_name || null,
-            amount:         dualCoachAmt,
-            court_fee:      0,
-            date:           lesson.date,
-            description:    `Özel ders - ${lesson.student_name || 'Öğrenci'} - ${lesson.start_time}`,
-            payment_status: 'unpaid',
+            coach_name:          lesson.coach_name,
+            student_name:        lesson.student_name || null,
+            amount:              dualCoachAmt,
+            court_fee:           0,
+            date:                lesson.date,
+            description:         `Özel ders - ${lesson.student_name || 'Öğrenci'} - ${lesson.start_time}`,
+            payment_status:      'unpaid',
+            collected_by_coach:  false,
+            court_fee_settled:   false,
           });
           if (error) throw error;
         }
@@ -1672,6 +1673,14 @@ function ReservationsScreen({ clubId, setScreen, clubProfile }) {
             description: `${lesson.coach_name} - ${lesson.student_name || 'Öğrenci'} - Özel Ders`,
             date:        lesson.date,
           });
+          if (error) throw error;
+        }
+        // Ödeme durumunu en SON güncelle (trigger çift yazmasın)
+        if (lesson.source === 'lesson') {
+          const { error } = await sb.from('lessons').update({ payment_status: 'paid' }).eq('id', lesson.id);
+          if (error) throw error;
+        } else {
+          const { error } = await sb.from('club_manual_lessons').update({ payment_status: 'paid' }).eq('id', lesson.id);
           if (error) throw error;
         }
         loadLessons();
@@ -1691,16 +1700,11 @@ function ReservationsScreen({ clubId, setScreen, clubProfile }) {
 
     setLessonMarkingId(lesson.id);
     try {
-      // 1) Ders ödeme durumunu güncelle
-      if (lesson.source === 'lesson') {
-        const { error } = await sb.from('lessons').update({ payment_status: 'paid' }).eq('id', lesson.id);
-        if (error) throw error;
-      } else {
-        const { error } = await sb.from('club_manual_lessons').update({ payment_status: 'paid' }).eq('id', lesson.id);
-        if (error) throw error;
-      }
+      // Mobil ReservationsScreen ile birebir SIRA: önce club_finances + coach_earnings,
+      // SONRA payment_status='paid'. Böylece ödeme→hakediş DB trigger'ı "zaten hakediş var"
+      // görüp çift yazmaz (aksi halde trigger + istemci = çift hoca hakedişi).
 
-      // 2) Kort ücreti → club_finances (Rezervasyon Geliri) — mobil ile aynı kategori
+      // 1) Kort ücreti → club_finances (Rezervasyon Geliri) — mobil ile aynı kategori
       if (courtFee > 0) {
         const { error } = await sb.from('club_finances').insert({
           club_id:     clubId,
@@ -1713,20 +1717,32 @@ function ReservationsScreen({ clubId, setScreen, clubProfile }) {
         if (error) throw error;
       }
 
-      // 3) Hoca hakedişi → coach_earnings — mobil CoachEarningsService.createEarning ile aynı
+      // 2) Hoca hakedişi → coach_earnings — mobil CoachEarningsService.createEarning ile aynı alanlar
       if (coachAmount > 0) {
         const { error } = await sb.from('coach_earnings').insert({
-          club_id:        clubId,
-          coach_id:       lesson.coach_id || null,
-          lesson_id:      lesson.source === 'lesson' ? (lesson.id || null) : null,
-          coach_name:     lesson.coach_name,
-          student_name:   lesson.student_name || null,
-          amount:         coachAmount,
-          court_fee:      courtFee,
-          date:           lesson.date,
-          description:    `Özel ders - ${lesson.student_name || 'Öğrenci'} - ${lesson.start_time}`,
-          payment_status: 'unpaid',
+          club_id:             clubId,
+          coach_id:            lesson.coach_id || null,
+          individual_coach_id: individualCoachId,
+          ...(lesson.source === 'manual' ? { manual_lesson_id: lesson.id } : { lesson_id: lesson.id }),
+          coach_name:          lesson.coach_name,
+          student_name:        lesson.student_name || null,
+          amount:              coachAmount,
+          court_fee:           courtFee,
+          date:                lesson.date,
+          description:         `Özel ders - ${lesson.student_name || 'Öğrenci'} - ${lesson.start_time}`,
+          payment_status:      'unpaid',
+          collected_by_coach:  false,
+          court_fee_settled:   false,
         });
+        if (error) throw error;
+      }
+
+      // 3) Ödeme durumunu en SON güncelle (trigger çift yazmasın)
+      if (lesson.source === 'lesson') {
+        const { error } = await sb.from('lessons').update({ payment_status: 'paid' }).eq('id', lesson.id);
+        if (error) throw error;
+      } else {
+        const { error } = await sb.from('club_manual_lessons').update({ payment_status: 'paid' }).eq('id', lesson.id);
         if (error) throw error;
       }
 

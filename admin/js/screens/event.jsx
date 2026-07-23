@@ -1946,12 +1946,20 @@ function LessonPackagesScreen({ clubId }) {
     if (payoutMode === 'upfront' && coachRec && coachPayRate <= 0) {
       if (!confirm('Bu paket için hoca pay oranı tanımlı değil; hocaya hakediş oluşmayacak. Yine de onaylansın mı?')) return;
     }
+    // Fiyat önceliği (mobil ile birebir): şablon fiyatı > custom_price > (pozitifse) total_paid.
+    // Bekleyen paketlerde total_paid çoğu yolda 0 → 0'a düşmek gelir/hakedişi yok ederdi.
+    const price = pkg?.price
+      ?? (pp.custom_price != null && Number(pp.custom_price) > 0 ? Number(pp.custom_price) : null)
+      ?? (Number(pp.total_paid) > 0 ? Number(pp.total_paid) : 0);
+    if (!(price > 0)) {
+      if (!confirm('Bu paket için tutar 0 görünüyor; gelir ve hoca hakedişi OLUŞMAYACAK. Yine de onaylansın mı?')) return;
+    }
     setConfirming(true);
     try {
       await LessonPackageSvc.confirmPayment(
-        pp.id, pkg?.validity_days, pp.total_paid ?? pkg?.price,
+        pp.id, pkg?.validity_days, price,
         pp.player?.full_name || pp.manual_player_name || 'Öğrenci', pkg?.name || 'Ders Paketi', clubId,
-        coachRec ? { clubCoachId: coachRec.id, coachName: coachRec.full_name, coachPayRate } : null,
+        coachRec ? { clubCoachId: coachRec.id, coachName: coachRec.full_name, coachPayRate, individualCoachId: pp.coach_id || null } : null,
         payoutMode
       );
       setConfirmModal(null);

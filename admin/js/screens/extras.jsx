@@ -1601,6 +1601,8 @@ function MyProgramScreen({ clubId, setScreen, clubProfile }) {
     try {
       // NOT: coach_earnings / club_finances kayıtları ÖNCE oluşturulur; ödeme durumu SONRA
       // güncellenir. Böylece club_manual_lessons trigger'ı (zaten hakediş var → atla) çift yazmaz.
+      // individual_coach_id (mobil ile birebir) → koçun kendi tarafından hakediş yönetimi için.
+      const payIndCoachId = coachesList.find(c => c.id === lsDetail.coachId)?.individual_coach_id || null;
       if (isNewNormal) {
         // Yeni stil: kulüp payı club_finances'a, hoca hakedişi coach_earnings'e
         if (clubAmt > 0) {
@@ -1615,6 +1617,7 @@ function MyProgramScreen({ clubId, setScreen, clubProfile }) {
           await sb.from('coach_earnings').insert({
             club_id:        clubId,
             coach_id:       lsDetail.coachId || null,
+            individual_coach_id: payIndCoachId,
             manual_lesson_id: lsDetail.source === 'manual' ? lsDetail.rawId : null,
             lesson_id:        lsDetail.source === 'lesson' ? lsDetail.rawId : null,
             coach_name:     lsDetail.coachName,
@@ -1632,6 +1635,7 @@ function MyProgramScreen({ clubId, setScreen, clubProfile }) {
           await sb.from('coach_earnings').insert({
             club_id:          clubId,
             coach_id:         lsDetail.coachId || null,
+            individual_coach_id: payIndCoachId,
             manual_lesson_id: lsDetail.source === 'manual' ? lsDetail.rawId : null,
             lesson_id:        lsDetail.source === 'lesson' ? lsDetail.rawId : null,
             coach_name:       lsDetail.coachName,
@@ -1665,6 +1669,7 @@ function MyProgramScreen({ clubId, setScreen, clubProfile }) {
           await sb.from('coach_earnings').insert({
             club_id:        clubId,
             coach_id:       lsDetail.coachId || null,
+            individual_coach_id: payIndCoachId,
             lesson_id:        lsDetail.source === 'lesson' ? lsDetail.rawId : null,
             manual_lesson_id: lsDetail.source === 'manual' ? lsDetail.rawId : null,
             coach_name:     lsDetail.coachName,
@@ -1840,9 +1845,11 @@ function MyProgramScreen({ clubId, setScreen, clubProfile }) {
           description: `${newInfo.coachName} - ${stu} - Özel ders kort ücreti`, date: newInfo.date,
         }));
         if (coachAmt > 0) proms.push(sb.from('coach_earnings').insert({
-          club_id: clubId, coach_id: newInfo.coachId || null, coach_name: newInfo.coachName,
+          club_id: clubId, coach_id: newInfo.coachId || null, individual_coach_id: indCoachId,
+          manual_lesson_id: oldInfo.manualLessonId, coach_name: newInfo.coachName,
           student_name: newInfo.studentName || null, amount: coachAmt, court_fee: courtFee,
-          date: newInfo.date, description: `Özel ders - ${stu} - ${startLabel}`, payment_status: 'unpaid',
+          date: newInfo.date, description: `Özel ders - ${stu} - ${startLabel}`,
+          payment_status: 'unpaid', collected_by_coach: false, court_fee_settled: false,
         }));
       }
     }
@@ -1931,7 +1938,7 @@ function MyProgramScreen({ clubId, setScreen, clubProfile }) {
       const coachEarning = Math.round(perSessionTotal * (coachPct / 100) * 100) / 100;
       if (coachRec && coachEarning > 0) {
         await sb.from('coach_earnings').insert({
-          club_id: clubId, coach_id: coachId, coach_name: coachRec.full_name,
+          club_id: clubId, coach_id: coachId, individual_coach_id: coachRec.individual_coach_id || null, coach_name: coachRec.full_name,
           student_name: studentName || null, manual_lesson_id: editId,
           amount: coachEarning, court_fee: 0, date, description: 'Ders Paketi Oturumu', payment_status: 'unpaid',
         });
@@ -2574,7 +2581,7 @@ function MyProgramScreen({ clubId, setScreen, clubProfile }) {
                 const coachEarning = Math.round(perSessionTotal * (coachPct / 100) * 100) / 100;
                 if (coachRec && coachEarning > 0) {
                   await sb.from('coach_earnings').insert({
-                    club_id: clubId, coach_id: coachId, coach_name: coachRec.full_name,
+                    club_id: clubId, coach_id: coachId, individual_coach_id: coachRec.individual_coach_id || null, coach_name: coachRec.full_name,
                     student_name: lsForm.student_name || null, manual_lesson_id: inserted.id,
                     amount: coachEarning, court_fee: 0,
                     date: lsForm.date, description: 'Ders Paketi Oturumu', payment_status: 'unpaid',
@@ -4521,14 +4528,13 @@ function CafeScreen({ clubId }) {
         date:        today,
       });
 
-      // 4) Stok düşümü — stok_quantity olan ürünler için
+      // 4) Stok düşümü — mobil ile birebir: sunucu tarafı atomik RPC (istemcideki bayat
+      // stock_quantity ile hesaplayıp yazmak yarış durumunda stoğu yanlış geri sıçratabilir).
       await Promise.all(
         cartItems
           .filter(ci => ci.product.stock_quantity != null)
           .map(ci =>
-            sb.from('cafe_products')
-              .update({ stock_quantity: Math.max(0, ci.product.stock_quantity - ci.qty) })
-              .eq('id', ci.product.id)
+            sb.rpc('decrement_cafe_stock', { p_product_id: ci.product.id, p_qty: ci.qty })
           )
       );
 
@@ -6019,40 +6025,18 @@ function GroupsScreen({ clubId, setScreen }) {
     if (!confirm('Aidat finansa işlensin mi?')) return;
     setPostingFinance(true);
     try {
-      const totalAmount = dues.reduce((s, d) => s + d.amount, 0);
-      const description = `${paymentGroup.name} - ${MONTHS_TR[payMonth-1]} ${payYear} aidatı`;
-      const today = todayISO();
-      const { data: groupCoaches } = await sb.from('club_group_coaches')
-        .select('coach_id,share_percentage,fixed_amount,club_coaches(full_name)').eq('group_id', paymentGroup.id);
-
-      let clubAmount, coachAmount;
-      const memberCount = dues.length;
-      if (groupCoaches && groupCoaches.length > 0) {
-        if (paymentGroup.split_type === 'fixed_amount') {
-          const totalCoachFixed = groupCoaches.reduce((s, gc) => s + (gc.fixed_amount || 0), 0);
-          coachAmount = Math.min(Math.round(totalCoachFixed * memberCount * 100) / 100, totalAmount);
-          clubAmount  = Math.round((totalAmount - coachAmount) * 100) / 100;
-          for (const gc of groupCoaches) {
-            const earning = Math.min(Math.round((gc.fixed_amount || 0) * memberCount * 100) / 100, totalAmount);
-            if (earning <= 0) continue;
-            await sb.from('coach_earnings').insert({ club_id:clubId, coach_id:gc.coach_id, coach_name:gc.club_coaches?.full_name??'', student_name:null, lesson_id:null, booking_id:null, amount:earning, court_fee:0, date:today, description, payment_status:'unpaid' });
-          }
-        } else {
-          clubAmount  = Math.round(totalAmount * ((paymentGroup.club_percentage || 100) / 100) * 100) / 100;
-          coachAmount = Math.round((totalAmount - clubAmount) * 100) / 100;
-          for (const gc of groupCoaches) {
-            const earning = Math.round(coachAmount * (gc.share_percentage / 100) * 100) / 100;
-            if (earning <= 0) continue;
-            await sb.from('coach_earnings').insert({ club_id:clubId, coach_id:gc.coach_id, coach_name:gc.club_coaches?.full_name??'', student_name:null, lesson_id:null, booking_id:null, amount:earning, court_fee:0, date:today, description, payment_status:'unpaid' });
-          }
-        }
-      } else {
-        clubAmount  = Math.round(totalAmount * ((paymentGroup.club_percentage || 100) / 100) * 100) / 100;
-        coachAmount = Math.round((totalAmount - clubAmount) * 100) / 100;
-      }
-      const { data: finRec } = await sb.from('club_finances').insert({ club_id:clubId, type:'income', category:'Grup Aidatı', amount:clubAmount, description, date:today }).select('id').single();
-      await sb.from('club_group_dues_posts').insert({ group_id:paymentGroup.id, club_id:clubId, year:payYear, month:payMonth, total_amount:totalAmount, club_amount:clubAmount, coach_amount:coachAmount, finance_record_id:finRec?.id });
-      const { data: post } = await sb.from('club_group_dues_posts').select('*').eq('group_id', paymentGroup.id).eq('year', payYear).eq('month', payMonth).maybeSingle();
+      // Mobil ile birebir: atomik RPC. coach_earnings + club_finances + dues_posts TEK
+      // transaction'da yazılır; dues_posts ÖNCE yazılıp UNIQUE(group,year,month) ile çift
+      // aktarımı atomik durdurur; coach_earnings'e group_dues_post_id damgalanır (temiz geri-alma).
+      // Kulüp payı/hoca payı bölüşümü ve doğrulama (hepsi ödendi mi) sunucuda yapılır.
+      const { error } = await sb.rpc('post_group_dues_to_finance', {
+        p_group_id: paymentGroup.id,
+        p_year:     payYear,
+        p_month:    payMonth,
+      });
+      if (error) throw error;
+      const { data: post } = await sb.from('club_group_dues_posts').select('*')
+        .eq('group_id', paymentGroup.id).eq('year', payYear).eq('month', payMonth).maybeSingle();
       setDuesPost(post);
       alert('Aidat kulüp finans kaydına eklendi');
     } catch (e) { alert(e.message); }
@@ -6105,37 +6089,17 @@ function GroupsScreen({ clubId, setScreen }) {
   };
 
   const handlePostPkgToFinance = async (pkg) => {
+    if (pkg.posted_to_finance) { alert('Bu paket zaten finansa işlenmiş'); return; }
     if (!pkg.is_paid) { alert('Önce paketi ödenmiş olarak işaretleyin'); return; }
     if (!confirm('Bu paket finansa işlensin mi?')) return;
     setPostingPkg(true);
     try {
-      const description = `${paymentGroup.name} - ${pkg.member_name} paket`;
-      const today = todayISO();
-      const { data: groupCoaches } = await sb.from('club_group_coaches')
-        .select('coach_id,share_percentage,fixed_amount,club_coaches(full_name)').eq('group_id', paymentGroup.id);
-      let clubAmount = pkg.amount, coachAmount = 0;
-      if (groupCoaches && groupCoaches.length > 0) {
-        if (paymentGroup.split_type === 'fixed_amount') {
-          const totalCoachFixed = groupCoaches.reduce((s, gc) => s + (gc.fixed_amount || 0), 0);
-          coachAmount = Math.round(Math.min(totalCoachFixed, pkg.amount) * 100) / 100;
-          clubAmount  = Math.round((pkg.amount - coachAmount) * 100) / 100;
-          for (const gc of groupCoaches) {
-            const earning = Math.round(Math.min(gc.fixed_amount || 0, pkg.amount) * 100) / 100;
-            if (earning <= 0) continue;
-            await sb.from('coach_earnings').insert({ club_id:clubId, coach_id:gc.coach_id, coach_name:gc.club_coaches?.full_name??'', student_name:pkg.member_name, lesson_id:null, booking_id:null, amount:earning, court_fee:0, date:today, description, payment_status:'unpaid' });
-          }
-        } else {
-          clubAmount  = Math.round(pkg.amount * ((paymentGroup.club_percentage || 100) / 100) * 100) / 100;
-          coachAmount = Math.round((pkg.amount - clubAmount) * 100) / 100;
-          for (const gc of groupCoaches) {
-            const earning = Math.round(coachAmount * (gc.share_percentage / 100) * 100) / 100;
-            if (earning <= 0) continue;
-            await sb.from('coach_earnings').insert({ club_id:clubId, coach_id:gc.coach_id, coach_name:gc.club_coaches?.full_name??'', student_name:pkg.member_name, lesson_id:null, booking_id:null, amount:earning, court_fee:0, date:today, description, payment_status:'unpaid' });
-          }
-        }
-      }
-      await sb.from('club_finances').insert({ club_id:clubId, type:'income', category:'Grup Paketi', amount:clubAmount, description, date:today });
-      await sb.from('club_group_member_packages').update({ posted_to_finance: true }).eq('id', pkg.id);
+      // Mobil ile birebir: atomik RPC. Pay dağılımı + coach_earnings (individual_coach_id dahil)
+      // + club_finances ('Grup Paketi') + posted_to_finance damgası TEK transaction'da; paket
+      // satırı kilitlenir (FOR UPDATE) → çift aktarım imkânsız. Yetki/ödendi/zaten-işlenmiş
+      // doğrulaması ve pay hesabı sunucuda yapılır (eski non-atomik + hatalı-pay yol kaldırıldı).
+      const { error } = await sb.rpc('post_group_package_to_finance', { p_package_id: pkg.id });
+      if (error) throw error;
       await loadPackages(paymentGroup);
       alert('Paket finansa işlendi');
     } catch (e) { alert(e.message); }

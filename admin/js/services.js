@@ -1242,12 +1242,15 @@ const LessonPackageSvc = {
       promises.push(sb.from('coach_earnings').insert({
         club_id:    clubId,
         coach_id:   coachInfo.clubCoachId || null,
+        individual_coach_id: coachInfo.individualCoachId || null,
         coach_name: coachInfo.coachName,
         amount:     coachAmt,
         court_fee:  0,
         date:       today,
         description: `Ders Paketi - ${packageName} - ${playerName}`,
         payment_status: 'unpaid',
+        collected_by_coach: false,
+        court_fee_settled:  false,
       }));
     }
     const cpResults = await Promise.all(promises);
@@ -1432,81 +1435,30 @@ const LessonPackageSvc = {
   async enrollCustomerPackage({ clubId, customerUserId, customerName,
                                  packageId, packageName, totalLessons,
                                  customPrice, customCoachPct, validityDays,
-                                 coachId, paymentStatus, totalPaid, notes }) {
-    const isPaid = paymentStatus === 'paid';
-    let expiryDate = null;
-    if (isPaid && validityDays) {
-      const d = new Date();
-      d.setDate(d.getDate() + Number(validityDays));
-      expiryDate = d.toISOString();
-    }
-    const paid = isPaid ? (Number(totalPaid) || 0) : 0;
-    const displayName = customerName?.trim() || 'Müşteri';
-
-    // Tahsilat biçimi + hoca yüzdesi kaynağı (şablon paketse şablondan)
-    let payoutMode = 'upfront';
-    let pkgCoachPct = null;
-    if (packageId) {
-      const { data: tpl } = await sb.from('lesson_packages')
-        .select('coach_payout_mode, coach_percentage').eq('id', packageId).maybeSingle();
-      payoutMode  = tpl?.coach_payout_mode === 'per_session' ? 'per_session' : 'upfront';
-      pkgCoachPct = tpl?.coach_percentage ?? null;
-    }
-
-    const { data: plp, error } = await sb.from('player_lesson_packages').insert({
-      club_id:            clubId,
-      package_id:         packageId || null,
-      player_id:          customerUserId || null,
-      manual_player_name: customerUserId ? null : (customerName?.trim() || null),
-      coach_id:           coachId || null,
-      coach_payout_mode:  payoutMode,
-      total_lessons:      Number(totalLessons),
-      used_lessons:       0,
-      payment_status:     isPaid ? 'paid' : 'pending',
-      status:             isPaid ? 'active' : 'pending',
-      total_paid:         paid,
-      expiry_date:        expiryDate,
-      custom_name:        packageId ? null : (packageName || null),
-      custom_price:       packageId ? null : (customPrice ? Number(customPrice) : null),
-      custom_coach_pct:   packageId ? null : (customCoachPct != null ? Number(customCoachPct) : 70),
-      notes:              notes || null,
-    }).select().single();
+                                 coachId, paymentStatus, totalPaid, notes,
+                                 clubCustomerId }) {
+    // Mobil ile birebir: atomik RPC (net bölüşüm modeli). Paket + kulüp NET payı
+    // (club_finances) + upfront hoca hakedişi (coach_earnings, individual_coach_id
+    // dahil) TEK transaction'da yazılır — eski "paket oluştu, finans patladı"
+    // tutarsızlığı olamaz. Pay/oran/expiry/status hesabı sunucuda (tek kaynak).
+    const { data, error } = await sb.rpc('enroll_customer_package', {
+      p_club_id:            clubId,
+      p_player_id:          customerUserId || null,
+      p_manual_player_name: customerUserId ? null : (customerName?.trim() || null),
+      p_package_id:         packageId || null,
+      p_package_name:       packageName,
+      p_total_lessons:      Number(totalLessons),
+      p_custom_price:       packageId ? null : (customPrice ? Number(customPrice) : null),
+      p_custom_coach_pct:   packageId ? null : (customCoachPct != null ? Number(customCoachPct) : 70),
+      p_validity_days:      validityDays ? Number(validityDays) : null,
+      p_coach_id:           coachId || null,
+      p_payment_status:     paymentStatus,
+      p_total_paid:         paymentStatus === 'paid' ? (Number(totalPaid) || 0) : 0,
+      p_club_customer_id:   clubCustomerId || null,
+      p_notes:              notes || null,
+    });
     if (error) throw error;
-
-    if (isPaid && paid > 0) {
-      const today = new Date().toISOString().split('T')[0];
-      const total = Math.round(paid * 100) / 100;
-      // Kulüp her iki modda da NET payını satışta alır; hoca payı upfront'ta satışta, per_session'da seans başına.
-      let coachRec = null;
-      if (coachId) {
-        const { data } = await sb.from('club_coaches')
-          .select('id, full_name, coach_pay_rate').eq('club_id', clubId).eq('individual_coach_id', coachId).maybeSingle();
-        coachRec = data || null;
-      }
-      // Öncelik: pakette tanımlı % (varsa) → yoksa hocanın profil oranı
-      const pkgPct   = pkgCoachPct ?? (packageId ? null : (customCoachPct != null ? Number(customCoachPct) : null));
-      const coachPct = Number(pkgPct) > 0 ? Number(pkgPct) : (coachRec?.coach_pay_rate || 0);
-      const coachAmt = (coachRec && coachPct > 0) ? Math.round(total * (coachPct / 100) * 100) / 100 : 0;
-      const clubAmt  = Math.round((total - coachAmt) * 100) / 100;
-      const proms = [];
-      if (clubAmt > 0) {
-        proms.push(sb.from('club_finances').insert({
-          club_id: clubId, type: 'income', category: 'Ders Paketi Geliri',
-          amount: clubAmt, description: `${packageName || 'Özel Paket'} - ${displayName}`, date: today,
-        }));
-      }
-      if (payoutMode === 'upfront' && coachAmt > 0 && coachRec) {
-        proms.push(sb.from('coach_earnings').insert({
-          club_id: clubId, coach_id: coachRec.id, coach_name: coachRec.full_name,
-          amount: coachAmt, court_fee: 0, date: today,
-          description: `Ders Paketi - ${packageName || 'Özel Paket'} - ${displayName}`, payment_status: 'unpaid',
-        }));
-      }
-      const ecResults = await Promise.all(proms);
-      const ecFailed = ecResults.find(r => r && r.error);
-      if (ecFailed) throw new Error(`Kayıt oluşturuldu ancak gelir/hoca hakediş kaydı yazılamadı: ${ecFailed.error.message}. Lütfen finans kayıtlarını elle kontrol edin.`);
-    }
-    return plp;
+    return data;
   },
 };
 
