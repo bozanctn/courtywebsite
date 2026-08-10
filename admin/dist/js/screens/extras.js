@@ -405,7 +405,7 @@ function MyProgramScreen({ clubId, setScreen, clubProfile }) {
   const [grpSelectedCoaches, setGrpSelectedCoaches] = useState(/* @__PURE__ */ new Set());
   const [grpLoadingDetails, setGrpLoadingDetails] = useState(false);
   const SLOT_H = 64;
-  const START_H = 7;
+  const START_H = 6;
   const END_H = 24;
   useEffect(() => {
     if (clubId) load();
