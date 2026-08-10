@@ -55,7 +55,7 @@ function CustomerDetailModal({ customer, clubId, onClose, onReservation, onLinke
       return;
     }
     const safe = q.replace(/[,()]/g, " ").trim();
-    const { data } = await sb.from("profiles").select("id, full_name, email").or(`full_name.ilike.%${safe}%,email.ilike.%${safe}%`).eq("user_type", "player").limit(8);
+    const { data } = await sb.from("profiles").select("id, full_name, email").or(`full_name_fold.like.%${trFold(safe)}%,email.ilike.%${safe}%`).eq("user_type", "player").limit(8);
     setLinkResults(data || []);
   };
   const confirmLink = async () => {
@@ -690,10 +690,10 @@ function CustomersScreen({ clubId, setScreen }) {
     }
   };
   const filtered = useMemo(() => {
-    const q = searchQuery.trim().toLowerCase();
+    const q = trFold(searchQuery.trim());
     if (!q) return customers;
     return customers.filter(
-      (c) => c.full_name.toLowerCase().includes(q) || c.phone.includes(q) || (c.email || "").toLowerCase().includes(q)
+      (c) => trFold(c.full_name).includes(q) || c.phone.includes(searchQuery.trim()) || trFold(c.email || "").includes(q)
     );
   }, [customers, searchQuery]);
   const openAdd = () => {
@@ -874,7 +874,7 @@ function CustomersScreen({ clubId, setScreen }) {
       const { data: linked } = await sb.from("club_customers").select("user_id").eq("club_id", clubId).eq("is_active", true).not("user_id", "is", null);
       const excludeId = form.user_id_original || null;
       const linkedIds = (linked || []).map((c) => c.user_id).filter((id) => id !== excludeId);
-      const { data } = await sb.from("profiles").select("id, full_name, email").ilike("full_name", `%${q}%`).eq("user_type", "player").limit(20);
+      const { data } = await sb.from("profiles").select("id, full_name, email").like("full_name_fold", `%${trFold(q)}%`).eq("user_type", "player").limit(20);
       const filtered2 = (data || []).filter((p) => !linkedIds.includes(p.id));
       setCcResults(filtered2.slice(0, 8));
     } catch (e) {

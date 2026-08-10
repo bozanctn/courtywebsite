@@ -2596,6 +2596,9 @@ function MyProgramScreen({ clubId, setScreen, clubProfile }) {
             status: 'confirmed', is_solo_booking: false,
             duration_hours: durH, total_amount: amountVal || 0,
             club_coach_id: coachId,
+            // Derse bağ: bu satır kort bloke gölgesidir, gerçek rezervasyon değil.
+            // Rezervasyon listeleri bunu eler, ders silinince FK ile birlikte gider.
+            manual_lesson_id: inserted.id,
           }).then(() => {}).catch(e => console.warn('Kort blok eklenemedi:', e.message));
         }
 

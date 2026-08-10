@@ -57,10 +57,12 @@ function CustomerDetailModal({ customer, clubId, onClose, onReservation, onLinke
   const searchProfiles = async (q) => {
     setLinkQuery(q);
     if (q.length < 2) { setLinkResults([]); return; }
+    // İsimde full_name_fold + like: ILIKE collation'a bağlı ve Türkçe'de 'I'yı 'ı'
+    // yapmıyor. Kolon zaten tr_fold ile normalize; sorguyu da aynı şekilde katlıyoruz.
     const safe = q.replace(/[,()]/g, ' ').trim();
     const { data } = await sb.from('profiles')
       .select('id, full_name, email')
-      .or(`full_name.ilike.%${safe}%,email.ilike.%${safe}%`)
+      .or(`full_name_fold.like.%${trFold(safe)}%,email.ilike.%${safe}%`)
       .eq('user_type', 'player')
       .limit(8);
     setLinkResults(data || []);
@@ -892,12 +894,14 @@ function CustomersScreen({ clubId, setScreen }) {
   };
 
   const filtered = useMemo(() => {
-    const q = searchQuery.trim().toLowerCase();
+    // Türkçe duyarlı: .toLowerCase() 'İ'yi görünmez birleşik noktayla bozuyor,
+    // 'I'yı da 'ı' yapmıyordu → "ismail" ile "İSMAİL" eşleşmiyordu (bkz. trFold).
+    const q = trFold(searchQuery.trim());
     if (!q) return customers;
     return customers.filter(c =>
-      c.full_name.toLowerCase().includes(q) ||
-      c.phone.includes(q) ||
-      (c.email || '').toLowerCase().includes(q)
+      trFold(c.full_name).includes(q) ||
+      c.phone.includes(searchQuery.trim()) ||
+      trFold(c.email || '').includes(q)
     );
   }, [customers, searchQuery]);
 
@@ -1090,7 +1094,8 @@ function CustomersScreen({ clubId, setScreen }) {
 
       const { data } = await sb.from('profiles')
         .select('id, full_name, email')
-        .ilike('full_name', `%${q}%`)
+        // Türkçe duyarlı: normalize kolon + katlanmış sorgu (bkz. trFold / tr_fold)
+        .like('full_name_fold', `%${trFold(q)}%`)
         .eq('user_type', 'player')
         .limit(20);
 

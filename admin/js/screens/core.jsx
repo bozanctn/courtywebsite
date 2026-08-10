@@ -466,7 +466,10 @@ function ReservationsScreen({ clubId, setScreen, clubProfile }) {
         .select('*, courts!bookings_court_id_fkey(court_number,court_type), booking_players!booking_players_booking_id_fkey(player_id, is_primary_player, profiles!booking_players_player_id_fkey(id,full_name,email))')
         .in('court_id', courtIds)
         .neq('status', 'cancelled')
+        // Ders gölgeleri gerçek rezervasyon değildir: lesson_id → app dersleri,
+        // manual_lesson_id → manuel dersler. İkisi de listelenmemeli.
         .is('lesson_id', null)
+        .is('manual_lesson_id', null)
         .gte('start_time', startDb)
         .lte('start_time', endDb)
         .order('start_time', { ascending: true });

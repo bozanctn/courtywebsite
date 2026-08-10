@@ -4,6 +4,26 @@ const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBh
 
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 
+// ── Türkçe duyarlı arama katlaması (fold) ───────────────────────
+// .toLowerCase() locale-bağımsızdır ve Türkçe'yi bozar:
+//   'İ'.toLowerCase() → 'i' + U+0307 (GÖRÜNMEZ birleşik nokta, 2 karakter!)
+//   'I'.toLowerCase() → 'i'          (Türkçe'de 'ı' olmalı)
+// Bu yüzden "ismail" yazınca "İSMAİL", "ışıl" yazınca "Işıl" bulunamıyordu.
+// Dönüşüm DB'deki public.tr_fold() ve mobildeki src/utils/trSearch.ts ile
+// BİREBİR AYNI olmalıdır: İ/I/ı→i, Ş/ş→s, Ğ/ğ→g, Ü/ü→u, Ö/ö→o, Ç/ç→c.
+// Sonuç tamamen ASCII olduğu için büyük/küçük harf VE diakritik duyarsızdır.
+const TR_FOLD_MAP = {
+  'İ': 'i', 'I': 'i', 'ı': 'i',
+  'Ş': 's', 'ş': 's',
+  'Ğ': 'g', 'ğ': 'g',
+  'Ü': 'u', 'ü': 'u',
+  'Ö': 'o', 'ö': 'o',
+  'Ç': 'c', 'ç': 'c',
+};
+function trFold(s) {
+  return (s == null ? '' : String(s)).replace(/[İIıŞşĞğÜüÖöÇç]/g, ch => TR_FOLD_MAP[ch]).toLowerCase();
+}
+
 // ── Auth yardımcıları ───────────────────────────────────────────
 async function authSignIn(email, password) {
   const { data, error } = await sb.auth.signInWithPassword({ email, password });

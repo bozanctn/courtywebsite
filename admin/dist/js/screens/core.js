@@ -306,7 +306,7 @@ function ReservationsScreen({ clubId, setScreen, clubProfile }) {
       }
       const startDb = localTimeToDb(startDt.toISOString());
       const endDb = localTimeToDb(endDt.toISOString());
-      const { data, error } = await sb.from("bookings").select("*, courts!bookings_court_id_fkey(court_number,court_type), booking_players!booking_players_booking_id_fkey(player_id, is_primary_player, profiles!booking_players_player_id_fkey(id,full_name,email))").in("court_id", courtIds).neq("status", "cancelled").is("lesson_id", null).gte("start_time", startDb).lte("start_time", endDb).order("start_time", { ascending: true });
+      const { data, error } = await sb.from("bookings").select("*, courts!bookings_court_id_fkey(court_number,court_type), booking_players!booking_players_booking_id_fkey(player_id, is_primary_player, profiles!booking_players_player_id_fkey(id,full_name,email))").in("court_id", courtIds).neq("status", "cancelled").is("lesson_id", null).is("manual_lesson_id", null).gte("start_time", startDb).lte("start_time", endDb).order("start_time", { ascending: true });
       if (error) {
         console.error("loadDay error:", error);
         setBookings([]);
