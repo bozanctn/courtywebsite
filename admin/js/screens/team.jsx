@@ -16,6 +16,7 @@ function CoachesScreen({ clubId }) {
   const [form,            setForm]            = useState({});
   const [saving,          setSaving]          = useState(false);
   const [showInactive,    setShowInactive]    = useState(false);
+  const [payMode,         setPayMode]         = useState('hourly'); // 'hourly' | 'percentage' — saatlik ücret VEYA yüzde pay
 
   // Invite modal
   const [inviteQuery,    setInviteQuery]    = useState('');
@@ -51,18 +52,21 @@ function CoachesScreen({ clubId }) {
 
   const openAdd = () => {
     setForm({ is_active: true, full_name: '', email: '', phone: '', hourly_rate: '', coach_pay_rate: '', experience_years: '', specialization: '', bio: '', day_off: null });
+    setPayMode('hourly');
     setModal('add');
   };
 
   const openEdit = (coach) => {
     setForm({ ...coach, hourly_rate: String(coach.hourly_rate || ''), experience_years: String(coach.experience_years || '') });
+    setPayMode(coach.coach_pay_rate > 0 ? 'percentage' : 'hourly');
     setModal('edit');
   };
 
   const save = async () => {
     if (!form.full_name?.trim()) { alert('Hoca adı gereklidir.'); return; }
     if (!form.email?.trim())     { alert('E-posta adresi gereklidir.'); return; }
-    if (!form.hourly_rate)       { alert('Saatlik ücret gereklidir.'); return; }
+    if (payMode === 'hourly'     && !form.hourly_rate)    { alert('Saatlik ücret girin.'); return; }
+    if (payMode === 'percentage' && !form.coach_pay_rate) { alert('Hoca payı (%) girin.'); return; }
     setSaving(true);
     try {
       const email = form.email.trim();
@@ -91,8 +95,8 @@ function CoachesScreen({ clubId }) {
         full_name:        form.full_name.trim(),
         email:            email,
         phone:            form.phone?.trim() || null,
-        hourly_rate:      Number(form.hourly_rate),
-        coach_pay_rate:   form.coach_pay_rate ? Number(form.coach_pay_rate) : null,
+        hourly_rate:      payMode === 'hourly'     ? Number(form.hourly_rate)    : 0,
+        coach_pay_rate:   payMode === 'percentage' ? Number(form.coach_pay_rate) : null,
         experience_years: Number(form.experience_years) || 0,
         specialization:   form.specialization || null,
         bio:              form.bio?.trim() || null,
@@ -381,7 +385,7 @@ function CoachesScreen({ clubId }) {
                 )}
                 {c.coach_pay_rate > 0 && (
                   <span style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: 12, color: '#16A34A', background: '#DCFCE7', border: '1px solid #BBF7D0', borderRadius: 8, padding: '4px 9px', fontWeight: 600 }}>
-                    <span className="material-icons" style={{ fontSize: 13 }}>account_balance_wallet</span> Pay: {fmtMoney(c.coach_pay_rate)}/saat
+                    <span className="material-icons" style={{ fontSize: 13 }}>account_balance_wallet</span> Pay: %{c.coach_pay_rate}
                   </span>
                 )}
                 {c.specialization && (
@@ -516,16 +520,37 @@ function CoachesScreen({ clubId }) {
                   onChange={e => setForm({ ...form, phone: e.target.value })} />
               </Field>
             </div>
-            <div className="fields-2">
-              <Field label="Saatlik Ücret (₺) *">
+            <Field label="Ücretlendirme (biri)">
+              <div style={{ display:'flex', gap:8 }}>
+                <button type="button"
+                  onClick={() => { setPayMode('hourly'); setForm(f => ({ ...f, coach_pay_rate: '' })); }}
+                  style={{ flex:1, padding:'9px 0', borderRadius:10, cursor:'pointer', fontSize:13, fontWeight:600,
+                    border: payMode === 'hourly' ? '1.5px solid var(--brand-navy)' : '1.5px solid var(--border)',
+                    background: payMode === 'hourly' ? '#EEF2FF' : 'var(--bg)',
+                    color: payMode === 'hourly' ? 'var(--brand-navy)' : 'var(--text-2)' }}>
+                  Saatlik Ücret (₺)
+                </button>
+                <button type="button"
+                  onClick={() => { setPayMode('percentage'); setForm(f => ({ ...f, hourly_rate: '' })); }}
+                  style={{ flex:1, padding:'9px 0', borderRadius:10, cursor:'pointer', fontSize:13, fontWeight:600,
+                    border: payMode === 'percentage' ? '1.5px solid var(--brand-navy)' : '1.5px solid var(--border)',
+                    background: payMode === 'percentage' ? '#EEF2FF' : 'var(--bg)',
+                    color: payMode === 'percentage' ? 'var(--brand-navy)' : 'var(--text-2)' }}>
+                  Yüzde Pay (%)
+                </button>
+              </div>
+            </Field>
+            {payMode === 'hourly' ? (
+              <Field label="Saatlik Ücret (₺)">
                 <input type="number" min={0} value={form.hourly_rate || ''} placeholder="0"
                   onChange={e => setForm({ ...form, hourly_rate: e.target.value })} />
               </Field>
+            ) : (
               <Field label="Hoca Payı (%)">
                 <input type="number" min={0} max={100} value={form.coach_pay_rate || ''} placeholder="0"
                   onChange={e => setForm({ ...form, coach_pay_rate: e.target.value })} />
               </Field>
-            </div>
+            )}
             <div className="fields-2">
               <Field label="Deneyim (Yıl)">
                 <input type="number" min={0} value={form.experience_years || ''} placeholder="0"

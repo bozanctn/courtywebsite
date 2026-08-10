@@ -16,6 +16,7 @@ function CoachesScreen({ clubId }) {
   const [form, setForm] = useState({});
   const [saving, setSaving] = useState(false);
   const [showInactive, setShowInactive] = useState(false);
+  const [payMode, setPayMode] = useState("hourly");
   const [inviteQuery, setInviteQuery] = useState("");
   const [inviteResults, setInviteResults] = useState([]);
   const [inviteSearched, setInviteSearched] = useState(false);
@@ -47,10 +48,12 @@ function CoachesScreen({ clubId }) {
   const filtered = coaches.filter((c) => showInactive || c.is_active);
   const openAdd = () => {
     setForm({ is_active: true, full_name: "", email: "", phone: "", hourly_rate: "", coach_pay_rate: "", experience_years: "", specialization: "", bio: "", day_off: null });
+    setPayMode("hourly");
     setModal("add");
   };
   const openEdit = (coach) => {
     setForm({ ...coach, hourly_rate: String(coach.hourly_rate || ""), experience_years: String(coach.experience_years || "") });
+    setPayMode(coach.coach_pay_rate > 0 ? "percentage" : "hourly");
     setModal("edit");
   };
   const save = async () => {
@@ -62,8 +65,12 @@ function CoachesScreen({ clubId }) {
       alert("E-posta adresi gereklidir.");
       return;
     }
-    if (!form.hourly_rate) {
-      alert("Saatlik \xFCcret gereklidir.");
+    if (payMode === "hourly" && !form.hourly_rate) {
+      alert("Saatlik \xFCcret girin.");
+      return;
+    }
+    if (payMode === "percentage" && !form.coach_pay_rate) {
+      alert("Hoca pay\u0131 (%) girin.");
       return;
     }
     setSaving(true);
@@ -94,8 +101,8 @@ function CoachesScreen({ clubId }) {
         full_name: form.full_name.trim(),
         email,
         phone: form.phone?.trim() || null,
-        hourly_rate: Number(form.hourly_rate),
-        coach_pay_rate: form.coach_pay_rate ? Number(form.coach_pay_rate) : null,
+        hourly_rate: payMode === "hourly" ? Number(form.hourly_rate) : 0,
+        coach_pay_rate: payMode === "percentage" ? Number(form.coach_pay_rate) : null,
         experience_years: Number(form.experience_years) || 0,
         specialization: form.specialization || null,
         bio: form.bio?.trim() || null,
@@ -319,7 +326,7 @@ function CoachesScreen({ clubId }) {
     },
     /* @__PURE__ */ React.createElement("span", { className: "material-icons", style: { fontSize: 13 } }, c.is_active ? "check_circle" : "pause_circle"),
     c.is_active ? "Aktif" : "Pasif"
-  )), /* @__PURE__ */ React.createElement("div", { style: { display: "flex", flexWrap: "wrap", gap: 6 } }, c.experience_years > 0 && /* @__PURE__ */ React.createElement("span", { style: { display: "flex", alignItems: "center", gap: 4, fontSize: 12, color: "var(--text-2)", background: "var(--bg)", border: "1px solid var(--border)", borderRadius: 8, padding: "4px 9px" } }, /* @__PURE__ */ React.createElement("span", { className: "material-icons", style: { fontSize: 13 } }, "schedule"), " ", c.experience_years, " y\u0131l"), c.hourly_rate > 0 && /* @__PURE__ */ React.createElement("span", { style: { display: "flex", alignItems: "center", gap: 4, fontSize: 12, color: "var(--text-2)", background: "var(--bg)", border: "1px solid var(--border)", borderRadius: 8, padding: "4px 9px" } }, /* @__PURE__ */ React.createElement("span", { className: "material-icons", style: { fontSize: 13 } }, "payments"), " ", fmtMoney(c.hourly_rate), "/saat"), c.coach_pay_rate > 0 && /* @__PURE__ */ React.createElement("span", { style: { display: "flex", alignItems: "center", gap: 4, fontSize: 12, color: "#16A34A", background: "#DCFCE7", border: "1px solid #BBF7D0", borderRadius: 8, padding: "4px 9px", fontWeight: 600 } }, /* @__PURE__ */ React.createElement("span", { className: "material-icons", style: { fontSize: 13 } }, "account_balance_wallet"), " Pay: ", fmtMoney(c.coach_pay_rate), "/saat"), c.specialization && /* @__PURE__ */ React.createElement("span", { style: { fontSize: 12, color: "var(--brand-navy)", background: "#EEF2FF", border: "1px solid #C7D2FE", borderRadius: 8, padding: "4px 9px", fontWeight: 600 } }, c.specialization), c.day_off != null && /* @__PURE__ */ React.createElement("span", { style: { display: "flex", alignItems: "center", gap: 4, fontSize: 12, color: "#DC2626", background: "#FEF2F2", border: "1px solid #FECACA", borderRadius: 8, padding: "4px 9px", fontWeight: 600 } }, /* @__PURE__ */ React.createElement("span", { className: "material-icons", style: { fontSize: 13 } }, "beach_access"), ["Pzt", "Sal", "\xC7ar", "Per", "Cum", "Cmt", "Paz"][c.day_off], " \u0130zin")), c.bio && /* @__PURE__ */ React.createElement("p", { style: { fontSize: 13, color: "var(--text-2)", margin: 0, lineHeight: 1.5 } }, c.bio), /* @__PURE__ */ React.createElement("div", { style: { height: 1, background: "var(--border)" } }), /* @__PURE__ */ React.createElement("div", { style: { display: "flex", gap: 8 } }, /* @__PURE__ */ React.createElement("button", { className: "btn btn-ghost btn-sm", style: { flex: 1, color: "#22C55E" }, onClick: () => openSchedule(c) }, /* @__PURE__ */ React.createElement("span", { className: "material-icons", style: { fontSize: 15 } }, "calendar_today"), " Program"), /* @__PURE__ */ React.createElement("button", { className: "btn btn-ghost btn-sm", style: { flex: 1 }, onClick: () => openEdit(c) }, /* @__PURE__ */ React.createElement("span", { className: "material-icons", style: { fontSize: 15 } }, "edit"), " D\xFCzenle"), /* @__PURE__ */ React.createElement("button", { className: "btn btn-danger btn-sm btn-icon", onClick: () => del(c) }, /* @__PURE__ */ React.createElement("span", { className: "material-icons", style: { fontSize: 15 } }, "delete")))))), modal === "invite" && /* @__PURE__ */ React.createElement(
+  )), /* @__PURE__ */ React.createElement("div", { style: { display: "flex", flexWrap: "wrap", gap: 6 } }, c.experience_years > 0 && /* @__PURE__ */ React.createElement("span", { style: { display: "flex", alignItems: "center", gap: 4, fontSize: 12, color: "var(--text-2)", background: "var(--bg)", border: "1px solid var(--border)", borderRadius: 8, padding: "4px 9px" } }, /* @__PURE__ */ React.createElement("span", { className: "material-icons", style: { fontSize: 13 } }, "schedule"), " ", c.experience_years, " y\u0131l"), c.hourly_rate > 0 && /* @__PURE__ */ React.createElement("span", { style: { display: "flex", alignItems: "center", gap: 4, fontSize: 12, color: "var(--text-2)", background: "var(--bg)", border: "1px solid var(--border)", borderRadius: 8, padding: "4px 9px" } }, /* @__PURE__ */ React.createElement("span", { className: "material-icons", style: { fontSize: 13 } }, "payments"), " ", fmtMoney(c.hourly_rate), "/saat"), c.coach_pay_rate > 0 && /* @__PURE__ */ React.createElement("span", { style: { display: "flex", alignItems: "center", gap: 4, fontSize: 12, color: "#16A34A", background: "#DCFCE7", border: "1px solid #BBF7D0", borderRadius: 8, padding: "4px 9px", fontWeight: 600 } }, /* @__PURE__ */ React.createElement("span", { className: "material-icons", style: { fontSize: 13 } }, "account_balance_wallet"), " Pay: %", c.coach_pay_rate), c.specialization && /* @__PURE__ */ React.createElement("span", { style: { fontSize: 12, color: "var(--brand-navy)", background: "#EEF2FF", border: "1px solid #C7D2FE", borderRadius: 8, padding: "4px 9px", fontWeight: 600 } }, c.specialization), c.day_off != null && /* @__PURE__ */ React.createElement("span", { style: { display: "flex", alignItems: "center", gap: 4, fontSize: 12, color: "#DC2626", background: "#FEF2F2", border: "1px solid #FECACA", borderRadius: 8, padding: "4px 9px", fontWeight: 600 } }, /* @__PURE__ */ React.createElement("span", { className: "material-icons", style: { fontSize: 13 } }, "beach_access"), ["Pzt", "Sal", "\xC7ar", "Per", "Cum", "Cmt", "Paz"][c.day_off], " \u0130zin")), c.bio && /* @__PURE__ */ React.createElement("p", { style: { fontSize: 13, color: "var(--text-2)", margin: 0, lineHeight: 1.5 } }, c.bio), /* @__PURE__ */ React.createElement("div", { style: { height: 1, background: "var(--border)" } }), /* @__PURE__ */ React.createElement("div", { style: { display: "flex", gap: 8 } }, /* @__PURE__ */ React.createElement("button", { className: "btn btn-ghost btn-sm", style: { flex: 1, color: "#22C55E" }, onClick: () => openSchedule(c) }, /* @__PURE__ */ React.createElement("span", { className: "material-icons", style: { fontSize: 15 } }, "calendar_today"), " Program"), /* @__PURE__ */ React.createElement("button", { className: "btn btn-ghost btn-sm", style: { flex: 1 }, onClick: () => openEdit(c) }, /* @__PURE__ */ React.createElement("span", { className: "material-icons", style: { fontSize: 15 } }, "edit"), " D\xFCzenle"), /* @__PURE__ */ React.createElement("button", { className: "btn btn-danger btn-sm btn-icon", onClick: () => del(c) }, /* @__PURE__ */ React.createElement("span", { className: "material-icons", style: { fontSize: 15 } }, "delete")))))), modal === "invite" && /* @__PURE__ */ React.createElement(
     Modal,
     {
       title: "Hoca Davet Et",
@@ -375,7 +382,49 @@ function CoachesScreen({ clubId }) {
         placeholder: "0500 000 00 00",
         onChange: (e) => setForm({ ...form, phone: e.target.value })
       }
-    ))), /* @__PURE__ */ React.createElement("div", { className: "fields-2" }, /* @__PURE__ */ React.createElement(Field, { label: "Saatlik \xDCcret (\u20BA) *" }, /* @__PURE__ */ React.createElement(
+    ))), /* @__PURE__ */ React.createElement(Field, { label: "\xDCcretlendirme (biri)" }, /* @__PURE__ */ React.createElement("div", { style: { display: "flex", gap: 8 } }, /* @__PURE__ */ React.createElement(
+      "button",
+      {
+        type: "button",
+        onClick: () => {
+          setPayMode("hourly");
+          setForm((f) => ({ ...f, coach_pay_rate: "" }));
+        },
+        style: {
+          flex: 1,
+          padding: "9px 0",
+          borderRadius: 10,
+          cursor: "pointer",
+          fontSize: 13,
+          fontWeight: 600,
+          border: payMode === "hourly" ? "1.5px solid var(--brand-navy)" : "1.5px solid var(--border)",
+          background: payMode === "hourly" ? "#EEF2FF" : "var(--bg)",
+          color: payMode === "hourly" ? "var(--brand-navy)" : "var(--text-2)"
+        }
+      },
+      "Saatlik \xDCcret (\u20BA)"
+    ), /* @__PURE__ */ React.createElement(
+      "button",
+      {
+        type: "button",
+        onClick: () => {
+          setPayMode("percentage");
+          setForm((f) => ({ ...f, hourly_rate: "" }));
+        },
+        style: {
+          flex: 1,
+          padding: "9px 0",
+          borderRadius: 10,
+          cursor: "pointer",
+          fontSize: 13,
+          fontWeight: 600,
+          border: payMode === "percentage" ? "1.5px solid var(--brand-navy)" : "1.5px solid var(--border)",
+          background: payMode === "percentage" ? "#EEF2FF" : "var(--bg)",
+          color: payMode === "percentage" ? "var(--brand-navy)" : "var(--text-2)"
+        }
+      },
+      "Y\xFCzde Pay (%)"
+    ))), payMode === "hourly" ? /* @__PURE__ */ React.createElement(Field, { label: "Saatlik \xDCcret (\u20BA)" }, /* @__PURE__ */ React.createElement(
       "input",
       {
         type: "number",
@@ -384,7 +433,7 @@ function CoachesScreen({ clubId }) {
         placeholder: "0",
         onChange: (e) => setForm({ ...form, hourly_rate: e.target.value })
       }
-    )), /* @__PURE__ */ React.createElement(Field, { label: "Hoca Pay\u0131 (%)" }, /* @__PURE__ */ React.createElement(
+    )) : /* @__PURE__ */ React.createElement(Field, { label: "Hoca Pay\u0131 (%)" }, /* @__PURE__ */ React.createElement(
       "input",
       {
         type: "number",
@@ -394,7 +443,7 @@ function CoachesScreen({ clubId }) {
         placeholder: "0",
         onChange: (e) => setForm({ ...form, coach_pay_rate: e.target.value })
       }
-    ))), /* @__PURE__ */ React.createElement("div", { className: "fields-2" }, /* @__PURE__ */ React.createElement(Field, { label: "Deneyim (Y\u0131l)" }, /* @__PURE__ */ React.createElement(
+    )), /* @__PURE__ */ React.createElement("div", { className: "fields-2" }, /* @__PURE__ */ React.createElement(Field, { label: "Deneyim (Y\u0131l)" }, /* @__PURE__ */ React.createElement(
       "input",
       {
         type: "number",
