@@ -1958,7 +1958,7 @@ function LessonPackagesScreen({ clubId }) {
     try {
       await LessonPackageSvc.confirmPayment(
         pp.id, pkg?.validity_days, price,
-        pp.player?.full_name || pp.manual_player_name || 'Öğrenci', pkg?.name || 'Ders Paketi', clubId,
+        pp._customerName || pp.player?.full_name || pp.manual_player_name || 'Öğrenci', pkg?.name || 'Ders Paketi', clubId,
         coachRec ? { clubCoachId: coachRec.id, coachName: coachRec.full_name, coachPayRate, individualCoachId: pp.coach_id || null } : null,
         payoutMode
       );
@@ -2021,6 +2021,52 @@ function LessonPackagesScreen({ clubId }) {
       const sel    = enrollSelected;
       const isCust = sel?._type === 'customer';
       const isBoth = sel?._type === 'both';
+
+      // Manuel modda kişiyi hem paket hem NORMAL müşteri kaydı yap (mobil dedup kontrolleriyle).
+      // Telefon varsa numara+isim, yoksa isim ile "Aynı kişi mi?" onayı → mevcut müşteriye bağla;
+      // aksi halde yeni müşteri oluştur (tek hesap eşleşmesinde CourtyCLUB hesabına bağla).
+      let clubCustomerId = null;
+      if (enrollMode === 'manual') {
+        const nm = enrollName.trim();
+        const ph = enrollPhone.trim();
+        if (ph) {
+          const matches = await CustomerSvc.findCustomersByPhone(ph, clubId);
+          const similar = matches.find(m => namesLookSimilar(m.full_name, nm));
+          if (similar && confirm(`"${similar.full_name}" ile aynı telefon numarası kullanıyor. Aynı kişi mi?\n\nTamam: mevcut müşteriye bağlanır.\nİptal: yeni müşteri oluşturulur.`)) {
+            clubCustomerId = similar.id;
+          }
+        } else {
+          const matches = await CustomerSvc.findSimilarCustomersByName(nm, clubId);
+          const similar = matches[0];
+          if (similar && confirm(`"${similar.full_name}" zaten kayıtlı. Aynı kişi mi?\n\nTamam: mevcut kayda bağlanır.\nİptal: yeni müşteri oluşturulur.`)) {
+            clubCustomerId = similar.id;
+          }
+        }
+        if (!clubCustomerId) {
+          try {
+            const created = await CustomerSvc.createCustomer(clubId, { full_name: nm, phone: ph });
+            clubCustomerId = created.id;
+            if (ph) {
+              const accounts = await CustomerSvc.findAccountsByPhone(ph);
+              if (accounts.length === 1) {
+                try { await CustomerSvc.linkToProfile(created.id, accounts[0].id); } catch (_) {}
+              }
+            }
+          } catch (e) {
+            // Aynı isim+telefon zaten varsa (uq_club_customer_name_phone) → mevcut kaydı yeniden kullan
+            if (/uq_club_customer_name/.test(e?.message || '')) {
+              const dup = ph
+                ? await CustomerSvc.findCustomerByPhone(ph, clubId)
+                : (await CustomerSvc.findSimilarCustomersByName(nm, clubId))[0];
+              if (dup) clubCustomerId = dup.id; else throw e;
+            } else { throw e; }
+          }
+        }
+      } else if (enrollMode === 'search' && (sel?._type === 'customer' || sel?._type === 'both')) {
+        // Mevcut müşteri seçildi → pakete club_customer_id bağla (isim CRM'de değişince otomatik yansısın).
+        clubCustomerId = sel.id;
+      }
+
       await LessonPackageSvc.manualEnrollPlayer({
         package_id:          pkg.id,
         club_id:             clubId,
@@ -2038,6 +2084,7 @@ function LessonPackagesScreen({ clubId }) {
         manual_player_phone: enrollMode === 'manual' ? (enrollPhone.trim() || null)
                            : (isCust && !sel.user_id) ? (sel.phone || null)
                            : null,
+        club_customer_id:    clubCustomerId,
         used_lessons:        used,
         payment_status:      enrollPayStatus,
         total_paid:          parseFloat(enrollPaid) || pkg.price,
@@ -2050,7 +2097,7 @@ function LessonPackagesScreen({ clubId }) {
   };
 
   const cancelPlayerPackage = async (pp) => {
-    const name = pp.player?.full_name || pp.manual_player_name || 'Bu öğrenci';
+    const name = pp._customerName || pp.player?.full_name || pp.manual_player_name || 'Bu öğrenci';
     if (!confirm(`${name} için paketi iptal etmek istediğinize emin misiniz?`)) return;
 
     // Ödendi + kullanılmayan ders varsa: kalan derslerin ücretini iade et (gider)
@@ -2084,7 +2131,7 @@ function LessonPackagesScreen({ clubId }) {
     catch (e) { alert(e.message); }
   };
 
-  const displayName = (pp) => pp.player?.full_name || pp.manual_player_name || '—';
+  const displayName = (pp) => pp._customerName || pp.player?.full_name || pp.manual_player_name || '—';
 
   const activeStudents  = playerPkgs.filter(p => p.payment_status === 'paid' && p.status !== 'cancelled');
   const pendingStudents = playerPkgs.filter(p => p.payment_status === 'pending' && p.status !== 'cancelled');
@@ -2541,7 +2588,7 @@ function LessonPackagesScreen({ clubId }) {
         >
           <div style={{ display:'flex', flexDirection:'column', gap:12 }}>
             <div style={{ background:'var(--bg)', borderRadius:10, padding:'12px 16px', border:'1px solid var(--border)' }}>
-              <div style={{ fontWeight:700, fontSize:15 }}>{confirmModal.playerPkg.player?.full_name || '—'}</div>
+              <div style={{ fontWeight:700, fontSize:15 }}>{displayName(confirmModal.playerPkg)}</div>
               <div style={{ fontSize:13, color:'var(--text-2)', marginTop:4 }}>{confirmModal.playerPkg.package?.name}</div>
               <div style={{ fontSize:13, color:'var(--text-2)' }}>{confirmModal.playerPkg.package?.total_lessons} ders · {confirmModal.playerPkg.package?.validity_days} gün geçerli</div>
             </div>

@@ -978,7 +978,8 @@ function MyProgramScreen({ clubId, setScreen, clubProfile }) {
       const [, endHM]          = extractDateTime(b.end_time);
       if (dateStr !== selDate) return;
       const [sh, sm] = parseHM(startHM);
-      const [eh, em] = parseHM(endHM);
+      let   [eh, em] = parseHM(endHM);
+      if (eh * 60 + em <= sh * 60 + sm) eh += 24; // 00:00 (gece yarısı) bitişi = 24:00
       const courtNum  = courts.find(c => c.id === b.court_id)?.court_number;
       const playerName = bkPlayerMap.get(b.id) || null;
       all.push({ id: b.id, type: 'booking', courtId: b.court_id, courtNum,
@@ -996,8 +997,9 @@ function MyProgramScreen({ clubId, setScreen, clubProfile }) {
       if (dateStr !== selDate) return;
       const sh = startDate.getHours();
       const sm = startDate.getMinutes();
-      const eh = endDate.getHours();
+      let   eh = endDate.getHours();
       const em = endDate.getMinutes();
+      if (eh * 60 + em <= sh * 60 + sm) eh += 24; // gece yarısını geçen ders = 24:00+
       const coachName = (l.club_coach_id && coachMap.get(l.club_coach_id)) || 'Antrenör';
       const courtNum  = courts.find(c => c.id === l.court_id)?.court_number;
       all.push({ id: 'ls_' + l.id, type: 'lesson', courtId: l.court_id, courtNum,
@@ -1015,7 +1017,8 @@ function MyProgramScreen({ clubId, setScreen, clubProfile }) {
       if (m.status === 'cancelled') return;
       if (m.date !== selDate) return;
       const [sh, sm] = parseHM(m.start_time);
-      const [eh, em] = parseHM(m.end_time);
+      let   [eh, em] = parseHM(m.end_time);
+      if (eh * 60 + em <= sh * 60 + sm) eh += 24; // 00:00 (gece yarısı) bitişi = 24:00
       const coachName = m.club_coaches?.full_name || m.coach_name || 'Antrenör';
       const courtNum  = courts.find(c => c.id === m.court_id)?.court_number;
       all.push({ id: 'ml_' + m.id, type: 'lesson', courtId: m.court_id, courtNum,
@@ -1747,6 +1750,25 @@ function MyProgramScreen({ clubId, setScreen, clubProfile }) {
         }
       }
       if (lsDetail.source === 'manual') {
+        // Finansı geri al — ders silinmeden ÖNCE (coach_earnings.manual_lesson_id FK'si
+        // ON DELETE SET NULL; ders silinince bağ kopar, sonra bulunamaz).
+        // coach_earnings: manual_lesson_id ile güvenli (normal ödenen ders + per_session paket 'Ders Paketi Oturumu' dahil).
+        await sb.from('coach_earnings').delete().eq('manual_lesson_id', lsDetail.rawId);
+        // club_finances: manual_lesson_id yok → imza (club_id + date + category + description) ile sil.
+        // Not: paket satış geliri ('Ders Paketi Geliri') kasıtlı hariç — o pakete ait, derse değil.
+        const _stu   = lsDetail.studentName || 'Öğrenci';
+        const _coach = lsDetail.coachName   || 'Hoca';
+        const _sigs = [
+          { category: 'Özel Ders Geliri',   description: `${_coach} - ${_stu} - Özel Ders` },
+          { category: 'Rezervasyon Geliri', description: `${_coach} - ${_stu} - Özel ders kort ücreti` },
+        ];
+        for (const sig of _sigs) {
+          const { data: rows } = await sb.from('club_finances').select('id')
+            .eq('club_id', clubId).eq('date', lsDetail.lessonDate)
+            .eq('category', sig.category).eq('description', sig.description);
+          if (rows && rows.length === 1) await sb.from('club_finances').delete().eq('id', rows[0].id);
+        }
+
         await sb.from('club_manual_lessons').delete().eq('id', lsDetail.rawId);
         if (lsDetail.courtId) {
           await cancelCourtBooking(lsDetail.courtId, lsDetail.lessonDate, lsDetail.sh, lsDetail.sm, lsDetail.eh, lsDetail.em);
@@ -2076,8 +2098,35 @@ function MyProgramScreen({ clubId, setScreen, clubProfile }) {
       setLsPlayerResults([]);
       setLsCustomerSearch(''); setLsCustomerResults([]);
       setLsCourtyclubResults([]);
-      // Paket: düzenlemede otomatik uygulama yok (Katman 3). Kapalı başlat.
-      setLsUsePkg(false); setLsSelectedPkgId(null); setLsPackages([]);
+      // Paketli ders mi? Önce olaydan gelen id; yoksa koç+tarih ile taze ara
+      // (manuel paket seansları lesson_id'siz saklandığından olay bayrağı kaçabiliyor).
+      let pkgId = d.playerPackageId || null;
+      if (!pkgId && row.coach_id) {
+        const indId = coachesList.find(c => c.id === row.coach_id)?.individual_coach_id;
+        if (indId) {
+          const { data: sess } = await sb.from('lesson_package_sessions')
+            .select('player_package_id')
+            .is('lesson_id', null).eq('coach_id', indId).eq('session_date', row.date)
+            .limit(1).maybeSingle();
+          pkgId = sess?.player_package_id || null;
+        }
+      }
+      if (pkgId) {
+        const { data: plp } = await sb.from('player_lesson_packages')
+          .select('*, lesson_packages(name, total_lessons, price, coach_percentage, coach_payout_mode)')
+          .eq('id', pkgId).maybeSingle();
+        if (plp) {
+          setLsPackages([{ ...plp,
+            package_name: plp.lesson_packages?.name || plp.custom_name || 'Özel Paket',
+            remaining: (plp.total_lessons || 0) - (plp.used_lessons || 0) }]);
+          setLsSelectedPkgId(plp.id);
+          setLsUsePkg(true);
+        } else {
+          setLsUsePkg(false); setLsSelectedPkgId(null); setLsPackages([]);
+        }
+      } else {
+        setLsUsePkg(false); setLsSelectedPkgId(null); setLsPackages([]);
+      }
 
       setLsDetail(null);
       setLsModal({
@@ -2964,7 +3013,7 @@ function MyProgramScreen({ clubId, setScreen, clubProfile }) {
     const top    = (startMins - START_H * 60) / 60 * SLOT_H + 36;
     const height = Math.max((endMins - startMins) / 60 * SLOT_H, 22);
     if (endMins <= START_H * 60 || startMins >= END_H * 60 || endMins <= startMins) return null;
-    const timeStr  = `${String(ev.sh).padStart(2,'0')}:${String(ev.sm).padStart(2,'0')}–${String(ev.eh).padStart(2,'0')}:${String(ev.em).padStart(2,'0')}`;
+    const timeStr  = `${String(ev.sh).padStart(2,'0')}:${String(ev.sm).padStart(2,'0')}–${String(ev.eh % 24).padStart(2,'0')}:${String(ev.em).padStart(2,'0')}`;
     const widthPct = 100 / totalCols;
     const isBooking   = ev.type === 'booking';
     const isLesson    = ev.type === 'lesson';
@@ -3811,7 +3860,7 @@ function MyProgramScreen({ clubId, setScreen, clubProfile }) {
               )}
 
               {/* PAKET */}
-              {(lsSelectedPlayer || lsSelectedCustomer) && lsForm.coach_id && (
+              {((lsSelectedPlayer || lsSelectedCustomer || lsPackages.length > 0) && lsForm.coach_id) && (
                 <div style={{ marginBottom:14 }}>
                   {lsLoadingPkgs ? (
                     <div style={{ fontSize:13, color:'var(--text-2)', padding:'6px 0' }}>Paketler yükleniyor...</div>
@@ -4225,7 +4274,7 @@ function MyProgramScreen({ clubId, setScreen, clubProfile }) {
               {/* Kişi seçimi */}
               <div>
                 <div style={{ fontSize:12, fontWeight:700, color:'var(--text-2)', marginBottom:8, letterSpacing:0.4 }}>OYUNCU</div>
-                {(bookingMemberId || bookingCustomerId) ? (
+                {(bookingMemberName || bookingCustomerName) ? (
                   <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', border:'1.5px solid var(--brand-navy)', borderRadius:12, padding:'10px 12px', background:'#EEF2FF' }}>
                     <div style={{ display:'flex', alignItems:'center', gap:6 }}>
                       <span style={{ fontSize:14, fontWeight:700, color:'var(--brand-navy)' }}>{bookingMemberName || bookingCustomerName}</span>

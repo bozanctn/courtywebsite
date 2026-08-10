@@ -373,6 +373,7 @@ function ReservationsScreen({ clubId, setScreen, clubProfile }) {
       );
       setBkForm({ courtId: p.court_id, date: p.date, startTime: p.start_time, endTime: p.end_time, duration: dur, status: 'confirmed' });
       setBkMemberId(null); setBkMemberName(''); setBkMemberQuery(''); setBkMemberResults([]); setBkCourtyclubResults([]);
+      setBkCustomerId(null); setBkCustomerName(''); setBkCustomerResults([]);
       setBkModalVisible(true);
       // Courts henüz yüklenmemişse önce yükle
       if (courts.length > 0) {
@@ -1058,7 +1059,7 @@ function ReservationsScreen({ clubId, setScreen, clubProfile }) {
           .select('*, lesson_packages(name, total_lessons, price, validity_days, coach_percentage, coach_payout_mode)')
           .eq('player_id', playerId)
           .eq('coach_id', individualCoachId)
-          .eq('payment_status', 'paid')
+          .in('payment_status', ['paid', 'pending'])
           .eq('status', 'active')
           .or(`expiry_date.is.null,expiry_date.gt.${now}`)
           .order('created_at', { ascending: false });
@@ -2176,7 +2177,7 @@ function ReservationsScreen({ clubId, setScreen, clubProfile }) {
               {/* Kişi seçimi */}
               <div>
                 <div style={{ fontSize:12, fontWeight:700, color:'var(--text-2)', marginBottom:10, letterSpacing:0.4 }}>OYUNCU</div>
-                {(bkMemberId || bkCustomerId) ? (
+                {(bkMemberName || bkCustomerName) ? (
                   <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', border:'1.5px solid var(--brand-navy)', borderRadius:12, padding:'10px 14px', background:'#EEF2FF' }}>
                     <div style={{ display:'flex', alignItems:'center', gap:6 }}>
                       <span style={{ fontSize:14, fontWeight:700, color:'var(--brand-navy)' }}>{bkMemberName || bkCustomerName}</span>

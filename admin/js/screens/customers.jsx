@@ -12,6 +12,7 @@ function CustomerDetailModal({ customer, clubId, onClose, onReservation, onLinke
   const [packages,   setPackages]   = useState([]);
   const [loading,    setLoading]    = useState(true);
   const [addPkgOpen, setAddPkgOpen] = useState(false);
+  const [editPkg,    setEditPkg]    = useState(null); // düzenlenen kayıtlı paket
 
   // Eşleştir akışı
   const [linkStep,    setLinkStep]    = useState('idle'); // 'idle' | 'search' | 'confirm'
@@ -359,6 +360,10 @@ function CustomerDetailModal({ customer, clubId, onClose, onReservation, onLinke
                     {isCustom && (
                       <span style={{ fontSize: 10, fontWeight: 700, padding: '2px 7px', borderRadius: 20, background: '#FFF7ED', color: '#EA580C', border: '1px solid #FED7AA' }}>Özel</span>
                     )}
+                    <button onClick={() => setEditPkg(p)} title="Paketi düzenle"
+                      style={{ background: 'none', border: 'none', cursor: 'pointer', padding: 2, display: 'grid', placeItems: 'center', color: 'var(--brand-navy)' }}>
+                      <span className="material-icons" style={{ fontSize: 18 }}>edit</span>
+                    </button>
                   </div>
                   <div style={{ height: 6, borderRadius: 3, background: 'var(--border)', overflow: 'hidden', marginBottom: 4 }}>
                     <div style={{ height: '100%', width: `${Math.round(progress * 100)}%`, background: 'var(--brand-navy)', borderRadius: 3 }} />
@@ -396,6 +401,15 @@ function CustomerDetailModal({ customer, clubId, onClose, onReservation, onLinke
         customer={customer}
         clubId={clubId}
         onClose={() => setAddPkgOpen(false)}
+        onSaved={load}
+      />
+    )}
+    {editPkg && (
+      <EditPackageModal
+        pkg={editPkg}
+        customer={customer}
+        clubId={clubId}
+        onClose={() => setEditPkg(null)}
         onSaved={load}
       />
     )}
@@ -620,6 +634,214 @@ function AddPackageModal({ customer, clubId, onClose, onSaved }) {
           <button className="btn btn-ghost btn-sm" onClick={onClose}>Vazgeç</button>
           <button className="btn btn-pri btn-sm" onClick={handleSave} disabled={saving || loading}>
             {saving ? 'Kaydediliyor…' : 'Paketi Ekle'}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ── Ders Paketi Düzenle Modalı ───────────────────────────────
+// Müşteri profilinden kayıtlı paketi düzenler: ödeme durumu, kalan/toplam ders, tahsil edilen
+// tutar, son kullanma, durum, antrenör, notlar. Bekliyor→Ödendi geçişinde satış finansı otomatik
+// yazılır (confirmPayment ile aynı mantık); Ödendi→Bekliyor'da finans otomatik geri ALINMAZ, uyarı verilir.
+function EditPackageModal({ pkg, customer, clubId, onClose, onSaved }) {
+  const { useState, useEffect } = React;
+  const [coaches, setCoaches] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [saving,  setSaving]  = useState(false);
+
+  const [paymentStatus, setPaymentStatus] = useState(pkg.payment_status === 'paid' ? 'paid' : 'pending');
+  const [totalPaid,     setTotalPaid]     = useState(String(pkg.total_paid ?? pkg.package?.price ?? pkg.custom_price ?? ''));
+  const [totalLessons,  setTotalLessons]  = useState(String(pkg.total_lessons ?? pkg.package?.total_lessons ?? ''));
+  const [usedLessons,   setUsedLessons]   = useState(String(pkg.used_lessons ?? 0));
+  const [expiryDate,    setExpiryDate]    = useState(pkg.expiry_date ? pkg.expiry_date.slice(0, 10) : '');
+  const [status,        setStatus]        = useState(pkg.status === 'completed' ? 'completed' : 'active');
+  const [coachId,       setCoachId]       = useState(pkg.coach_id || '');
+  const [notes,         setNotes]         = useState(pkg.notes || '');
+
+  useEffect(() => {
+    (async () => {
+      const cs = await CoachSvc.getActiveClubCoaches(clubId);
+      setCoaches(cs || []);
+      setLoading(false);
+    })();
+  }, []);
+
+  const wasPaid  = pkg.payment_status === 'paid';
+  const pkgName  = pkg.package?.name || pkg.custom_name || 'Özel Paket';
+  const usedNum  = parseInt(usedLessons, 10) || 0;
+  const totalNum = parseInt(totalLessons, 10) || 0;
+
+  const inputStyle = { width: '100%', boxSizing: 'border-box' };
+  const labelStyle = { fontSize: 12, fontWeight: 700, color: 'var(--text-2)', display: 'block', marginBottom: 5, letterSpacing: 0.4 };
+  const toggleBtn = (active, label, onClick) => (
+    <button type="button" onClick={onClick}
+      style={{ flex: 1, padding: '9px 0', borderRadius: 10, cursor: 'pointer', fontSize: 13, fontWeight: 600,
+        border:     active ? '1.5px solid var(--brand-navy)' : '1.5px solid var(--border)',
+        background: active ? '#EEF2FF' : 'var(--bg)',
+        color:      active ? 'var(--brand-navy)' : 'var(--text-2)' }}>
+      {label}
+    </button>
+  );
+
+  const handleSave = async () => {
+    if (!totalNum || totalNum <= 0) { alert('Toplam ders 0\'dan büyük olmalı.'); return; }
+    if (usedNum < 0 || usedNum > totalNum) { alert('Kullanılan ders 0 ile toplam ders arasında olmalı.'); return; }
+
+    const nowPaid    = paymentStatus === 'paid';
+    const wasPending = pkg.payment_status !== 'paid';
+
+    if (wasPaid && !nowPaid) {
+      if (!confirm('Ödeme durumu "Bekliyor"a çekiliyor. Daha önce yazılmış gelir ve hoca hakediş kayıtları OTOMATİK geri alınmaz; gerekiyorsa Finans ekranından elle düzeltin.\n\nDevam edilsin mi?')) return;
+    }
+
+    // Bekliyor→Ödendi geçişinde son kullanma boşsa geçerlilik gününden hesapla (confirmPayment ile aynı)
+    let expiryIso = expiryDate ? new Date(expiryDate + 'T12:00:00').toISOString() : null;
+    if (wasPending && nowPaid && !expiryIso) {
+      const d = new Date(); d.setDate(d.getDate() + (pkg.package?.validity_days || 90));
+      expiryIso = d.toISOString();
+    }
+
+    // Bekliyor→Ödendi: satış finansı (kulüp NET geliri + upfront hoca hakedişi) otomatik yazılır
+    let financeOpts = null;
+    if (wasPending && nowPaid) {
+      const price = parseFloat(totalPaid) || 0;
+      if (!(price > 0) && !confirm('Tahsil edilen tutar 0 görünüyor; gelir ve hoca hakedişi OLUŞMAYACAK. Yine de kaydedilsin mi?')) return;
+      const coachRec = coaches.find(c => c.individual_coach_id === (coachId || pkg.coach_id));
+      const pkgPct   = pkg.package?.coach_percentage ?? pkg.custom_coach_pct;
+      const coachPayRate = Number(pkgPct) > 0 ? Number(pkgPct) : (coachRec?.coach_pay_rate || 0);
+      const payoutMode   = pkg.coach_payout_mode || pkg.package?.coach_payout_mode || 'upfront';
+      financeOpts = {
+        clubId, price,
+        playerName:  customer.full_name,
+        packageName: pkgName,
+        coachInfo:   coachRec ? { clubCoachId: coachRec.id, coachName: coachRec.full_name, coachPayRate, individualCoachId: coachId || pkg.coach_id || null } : null,
+        payoutMode,
+      };
+    }
+
+    setSaving(true);
+    try {
+      await LessonPackageSvc.updatePlayerPackage(pkg.id, {
+        payment_status: nowPaid ? 'paid' : 'pending',
+        total_lessons:  totalNum,
+        used_lessons:   usedNum,
+        total_paid:     parseFloat(totalPaid) || 0,
+        expiry_date:    expiryIso,
+        status,
+        coach_id:       coachId || null,
+        notes:          notes.trim() || null,
+      }, financeOpts);
+      onSaved();
+      onClose();
+    } catch (e) { alert(e.message); }
+    finally { setSaving(false); }
+  };
+
+  return (
+    <div style={{ position: 'fixed', inset: 0, zIndex: 1100, background: 'rgba(0,0,0,0.5)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}
+      onClick={e => e.target === e.currentTarget && onClose()}>
+      <div style={{ background: 'var(--surface)', borderRadius: 20, width: 'min(480px,95vw)', maxHeight: '85vh', display: 'flex', flexDirection: 'column', boxShadow: '0 8px 40px rgba(0,0,0,0.18)' }}>
+        {/* Header */}
+        <div style={{ padding: '16px 20px 12px', borderBottom: '1px solid var(--border)', display: 'flex', alignItems: 'center', gap: 10 }}>
+          <span className="material-icons" style={{ color: 'var(--brand-navy)', fontSize: 20 }}>edit</span>
+          <span style={{ fontWeight: 800, fontSize: 17, flex: 1 }}>Paketi Düzenle</span>
+          <button onClick={onClose} style={{ background: 'none', border: 'none', cursor: 'pointer', padding: 4, display: 'grid', placeItems: 'center' }}>
+            <span className="material-icons" style={{ fontSize: 20, color: 'var(--text-2)' }}>close</span>
+          </button>
+        </div>
+
+        {/* Body */}
+        <div style={{ overflowY: 'auto', flex: 1, padding: '16px 20px', display: 'flex', flexDirection: 'column', gap: 16 }}>
+          {loading ? <Spinner /> : <>
+            <div style={{ fontWeight: 700, fontSize: 15 }}>{pkgName}</div>
+
+            {/* Ders sayıları */}
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
+              <div>
+                <label style={labelStyle}>TOPLAM DERS</label>
+                <input type="number" min="1" value={totalLessons}
+                  onChange={e => setTotalLessons(e.target.value)} style={inputStyle} />
+              </div>
+              <div>
+                <label style={labelStyle}>KULLANILAN DERS</label>
+                <input type="number" min="0" max={totalLessons || undefined} value={usedLessons}
+                  onChange={e => setUsedLessons(e.target.value)} style={inputStyle} />
+              </div>
+            </div>
+            <div style={{ fontSize: 12, color: 'var(--text-2)', marginTop: -8 }}>
+              Kalan ders: <strong>{Math.max(0, totalNum - usedNum)}</strong>
+            </div>
+
+            {/* Ödeme durumu */}
+            <div>
+              <label style={labelStyle}>ÖDEME DURUMU</label>
+              <div style={{ display: 'flex', gap: 8 }}>
+                {toggleBtn(paymentStatus === 'paid', 'Ödendi', () => setPaymentStatus('paid'))}
+                {toggleBtn(paymentStatus === 'pending', 'Bekliyor', () => setPaymentStatus('pending'))}
+              </div>
+              {!wasPaid && paymentStatus === 'paid' && (
+                <div style={{ fontSize: 11, color: '#059669', marginTop: 6 }}>
+                  Kaydedince gelir ve (upfront) hoca hakedişi otomatik oluşturulacak.
+                </div>
+              )}
+              {wasPaid && (
+                <div style={{ fontSize: 11, color: 'var(--text-2)', marginTop: 6 }}>
+                  Not: Zaten ödenmiş bir pakette tutarı değiştirmek geçmiş gelir kaydını otomatik güncellemez.
+                </div>
+              )}
+            </div>
+
+            {/* Tutar */}
+            <div>
+              <label style={labelStyle}>TAHSİL EDİLEN TUTAR (₺)</label>
+              <input type="number" min="0" value={totalPaid}
+                onChange={e => setTotalPaid(e.target.value)} placeholder="0" style={inputStyle} />
+            </div>
+
+            {/* Son kullanma + Durum */}
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
+              <div>
+                <label style={labelStyle}>SON KULLANMA</label>
+                <input type="date" value={expiryDate}
+                  onChange={e => setExpiryDate(e.target.value)} style={inputStyle} />
+              </div>
+              <div>
+                <label style={labelStyle}>DURUM</label>
+                <div style={{ display: 'flex', gap: 8 }}>
+                  {toggleBtn(status === 'active', 'Aktif', () => setStatus('active'))}
+                  {toggleBtn(status === 'completed', 'Tamamlandı', () => setStatus('completed'))}
+                </div>
+              </div>
+            </div>
+
+            {/* Antrenör */}
+            <div>
+              <label style={labelStyle}>ANTRENÖR (opsiyonel — boş bırakılırsa tüm antrenörlerde geçerli)</label>
+              <select value={coachId} onChange={e => setCoachId(e.target.value)} style={inputStyle}>
+                <option value="">Tüm antrenörler</option>
+                {coaches.map(c => (
+                  <option key={c.id} value={c.individual_coach_id || ''}>{c.full_name}</option>
+                ))}
+              </select>
+            </div>
+
+            {/* Notlar */}
+            <div>
+              <label style={labelStyle}>NOTLAR (opsiyonel)</label>
+              <textarea value={notes} onChange={e => setNotes(e.target.value)}
+                placeholder="Not ekleyin..." rows={2}
+                style={{ ...inputStyle, resize: 'vertical' }} />
+            </div>
+          </>}
+        </div>
+
+        {/* Footer */}
+        <div style={{ padding: '12px 20px', borderTop: '1px solid var(--border)', display: 'flex', justifyContent: 'flex-end', gap: 10 }}>
+          <button className="btn btn-ghost btn-sm" onClick={onClose}>Vazgeç</button>
+          <button className="btn btn-pri btn-sm" onClick={handleSave} disabled={saving || loading}>
+            {saving ? 'Kaydediliyor…' : 'Kaydet'}
           </button>
         </div>
       </div>

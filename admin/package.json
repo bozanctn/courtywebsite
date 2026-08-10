@@ -1,0 +1,12 @@
+{
+  "name": "courty-admin",
+  "private": true,
+  "version": "1.0.0",
+  "description": "CourtyCLUB yönetim paneli — derleme adımı (jsx → js)",
+  "scripts": {
+    "build": "node build.mjs"
+  },
+  "devDependencies": {
+    "esbuild": "^0.28.2"
+  }
+}

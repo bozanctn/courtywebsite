@@ -103,7 +103,7 @@ window.RecurringLessonModal = function RecurringLessonModal({ clubId, onClose, o
         const clubCoachId = recCoach?.id;
         const sel = '*, lesson_packages(name, total_lessons, price, validity_days)';
         const baseFilters = (q) => q
-          .eq('club_id', clubId).eq('payment_status', 'paid').eq('status', 'active')
+          .eq('club_id', clubId).in('payment_status', ['paid', 'pending']).eq('status', 'active')
           .or(`expiry_date.is.null,expiry_date.gt.${now}`).order('created_at', { ascending: false });
         const applyCoachFilter = (q) => {
           if (!coachAuthId && !clubCoachId) return q;
@@ -144,7 +144,7 @@ window.RecurringLessonModal = function RecurringLessonModal({ clubId, onClose, o
     const remaining = plp.total_lessons - plp.used_lessons;
     if (remaining <= 0) throw new Error('Bu pakette kalan ders yok');
     if (plp.status !== 'active') throw new Error('Bu paket aktif değil');
-    if (plp.payment_status !== 'paid') throw new Error('Paket henüz ödenmemiş');
+    // Ödeme onayı bekleyen (pending) paketlerden de ders düşülebilir — tahsilat programdan bağımsız.
     const newUsed = plp.used_lessons + 1;
     const isCompleted = newUsed >= plp.total_lessons;
     const { error: sErr } = await sb.from('lesson_package_sessions').insert({

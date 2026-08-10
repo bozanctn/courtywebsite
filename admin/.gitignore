@@ -1,0 +1,8 @@
+# Bağımlılıklar — git'e girmesin (npm install ile üretilir)
+node_modules/
+
+# Derlenmiş çıktı: root .gitignore "dist/" yok sayıyor; ama bu proje statik
+# sunulduğu (Live Server / dosya kopyalama) için derlenmiş dosyalar gerekli.
+# Bu yüzden admin/dist'i git'e DAHİL ediyoruz.
+!dist/
+!dist/**
