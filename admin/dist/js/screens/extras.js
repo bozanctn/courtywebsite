@@ -1594,32 +1594,49 @@ ${lines}
     if (proms.length) await Promise.all(proms);
     return warnings;
   };
-  const reconcilePackageOnEdit = async ({ editId, orig, coachId, studentName, playerId, date }) => {
+  const reconcilePackageOnEdit = async ({ editId, orig, coachId, studentName, playerId, customerId, date }) => {
     const origInd = orig.coach_id ? coachesList.find((c) => c.id === orig.coach_id)?.individual_coach_id || null : null;
     const newInd = coachId ? coachesList.find((c) => c.id === coachId)?.individual_coach_id || null : null;
     const oldCoachDisplay = orig.coach_id ? coachesList.find((c) => c.id === orig.coach_id)?.full_name || orig.coach_name : orig.coach_name;
     const oldStu = orig.student_name || "\xD6\u011Frenci";
-    if (origInd) {
-      const { data: sess } = await sb.from("lesson_package_sessions").select("id, player_package_id").eq("session_date", orig.date).eq("coach_id", origInd).is("lesson_id", null).limit(1);
-      if (sess?.length) {
-        const { id: sessId, player_package_id } = sess[0];
-        const { data: plp } = await sb.from("player_lesson_packages").select("used_lessons").eq("id", player_package_id).single();
-        if (plp) {
-          await sb.from("player_lesson_packages").update({
-            used_lessons: Math.max(0, (plp.used_lessons || 0) - 1),
-            status: "active",
-            updated_at: (/* @__PURE__ */ new Date()).toISOString()
-          }).eq("id", player_package_id);
-        }
-        await sb.from("lesson_package_sessions").delete().eq("id", sessId);
+    const _nrmR = (s) => (s || "").toLocaleLowerCase("tr").replace(/\s+/g, " ").trim();
+    let oldSessId = orig.pkg_session_id || null;
+    let oldPkgId = orig.player_package_id || null;
+    if (orig.is_package && !oldSessId) {
+      const { data: sess } = await sb.from("lesson_package_sessions").select("id, player_package_id, coach_id").eq("session_date", orig.date).is("lesson_id", null);
+      const ppIds = [...new Set((sess || []).map((s) => s.player_package_id).filter(Boolean))];
+      const owners = /* @__PURE__ */ new Map();
+      if (ppIds.length > 0) {
+        const { data: pps } = await sb.from("player_lesson_packages").select("id, club_customer_id, player_id, manual_player_name").in("id", ppIds);
+        (pps || []).forEach((p) => owners.set(p.id, p));
       }
+      const hit = (sess || []).find((s) => {
+        const o = owners.get(s.player_package_id) || {};
+        const coachOk = !s.coach_id || !origInd || s.coach_id === origInd;
+        return coachOk && (orig.club_customer_id && o.club_customer_id && orig.club_customer_id === o.club_customer_id || orig.player_id && o.player_id && orig.player_id === o.player_id || orig.student_name && o.manual_player_name && _nrmR(orig.student_name) === _nrmR(o.manual_player_name));
+      });
+      if (hit) {
+        oldSessId = hit.id;
+        oldPkgId = hit.player_package_id;
+      }
+    }
+    if (oldSessId && oldPkgId) {
+      const { data: plp } = await sb.from("player_lesson_packages").select("used_lessons").eq("id", oldPkgId).single();
+      if (plp) {
+        await sb.from("player_lesson_packages").update({
+          used_lessons: Math.max(0, (plp.used_lessons || 0) - 1),
+          status: "active",
+          updated_at: (/* @__PURE__ */ new Date()).toISOString()
+        }).eq("id", oldPkgId);
+      }
+      await sb.from("lesson_package_sessions").delete().eq("id", oldSessId);
     }
     await sb.from("coach_earnings").delete().eq("manual_lesson_id", editId).eq("description", "Ders Paketi Oturumu");
     const oldSig = `${oldCoachDisplay || "Antren\xF6r"} - ${oldStu} - Ders Paketi Oturumu`;
     const { data: cfOld } = await sb.from("club_finances").select("id").eq("club_id", clubId).eq("date", orig.date).eq("category", "Ders Paketi Geliri").eq("description", oldSig);
     if (cfOld?.length === 1) await sb.from("club_finances").delete().eq("id", cfOld[0].id);
     const newManualName = !playerId ? studentName || null : null;
-    if (!playerId && !newManualName) {
+    if (!playerId && !newManualName && !customerId) {
       return "Paket dersinde ki\u015Fi kald\u0131r\u0131ld\u0131; ders paketsiz kald\u0131. \xDCcret/\xF6deme durumunu kontrol edin.";
     }
     const now = (/* @__PURE__ */ new Date()).toISOString();
@@ -1627,6 +1644,7 @@ ${lines}
     const queries = [];
     if (playerId) queries.push(baseQ().eq("player_id", playerId));
     if (newManualName) queries.push(baseQ().is("player_id", null).eq("manual_player_name", newManualName));
+    if (customerId) queries.push(baseQ().eq("club_customer_id", customerId));
     const results = await Promise.all(queries);
     const seen = /* @__PURE__ */ new Set();
     const pkgs = results.flatMap((r) => r.data || []).filter((r) => {
@@ -1724,6 +1742,7 @@ ${lines}
           coachId,
           studentName: payload.student_name,
           playerId: payload.player_id || null,
+          customerId: payload.club_customer_id || null,
           date: payload.date
         });
         if (msg) alert(msg);
@@ -1896,7 +1915,11 @@ ${lines}
           club_customer_id: row.club_customer_id || null,
           price_mode: row.price_mode || "normal",
           payment_status: row.payment_status || "unpaid",
-          is_package: !!d.isPackageLesson
+          is_package: !!d.isPackageLesson,
+          // Yüklemede öğrenci-bazlı bulunmuş seans/paket id'si (reconcile bunu kullanır; koç+tarih
+          // taze araması null-koç seansını kaçırır / yanlış öğrenciyi geri alabilir).
+          pkg_session_id: d.pkgSessionId || null,
+          player_package_id: d.playerPackageId || null
         }
       });
     } catch (e) {
