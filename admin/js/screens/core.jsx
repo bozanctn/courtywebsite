@@ -345,6 +345,8 @@ function ReservationsScreen({ clubId, setScreen, clubProfile }) {
   const [lessonPackages,          setLessonPackages]          = useState([]);
   const [lessonUsePackage,        setLessonUsePackage]        = useState(false);
   const [lessonSelectedPackageId, setLessonSelectedPackageId] = useState(null);
+  const [lessonDiffPay,           setLessonDiffPay]           = useState(false); // paket (per_session) dersinde farklı hoca payı (%)
+  const [lessonDiffPayPct,        setLessonDiffPayPct]        = useState('');
   const [lessonLoadingPackages,   setLessonLoadingPackages]   = useState(false);
   const [lessonPriceMode,         setLessonPriceMode]         = useState('normal'); // 'normal' | 'split'
   const [lessonCoachAmountInput,  setLessonCoachAmountInput]  = useState('');
@@ -1123,21 +1125,45 @@ function ReservationsScreen({ clubId, setScreen, clubProfile }) {
         .eq('date', d)
         .order('start_time', { ascending: true });
 
-      // Manuel dersler için paket seans bilgisi — lesson_id IS NULL + session_date eşleşmesiyle
-      const individualIds = allClubCoaches.map(c => c.individual_coach_id).filter(Boolean);
-      let manualPkgMap = new Map(); // individual_coach_id → { session_id, player_package_id }
-      if (individualIds.length > 0) {
-        const { data: manualSessions } = await sb.from('lesson_package_sessions')
-          .select('id, player_package_id, coach_id')
-          .eq('session_date', d)
-          .is('lesson_id', null)
-          .in('coach_id', individualIds);
-        (manualSessions || []).forEach(s => manualPkgMap.set(s.coach_id, { session_id: s.id, player_package_id: s.player_package_id }));
+      // Manuel dersler için paket seans bilgisi — ÖĞRENCİ BAZLI (koç+tarih+kişi).
+      // Eskiden yalnız koç+tarih'e bakılıyordu → aynı koçun aynı gün BAŞKA öğrencisinin
+      // seansı bu derse yanlışlıkla "paketli" gibi yansıyordu. Artık paket bu dersin
+      // öğrencisine (club_customer_id / player_id / isim) ait değilse eşleşmez.
+      // Seansları KOÇA göre değil bu kulübün paketlerine göre kapsıyoruz: paket "Tüm antrenörler"
+      // ile açıldıysa seans coach_id'si null olabilir ve eski koç filtresi (.in coach_id) bunları
+      // hiç yüklemiyordu. Eşleşme öğrenci (müşteri/oyuncu/isim) + tarih ile; coach_id yalnız
+      // ikisi de doluysa ayrıştırıcı olarak kullanılır.
+      const _nrmMp = (s) => (s || '').toLocaleLowerCase('tr').replace(/\s+/g, ' ').trim();
+      let manualSessList = [];
+      {
+        const { data: clubPkgs } = await sb.from('player_lesson_packages')
+          .select('id, club_customer_id, player_id, manual_player_name')
+          .eq('club_id', clubId);
+        const ppOwner = new Map();
+        (clubPkgs || []).forEach(p => ppOwner.set(p.id, p));
+        const ppIds = (clubPkgs || []).map(p => p.id);
+        if (ppIds.length > 0) {
+          const { data: manualSessions } = await sb.from('lesson_package_sessions')
+            .select('id, player_package_id, coach_id')
+            .eq('session_date', d)
+            .is('lesson_id', null)
+            .in('player_package_id', ppIds);
+          manualSessList = (manualSessions || []).map(s => {
+            const o = ppOwner.get(s.player_package_id) || {};
+            return { session_id: s.id, player_package_id: s.player_package_id, coach_id: s.coach_id,
+                     pkgCust: o.club_customer_id || null, pkgPlayer: o.player_id || null, pkgName: o.manual_player_name || null };
+          });
+        }
       }
 
       (manual || []).forEach(m => {
-        const individualId = coachToIndividual.get(m.coach_id);
-        const pkgInfo = individualId ? manualPkgMap.get(individualId) : null;
+        const individualId = coachToIndividual.get(m.coach_id) || null;
+        const cands = manualSessList.filter(s =>
+          (m.club_customer_id && s.pkgCust && m.club_customer_id === s.pkgCust) ||
+          (m.player_id && s.pkgPlayer && m.player_id === s.pkgPlayer) ||
+          (m.student_name && s.pkgName && _nrmMp(m.student_name) === _nrmMp(s.pkgName))
+        );
+        const pkgInfo = cands.find(s => s.coach_id && individualId && s.coach_id === individualId) || cands[0] || null;
         combined.push({
           id:               m.id,
           date:             m.date,
@@ -1224,6 +1250,10 @@ function ReservationsScreen({ clubId, setScreen, clubProfile }) {
     if (!coachOk) { alert('Lütfen bir antrenör seçin veya antrenör adını girin.'); return; }
     if (lessonForm.start_time >= lessonForm.end_time) {
       alert('Bitiş saati başlangıç saatinden sonra olmalıdır.'); return;
+    }
+    // "Paketten Kullan" açık ama paket seçilmedi → "ödenmiş 0 ₺" hayalet ders (düşmeden) oluşmasını engelle.
+    if (lessonUsePackage && !lessonSelectedPackageId) {
+      alert('"Paketten Kullan" açık ama bir paket seçilmedi. Bir paket seçin ya da kapatın.'); return;
     }
 
     // Geçmiş tarih kontrolü (yalnızca yeni ders) — engellemek yerine onay iste
@@ -1429,6 +1459,9 @@ function ReservationsScreen({ clubId, setScreen, clubProfile }) {
               duration_hours:  durH,
               total_amount:    amountVal || 0,
               club_coach_id:   coachId,
+              // Derse bağ: bu satır kort bloke gölgesidir, gerçek rezervasyon değil.
+              // Rezervasyon listeleri bunu eler, ders silinince FK ile birlikte gider.
+              manual_lesson_id: inserted.id,
             });
             if (bErr) console.warn('Kort takvim bloğu eklenemedi:', bErr.message);
           }
@@ -1470,7 +1503,9 @@ function ReservationsScreen({ clubId, setScreen, clubProfile }) {
                   const coachRec = coaches.find(c => c.id === coachId);
                   // Öncelik: pakette tanımlı % (varsa) → yoksa hocanın profil oranı
                   const pkgPct   = pkgDef.coach_percentage ?? pkg.custom_coach_pct;
-                  const coachPct = Number(pkgPct) > 0 ? Number(pkgPct) : (coachRec?.coach_pay_rate || 0);
+                  const coachPct = (lessonDiffPay && lessonDiffPayPct !== '' && !isNaN(Number(lessonDiffPayPct)))
+                    ? Number(lessonDiffPayPct)  // "Farklı Pay" toggle: bu ders için elle girilen %
+                    : (Number(pkgPct) > 0 ? Number(pkgPct) : (coachRec?.coach_pay_rate || 0));
                   const coachEarning = Math.round(perSessionTotal * (coachPct / 100) * 100) / 100;
                   if (coachRec && coachEarning > 0) {
                     await sb.from('coach_earnings').insert({
@@ -2506,8 +2541,10 @@ function ReservationsScreen({ clubId, setScreen, clubProfile }) {
                             setLessonUsePackage(next);
                             if (next) {
                               setLessonForm(prev => ({ ...prev, amount: '0', payment_status: 'paid' }));
+                              if (!lessonSelectedPackageId && lessonPackages.length === 1) setLessonSelectedPackageId(lessonPackages[0].id);
                             } else {
                               setLessonForm(prev => ({ ...prev, amount: '', payment_status: 'unpaid' }));
+                              setLessonDiffPay(false); setLessonDiffPayPct('');
                             }
                           }}>
                           <div style={{ width:18, height:18, borderRadius:9, background:'#fff', position:'absolute', top:3, left: lessonUsePackage ? 23 : 3, transition:'left 0.2s', boxShadow:'0 1px 3px rgba(0,0,0,0.3)' }} />
@@ -2537,6 +2574,30 @@ function ReservationsScreen({ clubId, setScreen, clubProfile }) {
                           <div style={{ fontSize:11, color:'#059669', fontWeight:600, paddingTop:4 }}>
                             Ders ücreti 0 ₺ olarak kaydedilecek, ödemesi paket satışında alındı.
                           </div>
+                          {(() => {
+                            const _selPkg = lessonPackages.find(p => p.id === lessonSelectedPackageId);
+                            const _perSession = (_selPkg?.lesson_packages?.coach_payout_mode || _selPkg?.coach_payout_mode) === 'per_session';
+                            if (!_perSession) return null;
+                            return (
+                              <div style={{ marginTop:4, padding:'10px 12px', borderRadius:10, border:'1.5px solid var(--border)', background:'var(--bg)' }}>
+                                <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', gap:8 }}>
+                                  <div>
+                                    <div style={{ fontSize:12, fontWeight:700, color: lessonDiffPay ? 'var(--brand-navy)' : 'var(--text-1)' }}>Farklı Pay (%)</div>
+                                    <div style={{ fontSize:10, color:'var(--text-2)' }}>Kapalıysa antrenöre tanımlı oran uygulanır.</div>
+                                  </div>
+                                  <div style={{ width:44, height:24, borderRadius:12, background: lessonDiffPay ? 'var(--brand-navy)' : '#CBD5E1', cursor:'pointer', position:'relative', flexShrink:0 }}
+                                    onClick={() => setLessonDiffPay(v => !v)}>
+                                    <div style={{ width:18, height:18, borderRadius:9, background:'#fff', position:'absolute', top:3, left: lessonDiffPay ? 23 : 3, transition:'left 0.2s' }} />
+                                  </div>
+                                </div>
+                                {lessonDiffPay && (
+                                  <input type="number" min="0" max="100" placeholder="Örn: 50" value={lessonDiffPayPct}
+                                    onChange={e => setLessonDiffPayPct(e.target.value)}
+                                    style={{ width:'100%', marginTop:8, border:'1.5px solid var(--border)', borderRadius:8, padding:'8px 10px', fontSize:14, boxSizing:'border-box' }} />
+                                )}
+                              </div>
+                            );
+                          })()}
                         </div>
                       )}
                     </div>

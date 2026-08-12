@@ -192,6 +192,8 @@ function ReservationsScreen({ clubId, setScreen, clubProfile }) {
   const [lessonPackages, setLessonPackages] = useState([]);
   const [lessonUsePackage, setLessonUsePackage] = useState(false);
   const [lessonSelectedPackageId, setLessonSelectedPackageId] = useState(null);
+  const [lessonDiffPay, setLessonDiffPay] = useState(false);
+  const [lessonDiffPayPct, setLessonDiffPayPct] = useState("");
   const [lessonLoadingPackages, setLessonLoadingPackages] = useState(false);
   const [lessonPriceMode, setLessonPriceMode] = useState("normal");
   const [lessonCoachAmountInput, setLessonCoachAmountInput] = useState("");
@@ -928,15 +930,34 @@ Tutar: \u20BA${amount.toLocaleString("tr-TR")}` : "";
       const combined = [];
       const coachToIndividual = new Map(allClubCoaches.map((c) => [c.id, c.individual_coach_id]));
       const { data: manual } = await sb.from("club_manual_lessons").select("*, club_coaches(full_name)").eq("club_id", clubId).eq("date", d).order("start_time", { ascending: true });
-      const individualIds = allClubCoaches.map((c) => c.individual_coach_id).filter(Boolean);
-      let manualPkgMap = /* @__PURE__ */ new Map();
-      if (individualIds.length > 0) {
-        const { data: manualSessions } = await sb.from("lesson_package_sessions").select("id, player_package_id, coach_id").eq("session_date", d).is("lesson_id", null).in("coach_id", individualIds);
-        (manualSessions || []).forEach((s) => manualPkgMap.set(s.coach_id, { session_id: s.id, player_package_id: s.player_package_id }));
+      const _nrmMp = (s) => (s || "").toLocaleLowerCase("tr").replace(/\s+/g, " ").trim();
+      let manualSessList = [];
+      {
+        const { data: clubPkgs } = await sb.from("player_lesson_packages").select("id, club_customer_id, player_id, manual_player_name").eq("club_id", clubId);
+        const ppOwner = /* @__PURE__ */ new Map();
+        (clubPkgs || []).forEach((p2) => ppOwner.set(p2.id, p2));
+        const ppIds = (clubPkgs || []).map((p2) => p2.id);
+        if (ppIds.length > 0) {
+          const { data: manualSessions } = await sb.from("lesson_package_sessions").select("id, player_package_id, coach_id").eq("session_date", d).is("lesson_id", null).in("player_package_id", ppIds);
+          manualSessList = (manualSessions || []).map((s) => {
+            const o = ppOwner.get(s.player_package_id) || {};
+            return {
+              session_id: s.id,
+              player_package_id: s.player_package_id,
+              coach_id: s.coach_id,
+              pkgCust: o.club_customer_id || null,
+              pkgPlayer: o.player_id || null,
+              pkgName: o.manual_player_name || null
+            };
+          });
+        }
       }
       (manual || []).forEach((m) => {
-        const individualId = coachToIndividual.get(m.coach_id);
-        const pkgInfo = individualId ? manualPkgMap.get(individualId) : null;
+        const individualId = coachToIndividual.get(m.coach_id) || null;
+        const cands = manualSessList.filter(
+          (s) => m.club_customer_id && s.pkgCust && m.club_customer_id === s.pkgCust || m.player_id && s.pkgPlayer && m.player_id === s.pkgPlayer || m.student_name && s.pkgName && _nrmMp(m.student_name) === _nrmMp(s.pkgName)
+        );
+        const pkgInfo = cands.find((s) => s.coach_id && individualId && s.coach_id === individualId) || cands[0] || null;
         combined.push({
           id: m.id,
           date: m.date,
@@ -1017,6 +1038,10 @@ Tutar: \u20BA${amount.toLocaleString("tr-TR")}` : "";
     }
     if (lessonForm.start_time >= lessonForm.end_time) {
       alert("Biti\u015F saati ba\u015Flang\u0131\xE7 saatinden sonra olmal\u0131d\u0131r.");
+      return;
+    }
+    if (lessonUsePackage && !lessonSelectedPackageId) {
+      alert('"Paketten Kullan" a\xE7\u0131k ama bir paket se\xE7ilmedi. Bir paket se\xE7in ya da kapat\u0131n.');
       return;
     }
     if (isNew) {
@@ -1189,7 +1214,10 @@ Yine de eklensin mi?`)) return;
               is_solo_booking: false,
               duration_hours: durH,
               total_amount: amountVal || 0,
-              club_coach_id: coachId
+              club_coach_id: coachId,
+              // Derse bağ: bu satır kort bloke gölgesidir, gerçek rezervasyon değil.
+              // Rezervasyon listeleri bunu eler, ders silinince FK ile birlikte gider.
+              manual_lesson_id: inserted.id
             });
             if (bErr) console.warn("Kort takvim blo\u011Fu eklenemedi:", bErr.message);
           }
@@ -1221,7 +1249,7 @@ Yine de eklensin mi?`)) return;
                   const perSessionTotal = (pkgDef.price ?? pkg.custom_price ?? 0) / (pkgDef.total_lessons || pkg.total_lessons || 1);
                   const coachRec = coaches.find((c) => c.id === coachId);
                   const pkgPct = pkgDef.coach_percentage ?? pkg.custom_coach_pct;
-                  const coachPct = Number(pkgPct) > 0 ? Number(pkgPct) : coachRec?.coach_pay_rate || 0;
+                  const coachPct = lessonDiffPay && lessonDiffPayPct !== "" && !isNaN(Number(lessonDiffPayPct)) ? Number(lessonDiffPayPct) : Number(pkgPct) > 0 ? Number(pkgPct) : coachRec?.coach_pay_rate || 0;
                   const coachEarning = Math.round(perSessionTotal * (coachPct / 100) * 100) / 100;
                   if (coachRec && coachEarning > 0) {
                     await sb.from("coach_earnings").insert({
@@ -2061,8 +2089,11 @@ ${lines}
           setLessonUsePackage(next);
           if (next) {
             setLessonForm((prev) => ({ ...prev, amount: "0", payment_status: "paid" }));
+            if (!lessonSelectedPackageId && lessonPackages.length === 1) setLessonSelectedPackageId(lessonPackages[0].id);
           } else {
             setLessonForm((prev) => ({ ...prev, amount: "", payment_status: "unpaid" }));
+            setLessonDiffPay(false);
+            setLessonDiffPayPct("");
           }
         }
       },
@@ -2081,7 +2112,30 @@ ${lines}
         /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("div", { style: { fontSize: 13, fontWeight: 700, color: isSelected ? "var(--brand-navy)" : "var(--text-1)" } }, pkg.package_name || "Ders Paketi"), /* @__PURE__ */ React.createElement("div", { style: { fontSize: 11, color: "var(--text-2)" } }, remaining, " ders kald\u0131", expiry ? ` \xB7 Son: ${expiry}` : "")),
         isSelected && /* @__PURE__ */ React.createElement("span", { className: "material-icons", style: { fontSize: 18, color: "var(--brand-navy)" } }, "check_circle")
       );
-    }), /* @__PURE__ */ React.createElement("div", { style: { fontSize: 11, color: "#059669", fontWeight: 600, paddingTop: 4 } }, "Ders \xFCcreti 0 \u20BA olarak kaydedilecek, \xF6demesi paket sat\u0131\u015F\u0131nda al\u0131nd\u0131."))) : null), /* @__PURE__ */ React.createElement("div", { style: { fontSize: 12, fontWeight: 700, color: "var(--text-2)", marginBottom: 8, letterSpacing: 0.4 } }, "KORT"), lessonCourts.length === 0 ? /* @__PURE__ */ React.createElement("div", { style: { padding: 16, borderRadius: 12, background: "var(--bg)", border: "1px solid var(--border)", textAlign: "center", color: "var(--text-2)", fontSize: 13, marginBottom: 16 } }, "Hen\xFCz kort eklenmemi\u015F.") : /* @__PURE__ */ React.createElement("div", { style: { display: "flex", flexWrap: "wrap", gap: 8, marginBottom: 16 } }, lessonCourts.map((c) => /* @__PURE__ */ React.createElement(
+    }), /* @__PURE__ */ React.createElement("div", { style: { fontSize: 11, color: "#059669", fontWeight: 600, paddingTop: 4 } }, "Ders \xFCcreti 0 \u20BA olarak kaydedilecek, \xF6demesi paket sat\u0131\u015F\u0131nda al\u0131nd\u0131."), (() => {
+      const _selPkg = lessonPackages.find((p) => p.id === lessonSelectedPackageId);
+      const _perSession = (_selPkg?.lesson_packages?.coach_payout_mode || _selPkg?.coach_payout_mode) === "per_session";
+      if (!_perSession) return null;
+      return /* @__PURE__ */ React.createElement("div", { style: { marginTop: 4, padding: "10px 12px", borderRadius: 10, border: "1.5px solid var(--border)", background: "var(--bg)" } }, /* @__PURE__ */ React.createElement("div", { style: { display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8 } }, /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("div", { style: { fontSize: 12, fontWeight: 700, color: lessonDiffPay ? "var(--brand-navy)" : "var(--text-1)" } }, "Farkl\u0131 Pay (%)"), /* @__PURE__ */ React.createElement("div", { style: { fontSize: 10, color: "var(--text-2)" } }, "Kapal\u0131ysa antren\xF6re tan\u0131ml\u0131 oran uygulan\u0131r.")), /* @__PURE__ */ React.createElement(
+        "div",
+        {
+          style: { width: 44, height: 24, borderRadius: 12, background: lessonDiffPay ? "var(--brand-navy)" : "#CBD5E1", cursor: "pointer", position: "relative", flexShrink: 0 },
+          onClick: () => setLessonDiffPay((v) => !v)
+        },
+        /* @__PURE__ */ React.createElement("div", { style: { width: 18, height: 18, borderRadius: 9, background: "#fff", position: "absolute", top: 3, left: lessonDiffPay ? 23 : 3, transition: "left 0.2s" } })
+      )), lessonDiffPay && /* @__PURE__ */ React.createElement(
+        "input",
+        {
+          type: "number",
+          min: "0",
+          max: "100",
+          placeholder: "\xD6rn: 50",
+          value: lessonDiffPayPct,
+          onChange: (e) => setLessonDiffPayPct(e.target.value),
+          style: { width: "100%", marginTop: 8, border: "1.5px solid var(--border)", borderRadius: 8, padding: "8px 10px", fontSize: 14, boxSizing: "border-box" }
+        }
+      ));
+    })())) : null), /* @__PURE__ */ React.createElement("div", { style: { fontSize: 12, fontWeight: 700, color: "var(--text-2)", marginBottom: 8, letterSpacing: 0.4 } }, "KORT"), lessonCourts.length === 0 ? /* @__PURE__ */ React.createElement("div", { style: { padding: 16, borderRadius: 12, background: "var(--bg)", border: "1px solid var(--border)", textAlign: "center", color: "var(--text-2)", fontSize: 13, marginBottom: 16 } }, "Hen\xFCz kort eklenmemi\u015F.") : /* @__PURE__ */ React.createElement("div", { style: { display: "flex", flexWrap: "wrap", gap: 8, marginBottom: 16 } }, lessonCourts.map((c) => /* @__PURE__ */ React.createElement(
       "div",
       {
         key: c.id,

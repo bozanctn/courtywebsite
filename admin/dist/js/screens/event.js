@@ -1562,7 +1562,8 @@ function LessonPackagesScreen({ clubId }) {
         coach_id: coachProfileId(form.coach_id) || null,
         is_active: form.is_active !== false,
         coach_payout_mode: form.coach_payout_mode === "per_session" ? "per_session" : "upfront",
-        coach_percentage: form.coach_percentage === "" || form.coach_percentage == null ? null : Number(form.coach_percentage)
+        coach_percentage: null
+        // Paket bazlı sabit pay kaldırıldı — finans, antrenöre tanımlı coach_pay_rate'i kullanır.
       };
       if (pkgModal.type === "add") {
         await LessonPackageSvc.createPackage(clubId, payload);
@@ -2014,17 +2015,7 @@ Not: Hoca bu paketten toplu \xF6dendi\u011Fi i\xE7in, kullan\u0131lmayan dersler
         value: form.validity_days ?? "",
         onChange: (e) => setForm({ ...form, validity_days: e.target.value })
       }
-    )), Number(form.total_lessons) > 0 && Number(form.price) > 0 && /* @__PURE__ */ React.createElement("div", { style: { background: "#F5F3FF", border: "1px solid #DDD6FE", borderRadius: 8, padding: "8px 12px", fontSize: 12, color: "#7C3AED" } }, "Ders ba\u015F\u0131: ", fmtMoney(Number(form.price) / Number(form.total_lessons))), /* @__PURE__ */ React.createElement(Field, { label: "Hoca Pay\u0131 (%)" }, /* @__PURE__ */ React.createElement(
-      "input",
-      {
-        type: "number",
-        min: 0,
-        max: 100,
-        placeholder: "\xD6rn: 50",
-        value: form.coach_percentage ?? "",
-        onChange: (e) => setForm({ ...form, coach_percentage: e.target.value })
-      }
-    )), /* @__PURE__ */ React.createElement(Field, { label: "Hoca Pay\u0131 Tahsilat Bi\xE7imi" }, /* @__PURE__ */ React.createElement("div", { style: { display: "flex", gap: 8 } }, [{ v: "upfront", l: "Toptan (pe\u015Fin)" }, { v: "per_session", l: "Ders ba\u015F\u0131na" }].map((o) => {
+    )), Number(form.total_lessons) > 0 && Number(form.price) > 0 && /* @__PURE__ */ React.createElement("div", { style: { background: "#F5F3FF", border: "1px solid #DDD6FE", borderRadius: 8, padding: "8px 12px", fontSize: 12, color: "#7C3AED" } }, "Ders ba\u015F\u0131: ", fmtMoney(Number(form.price) / Number(form.total_lessons))), /* @__PURE__ */ React.createElement("div", { style: { fontSize: 12, color: "var(--text-2)", background: "var(--bg)", border: "1px solid var(--border)", borderRadius: 8, padding: "8px 12px" } }, "Hoca pay\u0131 bu pakette sabit girilmez; ", /* @__PURE__ */ React.createElement("strong", null, "antren\xF6re tan\u0131ml\u0131 pay oran\u0131ndan"), " (Ekip > antren\xF6r) otomatik uygulan\u0131r."), /* @__PURE__ */ React.createElement(Field, { label: "Hoca Pay\u0131 Tahsilat Bi\xE7imi" }, /* @__PURE__ */ React.createElement("div", { style: { display: "flex", gap: 8 } }, [{ v: "upfront", l: "Toptan (pe\u015Fin)" }, { v: "per_session", l: "Ders ba\u015F\u0131na" }].map((o) => {
       const sel = (form.coach_payout_mode || "upfront") === o.v;
       return /* @__PURE__ */ React.createElement(
         "button",

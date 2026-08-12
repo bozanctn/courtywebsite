@@ -343,7 +343,8 @@ function AddPackageModal({ customer, clubId, onClose, onSaved }) {
         packageName: mode === "predefined" ? selectedPkg.name : customName.trim(),
         totalLessons: mode === "predefined" ? selectedPkg.total_lessons : +customLessons,
         customPrice: mode === "custom" ? +customPrice : null,
-        customCoachPct: mode === "custom" ? +customCoachPct : null,
+        customCoachPct: null,
+        // Özel pakette de sabit pay yok — finans, antrenöre tanımlı orandan hesaplar.
         validityDays: mode === "predefined" ? selectedPkg.validity_days || 90 : +customValidity,
         coachId: coachId || null,
         paymentStatus,
@@ -453,17 +454,6 @@ function AddPackageModal({ customer, clubId, onClose, onSaved }) {
         placeholder: "2000",
         style: inputStyle
       }
-    )), /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("label", { style: labelStyle }, "HOCA PAYI (%)"), /* @__PURE__ */ React.createElement(
-      "input",
-      {
-        type: "number",
-        min: "0",
-        max: "100",
-        value: customCoachPct,
-        onChange: (e) => setCustomCoachPct(e.target.value),
-        placeholder: "70",
-        style: inputStyle
-      }
     )), /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("label", { style: labelStyle }, "GE\xC7ERL\u0130L\u0130K (g\xFCn)"), /* @__PURE__ */ React.createElement(
       "input",
       {
@@ -474,7 +464,7 @@ function AddPackageModal({ customer, clubId, onClose, onSaved }) {
         placeholder: "90",
         style: inputStyle
       }
-    ))), /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("label", { style: labelStyle }, "HOCA (opsiyonel \u2014 bo\u015F b\u0131rak\u0131l\u0131rsa t\xFCm ho\xE7alarda ge\xE7erli)"), /* @__PURE__ */ React.createElement("select", { value: coachId, onChange: (e) => setCoachId(e.target.value), style: inputStyle }, /* @__PURE__ */ React.createElement("option", { value: "" }, "T\xFCm antren\xF6rler"), coaches.map((c) => /* @__PURE__ */ React.createElement("option", { key: c.id, value: c.individual_coach_id || "" }, c.full_name))))), /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("label", { style: labelStyle }, "\xD6DEME DURUMU"), /* @__PURE__ */ React.createElement("div", { style: { display: "flex", gap: 8, marginBottom: paymentStatus === "paid" ? 10 : 0 } }, payBtn("paid", "\xD6dendi"), payBtn("pending", "Bekliyor")), paymentStatus === "paid" && /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("label", { style: labelStyle }, "\xD6DENEN TUTAR (\u20BA)"), /* @__PURE__ */ React.createElement(
+    ))), /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("label", { style: labelStyle }, "HOCA (opsiyonel \u2014 bo\u015F b\u0131rak\u0131l\u0131rsa t\xFCm ho\xE7alarda ge\xE7erli)"), /* @__PURE__ */ React.createElement("select", { value: coachId, onChange: (e) => setCoachId(e.target.value), style: inputStyle }, /* @__PURE__ */ React.createElement("option", { value: "" }, "T\xFCm antren\xF6rler"), coaches.map((c) => /* @__PURE__ */ React.createElement("option", { key: c.id, value: c.individual_coach_id || "" }, c.full_name)))), /* @__PURE__ */ React.createElement("div", { style: { fontSize: 12, color: "var(--text-2)", background: "var(--bg)", border: "1px solid var(--border)", borderRadius: 8, padding: "8px 10px" } }, "Hoca pay\u0131 sabit girilmez; antren\xF6re tan\u0131ml\u0131 pay oran\u0131ndan otomatik uygulan\u0131r.")), /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("label", { style: labelStyle }, "\xD6DEME DURUMU"), /* @__PURE__ */ React.createElement("div", { style: { display: "flex", gap: 8, marginBottom: paymentStatus === "paid" ? 10 : 0 } }, payBtn("paid", "\xD6dendi"), payBtn("pending", "Bekliyor")), paymentStatus === "paid" && /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("label", { style: labelStyle }, "\xD6DENEN TUTAR (\u20BA)"), /* @__PURE__ */ React.createElement(
       "input",
       {
         type: "number",

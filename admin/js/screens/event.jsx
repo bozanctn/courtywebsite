@@ -1911,7 +1911,7 @@ function LessonPackagesScreen({ clubId }) {
         coach_id:         coachProfileId(form.coach_id) || null,
         is_active:        form.is_active !== false,
         coach_payout_mode: form.coach_payout_mode === 'per_session' ? 'per_session' : 'upfront',
-        coach_percentage: (form.coach_percentage === '' || form.coach_percentage == null) ? null : Number(form.coach_percentage),
+        coach_percentage: null, // Paket bazlı sabit pay kaldırıldı — finans, antrenöre tanımlı coach_pay_rate'i kullanır.
       };
       if (pkgModal.type === 'add') {
         await LessonPackageSvc.createPackage(clubId, payload);
@@ -2541,10 +2541,9 @@ function LessonPackagesScreen({ clubId }) {
               </div>
             )}
 
-            <Field label="Hoca Payı (%)">
-              <input type="number" min={0} max={100} placeholder="Örn: 50" value={form.coach_percentage ?? ''}
-                onChange={e => setForm({...form, coach_percentage: e.target.value})} />
-            </Field>
+            <div style={{ fontSize:12, color:'var(--text-2)', background:'var(--bg)', border:'1px solid var(--border)', borderRadius:8, padding:'8px 12px' }}>
+              Hoca payı bu pakette sabit girilmez; <strong>antrenöre tanımlı pay oranından</strong> (Ekip &gt; antrenör) otomatik uygulanır.
+            </div>
 
             <Field label="Hoca Payı Tahsilat Biçimi">
               <div style={{ display:'flex', gap:8 }}>

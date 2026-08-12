@@ -665,6 +665,8 @@ function MyProgramScreen({ clubId, setScreen, clubProfile }) {
   const [lsPriceMode,       setLsPriceMode]       = useState('normal'); // 'normal' | 'split'
   const [lsCoachAmount,     setLsCoachAmount]     = useState('');
   const [lsClubAmount,      setLsClubAmount]      = useState('');
+  const [lsDiffPay,         setLsDiffPay]         = useState(false); // paket (per_session) dersinde farklı hoca payı (%)
+  const [lsDiffPayPct,      setLsDiffPayPct]      = useState('');
 
   // Grup dersi ekleme modalı (inline)
   const [grpModal,           setGrpModal]           = useState(null); // null | { type: 'add' }
@@ -925,24 +927,48 @@ function MyProgramScreen({ clubId, setScreen, clubProfile }) {
       setAllBookings(bkData.map(b => b.status === 'pending' ? { ...b, status: 'confirmed' } : b));
       setAllLessons(lessonsWithPkg);
 
-      // Manuel dersler için paket seans bilgisi — core.jsx ile aynı mantık:
-      // lesson_id IS NULL + session_date + individual coach_id eşleşmesi
+      // Manuel dersler için paket seans bilgisi — ÖĞRENCİ BAZLI eşleşme.
+      // Eskiden yalnız koç+tarih'e bakılıyordu → aynı koçun aynı gün BAŞKA öğrencisine ait
+      // seans bu derse yanlışlıkla "paketli" gibi yansıyordu. Artık seansın paketi bu dersin
+      // öğrencisine (club_customer_id / player_id / isim) ait değilse eşleşmez.
       const manualData = manualRes.data || [];
-      const individualIds_ = coaches_.map(c => c.individual_coach_id).filter(Boolean);
       const coachToIndividual_ = new Map(coaches_.map(c => [c.id, c.individual_coach_id]));
-      let manualPkgMap = new Map(); // `${individualCoachId}_${sessionDate}` → { session_id, player_package_id }
-      if (individualIds_.length > 0) {
-        const { data: manualSessions } = await sb.from('lesson_package_sessions')
-          .select('id, player_package_id, coach_id, session_date')
-          .is('lesson_id', null)
-          .in('coach_id', individualIds_);
-        (manualSessions || []).forEach(s => {
-          manualPkgMap.set(`${s.coach_id}_${s.session_date}`, { session_id: s.id, player_package_id: s.player_package_id });
-        });
+      const _nrm = (s) => (s || '').toLocaleLowerCase('tr').replace(/\s+/g, ' ').trim();
+      // Seansları KOÇA göre değil, bu kulübün paketlerine göre kapsıyoruz: paket "Tüm antrenörler"
+      // ile açıldıysa seans coach_id'si null olabilir ve eski koç filtresi (.in coach_id) bunları
+      // hiç yüklemiyordu → ders "paketten düşüldü" göstermiyordu. Eşleşme öğrenci
+      // (müşteri/oyuncu/isim) + tarih ile yapılır; coach_id yalnızca ikisi de doluysa ayrıştırıcı.
+      let manualSessList = []; // seanslar + paket sahibi kimliği
+      {
+        const { data: clubPkgs } = await sb.from('player_lesson_packages')
+          .select('id, club_customer_id, player_id, manual_player_name')
+          .eq('club_id', clubId);
+        const ppOwner = new Map();
+        (clubPkgs || []).forEach(p => ppOwner.set(p.id, p));
+        const ppIds = (clubPkgs || []).map(p => p.id);
+        if (ppIds.length > 0) {
+          const { data: manualSessions } = await sb.from('lesson_package_sessions')
+            .select('id, player_package_id, coach_id, session_date')
+            .is('lesson_id', null)
+            .in('player_package_id', ppIds);
+          manualSessList = (manualSessions || []).map(s => {
+            const o = ppOwner.get(s.player_package_id) || {};
+            return { session_id: s.id, player_package_id: s.player_package_id, coach_id: s.coach_id, session_date: s.session_date,
+                     pkgCust: o.club_customer_id || null, pkgPlayer: o.player_id || null, pkgName: o.manual_player_name || null };
+          });
+        }
       }
       const manualWithPkg = manualData.map(m => {
-        const indId = coachToIndividual_.get(m.coach_id);
-        const pkgInfo = indId ? manualPkgMap.get(`${indId}_${m.date}`) : null;
+        const indId = coachToIndividual_.get(m.coach_id) || null;
+        const cands = manualSessList.filter(s =>
+          s.session_date === m.date && (
+            (m.club_customer_id && s.pkgCust && m.club_customer_id === s.pkgCust) ||
+            (m.player_id && s.pkgPlayer && m.player_id === s.pkgPlayer) ||
+            (m.student_name && s.pkgName && _nrm(m.student_name) === _nrm(s.pkgName))
+          )
+        );
+        // Aynı öğrenci+tarih birden çok seans olursa koçu eşleşeni tercih et (ikisi de doluysa).
+        const pkgInfo = cands.find(s => s.coach_id && indId && s.coach_id === indId) || cands[0] || null;
         return { ...m, is_package_lesson: !!pkgInfo, pkg_session_id: pkgInfo?.session_id || null, player_package_id: pkgInfo?.player_package_id || null };
       });
       setAllManualLessons(manualWithPkg);
@@ -1706,18 +1732,11 @@ function MyProgramScreen({ clubId, setScreen, clubProfile }) {
 
     // İptal anında canlı olarak paket seans sorgula (önbelleğe güvenme)
     let pkgSessionId = null, playerPackageId = null;
-    if (lsDetail.source === 'manual' && lsDetail.coachId && lsDetail.lessonDate) {
-      const coachRec = coachesList.find(c => c.id === lsDetail.coachId);
-      const indCoachId = coachRec?.individual_coach_id;
-      if (indCoachId) {
-        const { data: sess } = await sb.from('lesson_package_sessions')
-          .select('id, player_package_id')
-          .eq('session_date', lsDetail.lessonDate)
-          .eq('coach_id', indCoachId)
-          .is('lesson_id', null)
-          .limit(1);
-        if (sess?.length > 0) { pkgSessionId = sess[0].id; playerPackageId = sess[0].player_package_id; }
-      }
+    if (lsDetail.source === 'manual') {
+      // Öğrenci-bazlı hesaplanmış (yükleme) değerleri kullan — koç+tarih ile taze arama
+      // yanlış öğrencinin paketini geri yükleyebilirdi (çapraz atıf).
+      pkgSessionId = lsDetail.pkgSessionId || null;
+      playerPackageId = lsDetail.playerPackageId || null;
     } else if (lsDetail.source === 'lesson') {
       const { data: sess } = await sb.from('lesson_package_sessions')
         .select('id, player_package_id')
@@ -1992,6 +2011,10 @@ function MyProgramScreen({ clubId, setScreen, clubProfile }) {
           court_id: courtId, user_id: user.id, start_time: startDb, end_time: endDb,
           status: 'confirmed', is_solo_booking: false, duration_hours: durH,
           total_amount: amountVal || 0, club_coach_id: coachId,
+          // Taşınan gölgenin derse bağı KORUNMALI: bağsız yazılırsa ders düzenlendiği
+          // anda gölge yeniden "gerçek rezervasyon" sayılır (liste + çift ciro) ve
+          // ders silinince CASCADE ile temizlenmez.
+          manual_lesson_id: editId,
         }).then(() => {}).catch(e => console.warn('Kort blok güncellenemedi:', e.message));
       }
     } else if (coachChanged && orig.court_id) {
@@ -2098,28 +2121,65 @@ function MyProgramScreen({ clubId, setScreen, clubProfile }) {
       setLsPlayerResults([]);
       setLsCustomerSearch(''); setLsCustomerResults([]);
       setLsCourtyclubResults([]);
-      // Paketli ders mi? Önce olaydan gelen id; yoksa koç+tarih ile taze ara
-      // (manuel paket seansları lesson_id'siz saklandığından olay bayrağı kaçabiliyor).
+      // Paketli ders mi? Önce olaydan gelen id (yükleme artık öğrenci-bazlı hesaplıyor);
+      // yoksa koç+tarih+ÖĞRENCİ ile taze doğrula. Sadece paketi BU dersin öğrencisine
+      // (club_customer_id / player_id / isim) ait seans eşleşir — çapraz atıf olmaz.
       let pkgId = d.playerPackageId || null;
       if (!pkgId && row.coach_id) {
         const indId = coachesList.find(c => c.id === row.coach_id)?.individual_coach_id;
         if (indId) {
           const { data: sess } = await sb.from('lesson_package_sessions')
             .select('player_package_id')
-            .is('lesson_id', null).eq('coach_id', indId).eq('session_date', row.date)
-            .limit(1).maybeSingle();
-          pkgId = sess?.player_package_id || null;
+            .is('lesson_id', null).eq('coach_id', indId).eq('session_date', row.date);
+          const ppIds = [...new Set((sess || []).map(s => s.player_package_id).filter(Boolean))];
+          if (ppIds.length > 0) {
+            const { data: pps } = await sb.from('player_lesson_packages')
+              .select('id, club_customer_id, player_id, manual_player_name').in('id', ppIds);
+            const _nrm = (s) => (s || '').toLocaleLowerCase('tr').replace(/\s+/g, ' ').trim();
+            const hit = (pps || []).find(o =>
+              (row.club_customer_id && o.club_customer_id && row.club_customer_id === o.club_customer_id)
+              || (row.player_id && o.player_id && row.player_id === o.player_id)
+              || (row.student_name && o.manual_player_name && _nrm(row.student_name) === _nrm(o.manual_player_name))
+            );
+            pkgId = hit?.id || null;
+          }
         }
       }
       if (pkgId) {
-        const { data: plp } = await sb.from('player_lesson_packages')
-          .select('*, lesson_packages(name, total_lessons, price, coach_percentage, coach_payout_mode)')
-          .eq('id', pkgId).maybeSingle();
-        if (plp) {
-          setLsPackages([{ ...plp,
-            package_name: plp.lesson_packages?.name || plp.custom_name || 'Özel Paket',
-            remaining: (plp.total_lessons || 0) - (plp.used_lessons || 0) }]);
-          setLsSelectedPkgId(plp.id);
+        // TEK KAYNAK: Paketleri müşteri ekranıyla AYNI şekilde yükle (kişinin TÜM aktif paketleri +
+        // taze stored used_lessons). Eskiden yalnız eşleşen tek paket yükleniyordu → çok paketli
+        // kişilerde (koç/müşteri null "Tüm antrenörler" paketleri) düzenleme ekranındaki "kalan",
+        // müşteri detayından farklı görünebiliyordu. Artık ikisi birebir aynı.
+        const nowIso = new Date().toISOString();
+        const _pid   = selPlayer?.id || selCustomer?.user_id || null;
+        const _mname = (!_pid && selCustomer && !selCustomer.user_id) ? selCustomer.full_name
+                     : (!_pid && !selCustomer ? (row.student_name || null) : null);
+        const baseQ = () => sb.from('player_lesson_packages')
+          .select('*, lesson_packages(name, total_lessons, price, validity_days, coach_percentage, coach_payout_mode)')
+          .in('payment_status', ['paid', 'pending']).eq('status', 'active')
+          .or(`expiry_date.is.null,expiry_date.gt.${nowIso}`)
+          .order('created_at', { ascending: false });
+        const qs = [];
+        if (_pid)   qs.push(baseQ().eq('player_id', _pid));
+        if (_mname) qs.push(baseQ().is('player_id', null).eq('manual_player_name', _mname));
+        if (_pid && selCustomer?.full_name) qs.push(baseQ().is('player_id', null).eq('manual_player_name', selCustomer.full_name));
+        const rs = await Promise.all(qs);
+        const seen = new Set();
+        const allPkgs = rs.flatMap(r => r.data || [])
+          .filter(r => { if (seen.has(r.id)) return false; seen.add(r.id); return true; })
+          .map(r => ({ ...r, package_name: r.lesson_packages?.name || r.custom_name || 'Özel Paket',
+                       remaining: (r.total_lessons || 0) - (r.used_lessons || 0) }));
+        // Bu derse ait paket aktif listede yoksa (tamamlanmış/iptal) tekil olarak ekle ki seçili kalsın.
+        if (!allPkgs.some(p => p.id === pkgId)) {
+          const { data: one } = await sb.from('player_lesson_packages')
+            .select('*, lesson_packages(name, total_lessons, price, coach_percentage, coach_payout_mode)')
+            .eq('id', pkgId).maybeSingle();
+          if (one) allPkgs.unshift({ ...one, package_name: one.lesson_packages?.name || one.custom_name || 'Özel Paket',
+                                     remaining: (one.total_lessons || 0) - (one.used_lessons || 0) });
+        }
+        if (allPkgs.length > 0) {
+          setLsPackages(allPkgs);
+          setLsSelectedPkgId(pkgId);
           setLsUsePkg(true);
         } else {
           setLsUsePkg(false); setLsSelectedPkgId(null); setLsPackages([]);
@@ -2362,6 +2422,10 @@ function MyProgramScreen({ clubId, setScreen, clubProfile }) {
     if (!coachOk) { alert('Lütfen bir antrenör seçin veya antrenör adını girin.'); return; }
     if (lsForm.start_time >= lsForm.end_time) {
       alert('Bitiş saati başlangıç saatinden sonra olmalıdır.'); return;
+    }
+    // "Paketi Kullan" açık ama paket seçilmedi → "ödenmiş 0 ₺" hayalet ders (düşmeden) oluşmasını engelle.
+    if (lsUsePkg && !lsSelectedPkgId) {
+      alert('"Paketi Kullan" açık ama bir paket seçilmedi. Bir paket seçin ya da "Paketi Kullan"ı kapatın.'); return;
     }
 
     if (lsSavingGuard.current) return;
@@ -2629,7 +2693,9 @@ function MyProgramScreen({ clubId, setScreen, clubProfile }) {
                 const coachRec = coachesList.find(c => c.id === coachId);
                 // Öncelik: pakette tanımlı % (varsa) → yoksa hocanın profil oranı
                 const pkgPct   = pkgDef.coach_percentage ?? pkg.custom_coach_pct;
-                const coachPct = Number(pkgPct) > 0 ? Number(pkgPct) : (coachRec?.coach_pay_rate || 0);
+                const coachPct = (lsDiffPay && lsDiffPayPct !== '' && !isNaN(Number(lsDiffPayPct)))
+                  ? Number(lsDiffPayPct)  // "Farklı Pay" toggle: bu ders için elle girilen %
+                  : (Number(pkgPct) > 0 ? Number(pkgPct) : (coachRec?.coach_pay_rate || 0));
                 const coachEarning = Math.round(perSessionTotal * (coachPct / 100) * 100) / 100;
                 if (coachRec && coachEarning > 0) {
                   await sb.from('coach_earnings').insert({
@@ -3879,7 +3945,7 @@ function MyProgramScreen({ clubId, setScreen, clubProfile }) {
                           </div>
                         </div>
                         <div style={{ width:44, height:24, borderRadius:12, background: lsUsePkg ? 'var(--brand-navy)' : '#CBD5E1', cursor:'pointer', position:'relative', transition:'background 0.2s', flexShrink:0 }}
-                          onClick={() => { const next=!lsUsePkg; setLsUsePkg(next); setLsForm(prev=>({...prev, amount: next?'0':'', payment_status: next?'paid':'unpaid'})); }}>
+                          onClick={() => { const next=!lsUsePkg; setLsUsePkg(next); setLsForm(prev=>({...prev, amount: next?'0':'', payment_status: next?'paid':'unpaid'})); if (next && !lsSelectedPkgId && lsPackages.length === 1) setLsSelectedPkgId(lsPackages[0].id); if (!next) { setLsDiffPay(false); setLsDiffPayPct(''); } }}>
                           <div style={{ width:18, height:18, borderRadius:9, background:'#fff', position:'absolute', top:3, left: lsUsePkg ? 23 : 3, transition:'left 0.2s', boxShadow:'0 1px 3px rgba(0,0,0,0.3)' }} />
                         </div>
                       </div>
@@ -3922,11 +3988,34 @@ function MyProgramScreen({ clubId, setScreen, clubProfile }) {
                             </div>
                           );
                         })}
-                        {lsUsePkg && (
-                          <div style={{ fontSize:11, color:'#059669', fontWeight:600, paddingTop:2 }}>
-                            Ders ücreti 0 ₺ olarak kaydedilecek, ödemesi paket satışında alındı.
-                          </div>
-                        )}
+                        {lsUsePkg && (() => {
+                          const _selPkg = lsPackages.find(p => p.id === lsSelectedPkgId);
+                          const _perSession = (_selPkg?.lesson_packages?.coach_payout_mode || _selPkg?.coach_payout_mode) === 'per_session';
+                          return (<>
+                            <div style={{ fontSize:11, color:'#059669', fontWeight:600, paddingTop:2 }}>
+                              Ders ücreti 0 ₺ olarak kaydedilecek, ödemesi paket satışında alındı.
+                            </div>
+                            {_perSession && (
+                              <div style={{ marginTop:8, padding:'10px 12px', borderRadius:10, border:'1.5px solid var(--border)', background:'var(--bg)' }}>
+                                <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', gap:8 }}>
+                                  <div>
+                                    <div style={{ fontSize:12, fontWeight:700, color: lsDiffPay ? 'var(--brand-navy)' : 'var(--text-1)' }}>Farklı Pay (%)</div>
+                                    <div style={{ fontSize:10, color:'var(--text-2)' }}>Kapalıysa antrenöre tanımlı oran uygulanır.</div>
+                                  </div>
+                                  <div style={{ width:44, height:24, borderRadius:12, background: lsDiffPay ? 'var(--brand-navy)' : '#CBD5E1', cursor:'pointer', position:'relative', flexShrink:0 }}
+                                    onClick={() => setLsDiffPay(v => !v)}>
+                                    <div style={{ width:18, height:18, borderRadius:9, background:'#fff', position:'absolute', top:3, left: lsDiffPay ? 23 : 3, transition:'left 0.2s' }} />
+                                  </div>
+                                </div>
+                                {lsDiffPay && (
+                                  <input type="number" min="0" max="100" placeholder="Örn: 50" value={lsDiffPayPct}
+                                    onChange={e => setLsDiffPayPct(e.target.value)}
+                                    style={{ width:'100%', marginTop:8, border:'1.5px solid var(--border)', borderRadius:8, padding:'8px 10px', fontSize:14, boxSizing:'border-box' }} />
+                                )}
+                              </div>
+                            )}
+                          </>);
+                        })()}
                       </div>
                     </div>
                   ) : null}

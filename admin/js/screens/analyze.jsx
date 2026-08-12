@@ -101,10 +101,22 @@ function FinanceScreen({ clubId, clubProfile }) {
     return { totalIncome, totalExpenses, netProfit: totalIncome - totalExpenses };
   }, [filteredRecords]);
 
-  const earningsSummary = useMemo(() => ({
-    totalUnpaid: coachEarnings.filter(e => e.payment_status === 'unpaid').reduce((s, e) => s + e.amount, 0),
-    unpaidCount: coachEarnings.filter(e => e.payment_status === 'unpaid').length,
-  }), [coachEarnings]);
+  // Kritik ayrım: collected_by_coach = true satırlarda parayı öğrenciden HOCA tahsil
+  // etmiştir. Kulübün ödeyeceği bir borç değildir; "Bekleyen"e katılırsa kulüp aynı
+  // parayı ikinci kez öder. Mobil CoachEarningsService.getSummary ile birebir.
+  const earningsSummary = useMemo(() => {
+    const clubOwes   = coachEarnings.filter(e => e.payment_status === 'unpaid' && !e.collected_by_coach);
+    const coachHolds = coachEarnings.filter(e => e.payment_status === 'unpaid' && e.collected_by_coach);
+    return {
+      totalUnpaid: clubOwes.reduce((s, e) => s + e.amount, 0),
+      unpaidCount: clubOwes.length,
+      totalCollectedByCoach: coachHolds.reduce((s, e) => s + e.amount, 0),
+      // Hocanın kulübe iletmediği kulüp payı / kort ücreti — kulübün ALACAĞI
+      totalOwedToClub: coachEarnings
+        .filter(e => e.collected_by_coach && !e.court_fee_settled)
+        .reduce((s, e) => s + (e.court_fee || 0), 0),
+    };
+  }, [coachEarnings]);
 
   const uniqueCoaches  = useMemo(() => Array.from(new Set(coachEarnings.map(e => e.coach_name))).sort(), [coachEarnings]);
   const filteredEarnings = coachFilter ? coachEarnings.filter(e => e.coach_name === coachFilter) : coachEarnings;
@@ -165,13 +177,15 @@ function FinanceScreen({ clubId, clubProfile }) {
   };
 
   const markAllEarningsPaid = async (coachName) => {
-    const unpaid = coachEarnings.filter(e => e.coach_name === coachName && e.payment_status === 'unpaid');
+    // collected_by_coach hariç — parayı hoca öğrenciden zaten almış (bkz. earningsSummary)
+    const unpaid = coachEarnings.filter(e => e.coach_name === coachName && e.payment_status === 'unpaid' && !e.collected_by_coach);
     if (unpaid.length === 0) { alert('Bu hocanın bekleyen hakedişi yok.'); return; }
     const total = unpaid.reduce((s, e) => s + e.amount, 0);
     if (!confirm(`${coachName} adlı hocanın ${unpaid.length} hakedişi toplam ${fmtMoney(total)} ödendi olarak işaretlensin mi?`)) return;
     await sb.from('coach_earnings')
       .update({ payment_status: 'paid', paid_at: new Date().toISOString() })
-      .eq('club_id', clubId).eq('coach_name', coachName).eq('payment_status', 'unpaid');
+      .eq('club_id', clubId).eq('coach_name', coachName).eq('payment_status', 'unpaid')
+      .eq('collected_by_coach', false);
     loadAll();
   };
 
@@ -371,11 +385,26 @@ function FinanceScreen({ clubId, clubProfile }) {
         <div className="table-wrap">
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '12px 16px', borderBottom: '1px solid var(--border)' }}>
             <div style={{ fontSize: 15, fontWeight: 700 }}>Hoca Hakedişleri</div>
-            {earningsSummary.unpaidCount > 0 && (
-              <span style={{ background: '#FFF7ED', border: '1px solid #FDBA74', color: '#F97316', borderRadius: 999, padding: '4px 10px', fontSize: 12, fontWeight: 700 }}>
-                Bekleyen: {fmtMoney(earningsSummary.totalUnpaid)}
-              </span>
-            )}
+            {/* Üç rakam üç ayrı şeydir; eskiden tek "Bekleyen" başlığında toplanıyordu:
+                Ödenecek → kulübün nakit ödeyeceği · Hocada → hoca tahsil etti, kulüp ÖDEMEZ
+                Hocadan alacak → hocanın kulübe iletmediği kulüp payı */}
+            <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+              {earningsSummary.unpaidCount > 0 && (
+                <span style={{ background: '#FFF7ED', border: '1px solid #FDBA74', color: '#F97316', borderRadius: 999, padding: '4px 10px', fontSize: 12, fontWeight: 700 }}>
+                  Ödenecek: {fmtMoney(earningsSummary.totalUnpaid)}
+                </span>
+              )}
+              {earningsSummary.totalCollectedByCoach > 0 && (
+                <span style={{ background: '#F5F3FF', border: '1px solid #C4B5FD', color: '#7C3AED', borderRadius: 999, padding: '4px 10px', fontSize: 12, fontWeight: 700 }}>
+                  Hocada: {fmtMoney(earningsSummary.totalCollectedByCoach)}
+                </span>
+              )}
+              {earningsSummary.totalOwedToClub > 0 && (
+                <span style={{ background: '#ECFDF5', border: '1px solid #6EE7B7', color: '#059669', borderRadius: 999, padding: '4px 10px', fontSize: 12, fontWeight: 700 }}>
+                  Hocadan alacak: {fmtMoney(earningsSummary.totalOwedToClub)}
+                </span>
+              )}
+            </div>
           </div>
           {loading ? <Spinner /> : coachEarnings.length === 0 ? (
             <EmptyState icon="school" title="Henüz hakediş kaydı yok" sub="Hocaya atanmış rezervasyonlar ödendiğinde hakedişler otomatik oluşur" />
@@ -408,7 +437,8 @@ function FinanceScreen({ clubId, clubProfile }) {
 
               {/* Bulk pay */}
               {coachFilter && (() => {
-                const unpaid = filteredEarnings.filter(e => e.payment_status === 'unpaid');
+                // Parayı hocanın tahsil ettiği satırlar kulübün borcu DEĞİL
+                const unpaid = filteredEarnings.filter(e => e.payment_status === 'unpaid' && !e.collected_by_coach);
                 if (unpaid.length === 0) return null;
                 const total = unpaid.reduce((s, e) => s + e.amount, 0);
                 return (
@@ -425,19 +455,33 @@ function FinanceScreen({ clubId, clubProfile }) {
               {filteredEarnings.map((e, i) => {
                 const isPaid = e.payment_status === 'paid';
                 const isRefund = Number(e.amount) < 0;
+                // Para hocada: kulüp ödemez, tersine hocadan kulüp payı alacağı vardır
+                const collected = !!e.collected_by_coach;
+                const owed = collected && !e.court_fee_settled ? (e.court_fee || 0) : 0;
                 return (
                   <div key={e.id} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '12px 0', borderBottom: i < filteredEarnings.length - 1 ? '1px solid var(--border)' : 'none' }}>
                     <div style={{ width: 40, height: 40, borderRadius: 12, background: isRefund ? '#FEE2E2' : (isPaid ? '#DCFCE7' : '#FFF7ED'), display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
                       <span className="material-icons" style={{ color: isRefund ? '#EF4444' : (isPaid ? '#22C55E' : '#F97316'), fontSize: 20 }}>{isRefund ? 'undo' : 'school'}</span>
                     </div>
                     <div style={{ flex: 1 }}>
-                      <div style={{ fontWeight: 600, fontSize: 14 }}>{e.coach_name}</div>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                        <div style={{ fontWeight: 600, fontSize: 14 }}>{e.coach_name}</div>
+                        {collected && !isRefund && (
+                          <span style={{ fontSize: 9, fontWeight: 700, letterSpacing: 0.3, padding: '2px 6px', borderRadius: 999, background: '#EDE9FE', color: '#7C3AED' }}>HOCA TAHSİL ETTİ</span>
+                        )}
+                      </div>
                       <div style={{ fontSize: 12, color: 'var(--text-2)', marginTop: 2 }}>
                         {fmtDate(e.date)}{e.student_name ? ` • ${e.student_name}` : ''}
                       </div>
                       {isRefund && e.description
                         ? <div style={{ fontSize: 11, color: '#EF4444', marginTop: 2 }}>{e.description}</div>
-                        : (e.court_fee != null && <div style={{ fontSize: 12, color: 'var(--text-2)', marginTop: 1 }}>Kort: {fmtMoney(e.court_fee)}</div>)}
+                        : (collected && (e.court_fee || 0) > 0 && (
+                            <div style={{ fontSize: 12, color: owed > 0 ? '#7C3AED' : 'var(--text-2)', marginTop: 1 }}>
+                              {owed > 0
+                                ? `Kulüp payı ${fmtMoney(owed)} — hocadan alacak`
+                                : `Kulüp payı ${fmtMoney(e.court_fee)} tahsil edildi`}
+                            </div>
+                          ))}
                     </div>
                     <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 4 }}>
                       <div style={{ fontSize: 14, fontWeight: 700, color: isRefund ? '#EF4444' : '#F97316' }}>{fmtMoney(e.amount)}</div>
@@ -446,6 +490,9 @@ function FinanceScreen({ clubId, clubProfile }) {
                       )}
                       {isPaid ? (
                         <span style={{ fontSize: 9, fontWeight: 700, letterSpacing: 0.5, padding: '2px 7px', borderRadius: 999, background: '#DCFCE7', color: '#22C55E' }}>{isRefund ? 'İŞLENDİ' : 'ÖDENDİ'}</span>
+                      ) : collected && !isRefund ? (
+                        /* Kulüp bu tutarı ödemez — para hocada. Ödeme butonu bilerek yok. */
+                        <span style={{ fontSize: 9, fontWeight: 700, letterSpacing: 0.5, padding: '2px 7px', borderRadius: 999, background: '#EDE9FE', color: '#7C3AED' }}>HOCADA</span>
                       ) : (
                         <button type="button"
                           style={{ fontSize: 9, fontWeight: 700, letterSpacing: 0.5, padding: '3px 8px', borderRadius: 999, background: '#FFF7ED', color: '#F97316', border: 'none', cursor: 'pointer' }}

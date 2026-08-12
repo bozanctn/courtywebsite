@@ -113,10 +113,17 @@ function FinanceScreen({ clubId, clubProfile }) {
     const totalExpenses = filteredRecords.filter((r) => r.type === "expense").reduce((s, r) => s + r.amount, 0);
     return { totalIncome, totalExpenses, netProfit: totalIncome - totalExpenses };
   }, [filteredRecords]);
-  const earningsSummary = useMemo(() => ({
-    totalUnpaid: coachEarnings.filter((e) => e.payment_status === "unpaid").reduce((s, e) => s + e.amount, 0),
-    unpaidCount: coachEarnings.filter((e) => e.payment_status === "unpaid").length
-  }), [coachEarnings]);
+  const earningsSummary = useMemo(() => {
+    const clubOwes = coachEarnings.filter((e) => e.payment_status === "unpaid" && !e.collected_by_coach);
+    const coachHolds = coachEarnings.filter((e) => e.payment_status === "unpaid" && e.collected_by_coach);
+    return {
+      totalUnpaid: clubOwes.reduce((s, e) => s + e.amount, 0),
+      unpaidCount: clubOwes.length,
+      totalCollectedByCoach: coachHolds.reduce((s, e) => s + e.amount, 0),
+      // Hocanın kulübe iletmediği kulüp payı / kort ücreti — kulübün ALACAĞI
+      totalOwedToClub: coachEarnings.filter((e) => e.collected_by_coach && !e.court_fee_settled).reduce((s, e) => s + (e.court_fee || 0), 0)
+    };
+  }, [coachEarnings]);
   const uniqueCoaches = useMemo(() => Array.from(new Set(coachEarnings.map((e) => e.coach_name))).sort(), [coachEarnings]);
   const filteredEarnings = coachFilter ? coachEarnings.filter((e) => e.coach_name === coachFilter) : coachEarnings;
   const getPeriodLabel = () => {
@@ -181,14 +188,14 @@ function FinanceScreen({ clubId, clubProfile }) {
     loadAll();
   };
   const markAllEarningsPaid = async (coachName) => {
-    const unpaid = coachEarnings.filter((e) => e.coach_name === coachName && e.payment_status === "unpaid");
+    const unpaid = coachEarnings.filter((e) => e.coach_name === coachName && e.payment_status === "unpaid" && !e.collected_by_coach);
     if (unpaid.length === 0) {
       alert("Bu hocan\u0131n bekleyen hakedi\u015Fi yok.");
       return;
     }
     const total = unpaid.reduce((s, e) => s + e.amount, 0);
     if (!confirm(`${coachName} adl\u0131 hocan\u0131n ${unpaid.length} hakedi\u015Fi toplam ${fmtMoney(total)} \xF6dendi olarak i\u015Faretlensin mi?`)) return;
-    await sb.from("coach_earnings").update({ payment_status: "paid", paid_at: (/* @__PURE__ */ new Date()).toISOString() }).eq("club_id", clubId).eq("coach_name", coachName).eq("payment_status", "unpaid");
+    await sb.from("coach_earnings").update({ payment_status: "paid", paid_at: (/* @__PURE__ */ new Date()).toISOString() }).eq("club_id", clubId).eq("coach_name", coachName).eq("payment_status", "unpaid").eq("collected_by_coach", false);
     loadAll();
   };
   const netPositive = stats.netProfit >= 0;
@@ -260,7 +267,7 @@ function FinanceScreen({ clubId, clubProfile }) {
       /* @__PURE__ */ React.createElement("div", { style: { flex: 1 } }, /* @__PURE__ */ React.createElement("div", { style: { fontWeight: 600, fontSize: 14, color: "var(--text-1)" } }, r.category), /* @__PURE__ */ React.createElement("div", { style: { fontSize: 12, color: "var(--text-2)", marginTop: 2 } }, fmtDate(r.date), r.receipt_category ? ` \u2022 ${r.receipt_category}` : "")),
       /* @__PURE__ */ React.createElement("div", { style: { display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 4 } }, /* @__PURE__ */ React.createElement("div", { style: { fontSize: 14, fontWeight: 700, color: isIncome ? "#22C55E" : "#EF4444" } }, isIncome ? "+" : "\u2013", " ", fmtMoney(r.amount)), /* @__PURE__ */ React.createElement("span", { style: { fontSize: 9, fontWeight: 700, letterSpacing: 0.5, padding: "2px 7px", borderRadius: 999, background: isIncome ? "#DCFCE7" : "#FEE2E2", color: isIncome ? "#22C55E" : "#EF4444" } }, isBooking ? "OTOMAT\u0130K" : isIncome ? "ONAYLANDI" : "FATURA"))
     );
-  }))) : /* @__PURE__ */ React.createElement("div", { className: "table-wrap" }, /* @__PURE__ */ React.createElement("div", { style: { display: "flex", alignItems: "center", justifyContent: "space-between", padding: "12px 16px", borderBottom: "1px solid var(--border)" } }, /* @__PURE__ */ React.createElement("div", { style: { fontSize: 15, fontWeight: 700 } }, "Hoca Hakedi\u015Fleri"), earningsSummary.unpaidCount > 0 && /* @__PURE__ */ React.createElement("span", { style: { background: "#FFF7ED", border: "1px solid #FDBA74", color: "#F97316", borderRadius: 999, padding: "4px 10px", fontSize: 12, fontWeight: 700 } }, "Bekleyen: ", fmtMoney(earningsSummary.totalUnpaid))), loading ? /* @__PURE__ */ React.createElement(Spinner, null) : coachEarnings.length === 0 ? /* @__PURE__ */ React.createElement(EmptyState, { icon: "school", title: "Hen\xFCz hakedi\u015F kayd\u0131 yok", sub: "Hocaya atanm\u0131\u015F rezervasyonlar \xF6dendi\u011Finde hakedi\u015Fler otomatik olu\u015Fur" }) : /* @__PURE__ */ React.createElement("div", { style: { padding: "14px 16px", display: "flex", flexDirection: "column", gap: 10 } }, /* @__PURE__ */ React.createElement("div", { style: { position: "relative" } }, /* @__PURE__ */ React.createElement(
+  }))) : /* @__PURE__ */ React.createElement("div", { className: "table-wrap" }, /* @__PURE__ */ React.createElement("div", { style: { display: "flex", alignItems: "center", justifyContent: "space-between", padding: "12px 16px", borderBottom: "1px solid var(--border)" } }, /* @__PURE__ */ React.createElement("div", { style: { fontSize: 15, fontWeight: 700 } }, "Hoca Hakedi\u015Fleri"), /* @__PURE__ */ React.createElement("div", { style: { display: "flex", gap: 6, flexWrap: "wrap" } }, earningsSummary.unpaidCount > 0 && /* @__PURE__ */ React.createElement("span", { style: { background: "#FFF7ED", border: "1px solid #FDBA74", color: "#F97316", borderRadius: 999, padding: "4px 10px", fontSize: 12, fontWeight: 700 } }, "\xD6denecek: ", fmtMoney(earningsSummary.totalUnpaid)), earningsSummary.totalCollectedByCoach > 0 && /* @__PURE__ */ React.createElement("span", { style: { background: "#F5F3FF", border: "1px solid #C4B5FD", color: "#7C3AED", borderRadius: 999, padding: "4px 10px", fontSize: 12, fontWeight: 700 } }, "Hocada: ", fmtMoney(earningsSummary.totalCollectedByCoach)), earningsSummary.totalOwedToClub > 0 && /* @__PURE__ */ React.createElement("span", { style: { background: "#ECFDF5", border: "1px solid #6EE7B7", color: "#059669", borderRadius: 999, padding: "4px 10px", fontSize: 12, fontWeight: 700 } }, "Hocadan alacak: ", fmtMoney(earningsSummary.totalOwedToClub)))), loading ? /* @__PURE__ */ React.createElement(Spinner, null) : coachEarnings.length === 0 ? /* @__PURE__ */ React.createElement(EmptyState, { icon: "school", title: "Hen\xFCz hakedi\u015F kayd\u0131 yok", sub: "Hocaya atanm\u0131\u015F rezervasyonlar \xF6dendi\u011Finde hakedi\u015Fler otomatik olu\u015Fur" }) : /* @__PURE__ */ React.createElement("div", { style: { padding: "14px 16px", display: "flex", flexDirection: "column", gap: 10 } }, /* @__PURE__ */ React.createElement("div", { style: { position: "relative" } }, /* @__PURE__ */ React.createElement(
     "button",
     {
       type: "button",
@@ -283,7 +290,7 @@ function FinanceScreen({ clubId, clubProfile }) {
     name || "T\xFCm Hocalar",
     coachFilter === name && /* @__PURE__ */ React.createElement("span", { className: "material-icons", style: { fontSize: 16, color: "var(--brand-navy)" } }, "check")
   )))), coachFilter && (() => {
-    const unpaid = filteredEarnings.filter((e) => e.payment_status === "unpaid");
+    const unpaid = filteredEarnings.filter((e) => e.payment_status === "unpaid" && !e.collected_by_coach);
     if (unpaid.length === 0) return null;
     const total = unpaid.reduce((s, e) => s + e.amount, 0);
     return /* @__PURE__ */ React.createElement(
@@ -303,7 +310,12 @@ function FinanceScreen({ clubId, clubProfile }) {
   })(), filteredEarnings.map((e, i) => {
     const isPaid = e.payment_status === "paid";
     const isRefund = Number(e.amount) < 0;
-    return /* @__PURE__ */ React.createElement("div", { key: e.id, style: { display: "flex", alignItems: "center", gap: 12, padding: "12px 0", borderBottom: i < filteredEarnings.length - 1 ? "1px solid var(--border)" : "none" } }, /* @__PURE__ */ React.createElement("div", { style: { width: 40, height: 40, borderRadius: 12, background: isRefund ? "#FEE2E2" : isPaid ? "#DCFCE7" : "#FFF7ED", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 } }, /* @__PURE__ */ React.createElement("span", { className: "material-icons", style: { color: isRefund ? "#EF4444" : isPaid ? "#22C55E" : "#F97316", fontSize: 20 } }, isRefund ? "undo" : "school")), /* @__PURE__ */ React.createElement("div", { style: { flex: 1 } }, /* @__PURE__ */ React.createElement("div", { style: { fontWeight: 600, fontSize: 14 } }, e.coach_name), /* @__PURE__ */ React.createElement("div", { style: { fontSize: 12, color: "var(--text-2)", marginTop: 2 } }, fmtDate(e.date), e.student_name ? ` \u2022 ${e.student_name}` : ""), isRefund && e.description ? /* @__PURE__ */ React.createElement("div", { style: { fontSize: 11, color: "#EF4444", marginTop: 2 } }, e.description) : e.court_fee != null && /* @__PURE__ */ React.createElement("div", { style: { fontSize: 12, color: "var(--text-2)", marginTop: 1 } }, "Kort: ", fmtMoney(e.court_fee))), /* @__PURE__ */ React.createElement("div", { style: { display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 4 } }, /* @__PURE__ */ React.createElement("div", { style: { fontSize: 14, fontWeight: 700, color: isRefund ? "#EF4444" : "#F97316" } }, fmtMoney(e.amount)), isRefund && /* @__PURE__ */ React.createElement("span", { style: { fontSize: 9, fontWeight: 700, letterSpacing: 0.5, padding: "2px 7px", borderRadius: 999, background: "#FEE2E2", color: "#EF4444" } }, "\u0130ADE"), isPaid ? /* @__PURE__ */ React.createElement("span", { style: { fontSize: 9, fontWeight: 700, letterSpacing: 0.5, padding: "2px 7px", borderRadius: 999, background: "#DCFCE7", color: "#22C55E" } }, isRefund ? "\u0130\u015ELEND\u0130" : "\xD6DEND\u0130") : /* @__PURE__ */ React.createElement(
+    const collected = !!e.collected_by_coach;
+    const owed = collected && !e.court_fee_settled ? e.court_fee || 0 : 0;
+    return /* @__PURE__ */ React.createElement("div", { key: e.id, style: { display: "flex", alignItems: "center", gap: 12, padding: "12px 0", borderBottom: i < filteredEarnings.length - 1 ? "1px solid var(--border)" : "none" } }, /* @__PURE__ */ React.createElement("div", { style: { width: 40, height: 40, borderRadius: 12, background: isRefund ? "#FEE2E2" : isPaid ? "#DCFCE7" : "#FFF7ED", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 } }, /* @__PURE__ */ React.createElement("span", { className: "material-icons", style: { color: isRefund ? "#EF4444" : isPaid ? "#22C55E" : "#F97316", fontSize: 20 } }, isRefund ? "undo" : "school")), /* @__PURE__ */ React.createElement("div", { style: { flex: 1 } }, /* @__PURE__ */ React.createElement("div", { style: { display: "flex", alignItems: "center", gap: 6 } }, /* @__PURE__ */ React.createElement("div", { style: { fontWeight: 600, fontSize: 14 } }, e.coach_name), collected && !isRefund && /* @__PURE__ */ React.createElement("span", { style: { fontSize: 9, fontWeight: 700, letterSpacing: 0.3, padding: "2px 6px", borderRadius: 999, background: "#EDE9FE", color: "#7C3AED" } }, "HOCA TAHS\u0130L ETT\u0130")), /* @__PURE__ */ React.createElement("div", { style: { fontSize: 12, color: "var(--text-2)", marginTop: 2 } }, fmtDate(e.date), e.student_name ? ` \u2022 ${e.student_name}` : ""), isRefund && e.description ? /* @__PURE__ */ React.createElement("div", { style: { fontSize: 11, color: "#EF4444", marginTop: 2 } }, e.description) : collected && (e.court_fee || 0) > 0 && /* @__PURE__ */ React.createElement("div", { style: { fontSize: 12, color: owed > 0 ? "#7C3AED" : "var(--text-2)", marginTop: 1 } }, owed > 0 ? `Kul\xFCp pay\u0131 ${fmtMoney(owed)} \u2014 hocadan alacak` : `Kul\xFCp pay\u0131 ${fmtMoney(e.court_fee)} tahsil edildi`)), /* @__PURE__ */ React.createElement("div", { style: { display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 4 } }, /* @__PURE__ */ React.createElement("div", { style: { fontSize: 14, fontWeight: 700, color: isRefund ? "#EF4444" : "#F97316" } }, fmtMoney(e.amount)), isRefund && /* @__PURE__ */ React.createElement("span", { style: { fontSize: 9, fontWeight: 700, letterSpacing: 0.5, padding: "2px 7px", borderRadius: 999, background: "#FEE2E2", color: "#EF4444" } }, "\u0130ADE"), isPaid ? /* @__PURE__ */ React.createElement("span", { style: { fontSize: 9, fontWeight: 700, letterSpacing: 0.5, padding: "2px 7px", borderRadius: 999, background: "#DCFCE7", color: "#22C55E" } }, isRefund ? "\u0130\u015ELEND\u0130" : "\xD6DEND\u0130") : collected && !isRefund ? (
+      /* Kulüp bu tutarı ödemez — para hocada. Ödeme butonu bilerek yok. */
+      /* @__PURE__ */ React.createElement("span", { style: { fontSize: 9, fontWeight: 700, letterSpacing: 0.5, padding: "2px 7px", borderRadius: 999, background: "#EDE9FE", color: "#7C3AED" } }, "HOCADA")
+    ) : /* @__PURE__ */ React.createElement(
       "button",
       {
         type: "button",

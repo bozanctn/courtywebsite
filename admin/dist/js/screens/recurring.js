@@ -36,6 +36,8 @@ window.RecurringLessonModal = function RecurringLessonModal({ clubId, onClose, o
   const [recUsePackage, setRecUsePackage] = useState(false);
   const [recAvailablePackages, setRecAvailablePackages] = useState([]);
   const [recSelectedPackageId, setRecSelectedPackageId] = useState(null);
+  const [recDiffPay, setRecDiffPay] = useState(false);
+  const [recDiffPayPct, setRecDiffPayPct] = useState("");
   const [recLoadingPackages, setRecLoadingPackages] = useState(false);
   useEffect(() => {
     (async () => {
@@ -138,7 +140,7 @@ window.RecurringLessonModal = function RecurringLessonModal({ clubId, onClose, o
       }
     })();
   }, [recStudent?.id, recStudentDisplayName, recCoach?.individual_coach_id, clubId]);
-  const useSession = async (playerPackageId, coachAuthId, sessionDate, lessonId, notes) => {
+  const useSession = async (playerPackageId, coachAuthId, sessionDate, lessonId, notes, overridePct) => {
     const { data: plp, error: fErr } = await sb.from("player_lesson_packages").select("*, lesson_packages(price, total_lessons, coach_percentage, coach_payout_mode, club_id)").eq("id", playerPackageId).single();
     if (fErr) throw fErr;
     const remaining = plp.total_lessons - plp.used_lessons;
@@ -173,7 +175,7 @@ window.RecurringLessonModal = function RecurringLessonModal({ clubId, onClose, o
         sb.from("profiles").select("full_name").eq("id", plp.player_id).maybeSingle()
       ]);
       const pkgPct = isCustom ? plp.custom_coach_pct : pkg?.coach_percentage;
-      const coachPct = Number(pkgPct) > 0 ? Number(pkgPct) : ccRes.data?.coach_pay_rate ?? 0;
+      const coachPct = overridePct != null && overridePct !== "" && !isNaN(Number(overridePct)) ? Number(overridePct) : Number(pkgPct) > 0 ? Number(pkgPct) : ccRes.data?.coach_pay_rate ?? 0;
       const coachAmount = Math.round(perSessionTotal * (coachPct / 100) * 100) / 100;
       if (ccRes.data && coachAmount > 0) {
         const { error: seErr } = await sb.from("coach_earnings").insert({
@@ -335,7 +337,7 @@ Yine de ders olu\u015Fturulsun mu?`)) return;
           }
           if (usePackageForThis && studentId && createdId && coachAuthId) {
             try {
-              await useSession(recSelectedPackageId, coachAuthId, dateStr, createdId, recNotes.trim() || void 0);
+              await useSession(recSelectedPackageId, coachAuthId, dateStr, createdId, recNotes.trim() || void 0, recDiffPay && recDiffPayPct !== "" ? recDiffPayPct : null);
               packageSessionsLeft--;
             } catch {
               packageSessionsLeft = 0;
@@ -507,7 +509,23 @@ ${skippedDates.length} tarih \xE7ak\u0131\u015Fma nedeniyle atland\u0131.`;
         /* @__PURE__ */ React.createElement("div", { style: { flex: 1 } }, /* @__PURE__ */ React.createElement("div", { style: { fontSize: 13, fontWeight: 600, color: sel ? "var(--brand-navy)" : "var(--text-1)" } }, pkg.package_name), /* @__PURE__ */ React.createElement("div", { style: { fontSize: 11, color: "var(--text-2)" } }, remaining, " ders kald\u0131")),
         sel && /* @__PURE__ */ React.createElement("span", { className: "material-icons", style: { fontSize: 16, color: "var(--brand-navy)" } }, "check_circle")
       );
-    })))), /* @__PURE__ */ React.createElement("div", { className: "fields-2" }, /* @__PURE__ */ React.createElement(Field, { label: "Ba\u015Flang\u0131\xE7" }, /* @__PURE__ */ React.createElement("input", { type: "time", value: recStartTime, onChange: (e) => setRecStartTime(e.target.value) })), /* @__PURE__ */ React.createElement(Field, { label: "Biti\u015F" }, /* @__PURE__ */ React.createElement("input", { type: "time", value: recEndTime, onChange: (e) => setRecEndTime(e.target.value) }))), /* @__PURE__ */ React.createElement(Field, { label: "Hangi G\xFCnler?" }, /* @__PURE__ */ React.createElement("div", { style: { display: "flex", flexWrap: "wrap", gap: 6 } }, REC_DAYS.map((day) => {
+    }), (() => {
+      const _selPkg = recAvailablePackages.find((p) => p.id === recSelectedPackageId);
+      const _perSession = (_selPkg?.coach_payout_mode || _selPkg?.lesson_packages?.coach_payout_mode) === "per_session";
+      if (!recSelectedPackageId || !_perSession) return null;
+      return /* @__PURE__ */ React.createElement("div", { style: { marginTop: 8, padding: "10px 12px", borderRadius: 8, border: "1px solid var(--border)", background: "#fff" } }, /* @__PURE__ */ React.createElement("label", { style: { display: "flex", alignItems: "center", gap: 8, cursor: "pointer", fontSize: 13 } }, /* @__PURE__ */ React.createElement("input", { type: "checkbox", checked: recDiffPay, onChange: (e) => setRecDiffPay(e.target.checked) }), "Farkl\u0131 Pay (%) \u2014 kapal\u0131ysa antren\xF6re tan\u0131ml\u0131 oran uygulan\u0131r"), recDiffPay && /* @__PURE__ */ React.createElement(
+        "input",
+        {
+          type: "number",
+          min: "0",
+          max: "100",
+          placeholder: "\xD6rn: 50",
+          value: recDiffPayPct,
+          onChange: (e) => setRecDiffPayPct(e.target.value),
+          style: { width: "100%", marginTop: 8, padding: "8px 10px" }
+        }
+      ));
+    })()))), /* @__PURE__ */ React.createElement("div", { className: "fields-2" }, /* @__PURE__ */ React.createElement(Field, { label: "Ba\u015Flang\u0131\xE7" }, /* @__PURE__ */ React.createElement("input", { type: "time", value: recStartTime, onChange: (e) => setRecStartTime(e.target.value) })), /* @__PURE__ */ React.createElement(Field, { label: "Biti\u015F" }, /* @__PURE__ */ React.createElement("input", { type: "time", value: recEndTime, onChange: (e) => setRecEndTime(e.target.value) }))), /* @__PURE__ */ React.createElement(Field, { label: "Hangi G\xFCnler?" }, /* @__PURE__ */ React.createElement("div", { style: { display: "flex", flexWrap: "wrap", gap: 6 } }, REC_DAYS.map((day) => {
       const active = recSelectedDays.includes(day.key);
       return /* @__PURE__ */ React.createElement(
         "button",

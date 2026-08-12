@@ -394,6 +394,8 @@ function MyProgramScreen({ clubId, setScreen, clubProfile }) {
   const [lsPriceMode, setLsPriceMode] = useState("normal");
   const [lsCoachAmount, setLsCoachAmount] = useState("");
   const [lsClubAmount, setLsClubAmount] = useState("");
+  const [lsDiffPay, setLsDiffPay] = useState(false);
+  const [lsDiffPayPct, setLsDiffPayPct] = useState("");
   const [grpModal, setGrpModal] = useState(null);
   const [grpGroups, setGrpGroups] = useState([]);
   const [grpSelectedId, setGrpSelectedId] = useState("");
@@ -615,18 +617,36 @@ function MyProgramScreen({ clubId, setScreen, clubProfile }) {
       setAllBookings(bkData.map((b) => b.status === "pending" ? { ...b, status: "confirmed" } : b));
       setAllLessons(lessonsWithPkg);
       const manualData = manualRes.data || [];
-      const individualIds_ = coaches_.map((c) => c.individual_coach_id).filter(Boolean);
       const coachToIndividual_ = new Map(coaches_.map((c) => [c.id, c.individual_coach_id]));
-      let manualPkgMap = /* @__PURE__ */ new Map();
-      if (individualIds_.length > 0) {
-        const { data: manualSessions } = await sb.from("lesson_package_sessions").select("id, player_package_id, coach_id, session_date").is("lesson_id", null).in("coach_id", individualIds_);
-        (manualSessions || []).forEach((s) => {
-          manualPkgMap.set(`${s.coach_id}_${s.session_date}`, { session_id: s.id, player_package_id: s.player_package_id });
-        });
+      const _nrm = (s) => (s || "").toLocaleLowerCase("tr").replace(/\s+/g, " ").trim();
+      let manualSessList = [];
+      {
+        const { data: clubPkgs } = await sb.from("player_lesson_packages").select("id, club_customer_id, player_id, manual_player_name").eq("club_id", clubId);
+        const ppOwner = /* @__PURE__ */ new Map();
+        (clubPkgs || []).forEach((p) => ppOwner.set(p.id, p));
+        const ppIds = (clubPkgs || []).map((p) => p.id);
+        if (ppIds.length > 0) {
+          const { data: manualSessions } = await sb.from("lesson_package_sessions").select("id, player_package_id, coach_id, session_date").is("lesson_id", null).in("player_package_id", ppIds);
+          manualSessList = (manualSessions || []).map((s) => {
+            const o = ppOwner.get(s.player_package_id) || {};
+            return {
+              session_id: s.id,
+              player_package_id: s.player_package_id,
+              coach_id: s.coach_id,
+              session_date: s.session_date,
+              pkgCust: o.club_customer_id || null,
+              pkgPlayer: o.player_id || null,
+              pkgName: o.manual_player_name || null
+            };
+          });
+        }
       }
       const manualWithPkg = manualData.map((m) => {
-        const indId = coachToIndividual_.get(m.coach_id);
-        const pkgInfo = indId ? manualPkgMap.get(`${indId}_${m.date}`) : null;
+        const indId = coachToIndividual_.get(m.coach_id) || null;
+        const cands = manualSessList.filter(
+          (s) => s.session_date === m.date && (m.club_customer_id && s.pkgCust && m.club_customer_id === s.pkgCust || m.player_id && s.pkgPlayer && m.player_id === s.pkgPlayer || m.student_name && s.pkgName && _nrm(m.student_name) === _nrm(s.pkgName))
+        );
+        const pkgInfo = cands.find((s) => s.coach_id && indId && s.coach_id === indId) || cands[0] || null;
         return { ...m, is_package_lesson: !!pkgInfo, pkg_session_id: pkgInfo?.session_id || null, player_package_id: pkgInfo?.player_package_id || null };
       });
       setAllManualLessons(manualWithPkg);
@@ -1398,16 +1418,9 @@ ${lines}
   const handleLsDetailCancel = async () => {
     if (!lsDetail) return;
     let pkgSessionId = null, playerPackageId = null;
-    if (lsDetail.source === "manual" && lsDetail.coachId && lsDetail.lessonDate) {
-      const coachRec = coachesList.find((c) => c.id === lsDetail.coachId);
-      const indCoachId = coachRec?.individual_coach_id;
-      if (indCoachId) {
-        const { data: sess } = await sb.from("lesson_package_sessions").select("id, player_package_id").eq("session_date", lsDetail.lessonDate).eq("coach_id", indCoachId).is("lesson_id", null).limit(1);
-        if (sess?.length > 0) {
-          pkgSessionId = sess[0].id;
-          playerPackageId = sess[0].player_package_id;
-        }
-      }
+    if (lsDetail.source === "manual") {
+      pkgSessionId = lsDetail.pkgSessionId || null;
+      playerPackageId = lsDetail.playerPackageId || null;
     } else if (lsDetail.source === "lesson") {
       const { data: sess } = await sb.from("lesson_package_sessions").select("id, player_package_id").eq("lesson_id", lsDetail.rawId).limit(1);
       if (sess?.length > 0) {
@@ -1689,7 +1702,11 @@ ${lines}
           is_solo_booking: false,
           duration_hours: durH,
           total_amount: amountVal || 0,
-          club_coach_id: coachId
+          club_coach_id: coachId,
+          // Taşınan gölgenin derse bağı KORUNMALI: bağsız yazılırsa ders düzenlendiği
+          // anda gölge yeniden "gerçek rezervasyon" sayılır (liste + çift ciro) ve
+          // ders silinince CASCADE ile temizlenmez.
+          manual_lesson_id: editId
         }).then(() => {
         }).catch((e) => console.warn("Kort blok g\xFCncellenemedi:", e.message));
       }
@@ -1805,19 +1822,49 @@ ${lines}
       if (!pkgId && row.coach_id) {
         const indId = coachesList.find((c) => c.id === row.coach_id)?.individual_coach_id;
         if (indId) {
-          const { data: sess } = await sb.from("lesson_package_sessions").select("player_package_id").is("lesson_id", null).eq("coach_id", indId).eq("session_date", row.date).limit(1).maybeSingle();
-          pkgId = sess?.player_package_id || null;
+          const { data: sess } = await sb.from("lesson_package_sessions").select("player_package_id").is("lesson_id", null).eq("coach_id", indId).eq("session_date", row.date);
+          const ppIds = [...new Set((sess || []).map((s) => s.player_package_id).filter(Boolean))];
+          if (ppIds.length > 0) {
+            const { data: pps } = await sb.from("player_lesson_packages").select("id, club_customer_id, player_id, manual_player_name").in("id", ppIds);
+            const _nrm = (s) => (s || "").toLocaleLowerCase("tr").replace(/\s+/g, " ").trim();
+            const hit = (pps || []).find(
+              (o) => row.club_customer_id && o.club_customer_id && row.club_customer_id === o.club_customer_id || row.player_id && o.player_id && row.player_id === o.player_id || row.student_name && o.manual_player_name && _nrm(row.student_name) === _nrm(o.manual_player_name)
+            );
+            pkgId = hit?.id || null;
+          }
         }
       }
       if (pkgId) {
-        const { data: plp } = await sb.from("player_lesson_packages").select("*, lesson_packages(name, total_lessons, price, coach_percentage, coach_payout_mode)").eq("id", pkgId).maybeSingle();
-        if (plp) {
-          setLsPackages([{
-            ...plp,
-            package_name: plp.lesson_packages?.name || plp.custom_name || "\xD6zel Paket",
-            remaining: (plp.total_lessons || 0) - (plp.used_lessons || 0)
-          }]);
-          setLsSelectedPkgId(plp.id);
+        const nowIso = (/* @__PURE__ */ new Date()).toISOString();
+        const _pid = selPlayer?.id || selCustomer?.user_id || null;
+        const _mname = !_pid && selCustomer && !selCustomer.user_id ? selCustomer.full_name : !_pid && !selCustomer ? row.student_name || null : null;
+        const baseQ = () => sb.from("player_lesson_packages").select("*, lesson_packages(name, total_lessons, price, validity_days, coach_percentage, coach_payout_mode)").in("payment_status", ["paid", "pending"]).eq("status", "active").or(`expiry_date.is.null,expiry_date.gt.${nowIso}`).order("created_at", { ascending: false });
+        const qs = [];
+        if (_pid) qs.push(baseQ().eq("player_id", _pid));
+        if (_mname) qs.push(baseQ().is("player_id", null).eq("manual_player_name", _mname));
+        if (_pid && selCustomer?.full_name) qs.push(baseQ().is("player_id", null).eq("manual_player_name", selCustomer.full_name));
+        const rs = await Promise.all(qs);
+        const seen = /* @__PURE__ */ new Set();
+        const allPkgs = rs.flatMap((r) => r.data || []).filter((r) => {
+          if (seen.has(r.id)) return false;
+          seen.add(r.id);
+          return true;
+        }).map((r) => ({
+          ...r,
+          package_name: r.lesson_packages?.name || r.custom_name || "\xD6zel Paket",
+          remaining: (r.total_lessons || 0) - (r.used_lessons || 0)
+        }));
+        if (!allPkgs.some((p) => p.id === pkgId)) {
+          const { data: one } = await sb.from("player_lesson_packages").select("*, lesson_packages(name, total_lessons, price, coach_percentage, coach_payout_mode)").eq("id", pkgId).maybeSingle();
+          if (one) allPkgs.unshift({
+            ...one,
+            package_name: one.lesson_packages?.name || one.custom_name || "\xD6zel Paket",
+            remaining: (one.total_lessons || 0) - (one.used_lessons || 0)
+          });
+        }
+        if (allPkgs.length > 0) {
+          setLsPackages(allPkgs);
+          setLsSelectedPkgId(pkgId);
           setLsUsePkg(true);
         } else {
           setLsUsePkg(false);
@@ -2047,6 +2094,10 @@ ${lines}
     }
     if (lsForm.start_time >= lsForm.end_time) {
       alert("Biti\u015F saati ba\u015Flang\u0131\xE7 saatinden sonra olmal\u0131d\u0131r.");
+      return;
+    }
+    if (lsUsePkg && !lsSelectedPkgId) {
+      alert('"Paketi Kullan" a\xE7\u0131k ama bir paket se\xE7ilmedi. Bir paket se\xE7in ya da "Paketi Kullan"\u0131 kapat\u0131n.');
       return;
     }
     if (lsSavingGuard.current) return;
@@ -2302,7 +2353,7 @@ Kaydedilsin mi?`)) {
                   const perSessionTotal = (pkgDef.price ?? pkg.custom_price ?? 0) / (pkgDef.total_lessons || pkg.total_lessons || 1);
                   const coachRec = coachesList.find((c) => c.id === coachId);
                   const pkgPct = pkgDef.coach_percentage ?? pkg.custom_coach_pct;
-                  const coachPct = Number(pkgPct) > 0 ? Number(pkgPct) : coachRec?.coach_pay_rate || 0;
+                  const coachPct = lsDiffPay && lsDiffPayPct !== "" && !isNaN(Number(lsDiffPayPct)) ? Number(lsDiffPayPct) : Number(pkgPct) > 0 ? Number(pkgPct) : coachRec?.coach_pay_rate || 0;
                   const coachEarning = Math.round(perSessionTotal * (coachPct / 100) * 100) / 100;
                   if (coachRec && coachEarning > 0) {
                     await sb.from("coach_earnings").insert({
@@ -3384,6 +3435,11 @@ Kaydedilsin mi?`)) {
           const next = !lsUsePkg;
           setLsUsePkg(next);
           setLsForm((prev) => ({ ...prev, amount: next ? "0" : "", payment_status: next ? "paid" : "unpaid" }));
+          if (next && !lsSelectedPkgId && lsPackages.length === 1) setLsSelectedPkgId(lsPackages[0].id);
+          if (!next) {
+            setLsDiffPay(false);
+            setLsDiffPayPct("");
+          }
         }
       },
       /* @__PURE__ */ React.createElement("div", { style: { width: 18, height: 18, borderRadius: 9, background: "#fff", position: "absolute", top: 3, left: lsUsePkg ? 23 : 3, transition: "left 0.2s", boxShadow: "0 1px 3px rgba(0,0,0,0.3)" } })
@@ -3418,7 +3474,29 @@ Kaydedilsin mi?`)) {
         /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("div", { style: { fontSize: 13, fontWeight: 700, color: isSelected && lsUsePkg ? "var(--brand-navy)" : "var(--text-1)" } }, pkg.package_name || "Ders Paketi"), /* @__PURE__ */ React.createElement("div", { style: { fontSize: 11, color: "var(--text-2)", marginTop: 2 } }, /* @__PURE__ */ React.createElement("span", { style: { fontWeight: 700, color: remaining <= 2 ? "#EF4444" : "#059669" } }, remaining, " ders kald\u0131"), ` / ${pkg.total_lessons} toplam`, expiry ? ` \xB7 Son: ${expiry}` : "")),
         isSelected && lsUsePkg && /* @__PURE__ */ React.createElement("span", { className: "material-icons", style: { fontSize: 18, color: "var(--brand-navy)" } }, "check_circle")
       );
-    }), lsUsePkg && /* @__PURE__ */ React.createElement("div", { style: { fontSize: 11, color: "#059669", fontWeight: 600, paddingTop: 2 } }, "Ders \xFCcreti 0 \u20BA olarak kaydedilecek, \xF6demesi paket sat\u0131\u015F\u0131nda al\u0131nd\u0131."))) : null), !lsUsePkg && lsPriceMode === "normal" ? /* @__PURE__ */ React.createElement("div", { style: { marginBottom: 16, opacity: lsUsePkg ? 0.7 : 1, pointerEvents: lsUsePkg ? "none" : "auto" } }, /* @__PURE__ */ React.createElement("div", { style: { display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, marginBottom: 8 } }, /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("div", { style: { fontSize: 12, fontWeight: 700, color: "var(--text-2)", marginBottom: 6, letterSpacing: 0.4 } }, "HOCA HAKED\u0130\u015E\u0130 (\u20BA)"), /* @__PURE__ */ React.createElement("div", { style: { display: "flex", alignItems: "center", border: "1.5px solid var(--border)", borderRadius: 12, background: "var(--bg)", paddingLeft: 10 } }, /* @__PURE__ */ React.createElement("span", { style: { fontSize: 14, fontWeight: 700, color: "var(--text-2)", marginRight: 3 } }, "\u20BA"), /* @__PURE__ */ React.createElement(
+    }), lsUsePkg && (() => {
+      const _selPkg = lsPackages.find((p) => p.id === lsSelectedPkgId);
+      const _perSession = (_selPkg?.lesson_packages?.coach_payout_mode || _selPkg?.coach_payout_mode) === "per_session";
+      return /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement("div", { style: { fontSize: 11, color: "#059669", fontWeight: 600, paddingTop: 2 } }, "Ders \xFCcreti 0 \u20BA olarak kaydedilecek, \xF6demesi paket sat\u0131\u015F\u0131nda al\u0131nd\u0131."), _perSession && /* @__PURE__ */ React.createElement("div", { style: { marginTop: 8, padding: "10px 12px", borderRadius: 10, border: "1.5px solid var(--border)", background: "var(--bg)" } }, /* @__PURE__ */ React.createElement("div", { style: { display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8 } }, /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("div", { style: { fontSize: 12, fontWeight: 700, color: lsDiffPay ? "var(--brand-navy)" : "var(--text-1)" } }, "Farkl\u0131 Pay (%)"), /* @__PURE__ */ React.createElement("div", { style: { fontSize: 10, color: "var(--text-2)" } }, "Kapal\u0131ysa antren\xF6re tan\u0131ml\u0131 oran uygulan\u0131r.")), /* @__PURE__ */ React.createElement(
+        "div",
+        {
+          style: { width: 44, height: 24, borderRadius: 12, background: lsDiffPay ? "var(--brand-navy)" : "#CBD5E1", cursor: "pointer", position: "relative", flexShrink: 0 },
+          onClick: () => setLsDiffPay((v) => !v)
+        },
+        /* @__PURE__ */ React.createElement("div", { style: { width: 18, height: 18, borderRadius: 9, background: "#fff", position: "absolute", top: 3, left: lsDiffPay ? 23 : 3, transition: "left 0.2s" } })
+      )), lsDiffPay && /* @__PURE__ */ React.createElement(
+        "input",
+        {
+          type: "number",
+          min: "0",
+          max: "100",
+          placeholder: "\xD6rn: 50",
+          value: lsDiffPayPct,
+          onChange: (e) => setLsDiffPayPct(e.target.value),
+          style: { width: "100%", marginTop: 8, border: "1.5px solid var(--border)", borderRadius: 8, padding: "8px 10px", fontSize: 14, boxSizing: "border-box" }
+        }
+      )));
+    })())) : null), !lsUsePkg && lsPriceMode === "normal" ? /* @__PURE__ */ React.createElement("div", { style: { marginBottom: 16, opacity: lsUsePkg ? 0.7 : 1, pointerEvents: lsUsePkg ? "none" : "auto" } }, /* @__PURE__ */ React.createElement("div", { style: { display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, marginBottom: 8 } }, /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("div", { style: { fontSize: 12, fontWeight: 700, color: "var(--text-2)", marginBottom: 6, letterSpacing: 0.4 } }, "HOCA HAKED\u0130\u015E\u0130 (\u20BA)"), /* @__PURE__ */ React.createElement("div", { style: { display: "flex", alignItems: "center", border: "1.5px solid var(--border)", borderRadius: 12, background: "var(--bg)", paddingLeft: 10 } }, /* @__PURE__ */ React.createElement("span", { style: { fontSize: 14, fontWeight: 700, color: "var(--text-2)", marginRight: 3 } }, "\u20BA"), /* @__PURE__ */ React.createElement(
       "input",
       {
         type: "number",

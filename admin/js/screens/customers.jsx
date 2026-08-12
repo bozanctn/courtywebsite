@@ -478,7 +478,7 @@ function AddPackageModal({ customer, clubId, onClose, onSaved }) {
         packageName:    mode === 'predefined' ? selectedPkg.name : customName.trim(),
         totalLessons:   mode === 'predefined' ? selectedPkg.total_lessons : +customLessons,
         customPrice:    mode === 'custom' ? +customPrice : null,
-        customCoachPct: mode === 'custom' ? +customCoachPct : null,
+        customCoachPct: null, // Özel pakette de sabit pay yok — finans, antrenöre tanımlı orandan hesaplar.
         validityDays:   mode === 'predefined' ? (selectedPkg.validity_days || 90) : +customValidity,
         coachId:        coachId || null,
         paymentStatus,
@@ -580,12 +580,6 @@ function AddPackageModal({ customer, clubId, onClose, onSaved }) {
                       placeholder="2000" style={inputStyle} />
                   </div>
                   <div>
-                    <label style={labelStyle}>HOCA PAYI (%)</label>
-                    <input type="number" min="0" max="100" value={customCoachPct}
-                      onChange={e => setCustomCoachPct(e.target.value)}
-                      placeholder="70" style={inputStyle} />
-                  </div>
-                  <div>
                     <label style={labelStyle}>GEÇERLİLİK (gün)</label>
                     <input type="number" min="1" value={customValidity}
                       onChange={e => setCustomValidity(e.target.value)}
@@ -600,6 +594,9 @@ function AddPackageModal({ customer, clubId, onClose, onSaved }) {
                       <option key={c.id} value={c.individual_coach_id || ''}>{c.full_name}</option>
                     ))}
                   </select>
+                </div>
+                <div style={{ fontSize: 12, color: 'var(--text-2)', background: 'var(--bg)', border: '1px solid var(--border)', borderRadius: 8, padding: '8px 10px' }}>
+                  Hoca payı sabit girilmez; antrenöre tanımlı pay oranından otomatik uygulanır.
                 </div>
               </div>
             )}

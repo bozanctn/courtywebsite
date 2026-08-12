@@ -48,6 +48,8 @@ window.RecurringLessonModal = function RecurringLessonModal({ clubId, onClose, o
   const [recUsePackage, setRecUsePackage]   = useState(false);
   const [recAvailablePackages, setRecAvailablePackages] = useState([]);
   const [recSelectedPackageId, setRecSelectedPackageId] = useState(null);
+  const [recDiffPay, setRecDiffPay] = useState(false); // paket (per_session) dersinde farklı hoca payı (%)
+  const [recDiffPayPct, setRecDiffPayPct] = useState('');
   const [recLoadingPackages, setRecLoadingPackages] = useState(false);
 
   // ── Kaynakları yükle ──
@@ -136,7 +138,7 @@ window.RecurringLessonModal = function RecurringLessonModal({ clubId, onClose, o
   }, [recStudent?.id, recStudentDisplayName, recCoach?.individual_coach_id, clubId]);
 
   // ── Paketten seans düş (mobil LessonPackageService.useSession birebir) ──
-  const useSession = async (playerPackageId, coachAuthId, sessionDate, lessonId, notes) => {
+  const useSession = async (playerPackageId, coachAuthId, sessionDate, lessonId, notes, overridePct) => {
     const { data: plp, error: fErr } = await sb.from('player_lesson_packages')
       .select('*, lesson_packages(price, total_lessons, coach_percentage, coach_payout_mode, club_id)')
       .eq('id', playerPackageId).single();
@@ -170,7 +172,9 @@ window.RecurringLessonModal = function RecurringLessonModal({ clubId, onClose, o
         sb.from('profiles').select('full_name').eq('id', plp.player_id).maybeSingle(),
       ]);
       const pkgPct = isCustom ? plp.custom_coach_pct : pkg?.coach_percentage;
-      const coachPct = Number(pkgPct) > 0 ? Number(pkgPct) : (ccRes.data?.coach_pay_rate ?? 0);
+      const coachPct = (overridePct != null && overridePct !== '' && !isNaN(Number(overridePct)))
+        ? Number(overridePct)  // "Farklı Pay" toggle
+        : (Number(pkgPct) > 0 ? Number(pkgPct) : (ccRes.data?.coach_pay_rate ?? 0));
       const coachAmount = Math.round(perSessionTotal * (coachPct / 100) * 100) / 100;
       if (ccRes.data && coachAmount > 0) {
         const { error: seErr } = await sb.from('coach_earnings').insert({
@@ -328,7 +332,7 @@ window.RecurringLessonModal = function RecurringLessonModal({ clubId, onClose, o
 
           if (usePackageForThis && studentId && createdId && coachAuthId) {
             try {
-              await useSession(recSelectedPackageId, coachAuthId, dateStr, createdId, recNotes.trim() || undefined);
+              await useSession(recSelectedPackageId, coachAuthId, dateStr, createdId, recNotes.trim() || undefined, (recDiffPay && recDiffPayPct !== '') ? recDiffPayPct : null);
               packageSessionsLeft--;
             } catch {
               packageSessionsLeft = 0;
@@ -494,6 +498,24 @@ window.RecurringLessonModal = function RecurringLessonModal({ clubId, onClose, o
                     </button>
                   );
                 })}
+                {(() => {
+                  const _selPkg = recAvailablePackages.find(p => p.id === recSelectedPackageId);
+                  const _perSession = (_selPkg?.coach_payout_mode || _selPkg?.lesson_packages?.coach_payout_mode) === 'per_session';
+                  if (!recSelectedPackageId || !_perSession) return null;
+                  return (
+                    <div style={{ marginTop:8, padding:'10px 12px', borderRadius:8, border:'1px solid var(--border)', background:'#fff' }}>
+                      <label style={{ display:'flex', alignItems:'center', gap:8, cursor:'pointer', fontSize:13 }}>
+                        <input type="checkbox" checked={recDiffPay} onChange={e => setRecDiffPay(e.target.checked)} />
+                        Farklı Pay (%) — kapalıysa antrenöre tanımlı oran uygulanır
+                      </label>
+                      {recDiffPay && (
+                        <input type="number" min="0" max="100" placeholder="Örn: 50" value={recDiffPayPct}
+                          onChange={e => setRecDiffPayPct(e.target.value)}
+                          style={{ width:'100%', marginTop:8, padding:'8px 10px' }} />
+                      )}
+                    </div>
+                  );
+                })()}
               </div>
             ))}
           </Field>
