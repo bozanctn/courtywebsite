@@ -2746,6 +2746,8 @@ function MyProgramScreen({ clubId, setScreen, clubProfile }) {
                     amount: coachEarning, court_fee: 0,
                     date: lsForm.date, description: 'Ders Paketi Oturumu', payment_status: 'unpaid',
                   });
+                  // NOT: Kulüp gideri BURADA yazılmaz. Gider yalnızca hoca hakedişi "Ödendi" yapıldığında
+                  // (analyze.jsx) "<Hoca> hoca maaş ödemesi" olarak yazılır.
                 }
               }
             }

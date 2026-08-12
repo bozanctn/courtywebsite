@@ -1089,7 +1089,8 @@ const LessonPackageSvc = {
     const mode       = payoutMode === 'per_session' ? 'per_session' : 'upfront';
     const total      = Math.round((price || 0) * 100) / 100;
     const coachPct   = coachInfo?.coachPayRate || 0;
-    const coachAmt   = coachPct > 0 ? Math.round(total * (coachPct / 100) * 100) / 100 : 0;
+    // per_session: satışta TAM fiyat kulübe; hoca payı seansta gider. upfront: satışta düşülür.
+    const coachAmt   = (mode === 'upfront' && coachPct > 0) ? Math.round(total * (coachPct / 100) * 100) / 100 : 0;
     const clubAmt    = Math.round((total - coachAmt) * 100) / 100;
     const promises   = [];
     if (clubAmt > 0) {
@@ -1223,7 +1224,9 @@ const LessonPackageSvc = {
       const total      = Math.round(totalPaid * 100) / 100;
       // Öncelik: pakette tanımlı % (varsa) → yoksa hocanın profil oranı
       const coachPct   = Number(pkg.coach_percentage) > 0 ? Number(pkg.coach_percentage) : (enrollData.coach_pay_rate || 0);
-      const coachAmt   = (coachPct > 0 && enrollData.coach_id)
+      // per_session: satışta TAM fiyat kulübe gelir; hoca payı her seansta gider olarak işlenir.
+      // upfront: hoca payı satışta bir kerede düşülür.
+      const coachAmt   = (mode === 'upfront' && coachPct > 0 && enrollData.coach_id)
         ? Math.round(total * (coachPct / 100) * 100) / 100 : 0;
       const clubAmt    = Math.round((total - coachAmt) * 100) / 100;
       const promises   = [];
@@ -1333,7 +1336,7 @@ const LessonPackageSvc = {
       p_package_name:       packageName,
       p_total_lessons:      Number(totalLessons),
       p_custom_price:       packageId ? null : (customPrice ? Number(customPrice) : null),
-      p_custom_coach_pct:   packageId ? null : (customCoachPct != null ? Number(customCoachPct) : 70),
+      p_custom_coach_pct:   packageId ? null : (customCoachPct != null ? Number(customCoachPct) : null),
       p_validity_days:      validityDays ? Number(validityDays) : null,
       p_coach_id:           coachId || null,
       p_payment_status:     paymentStatus,

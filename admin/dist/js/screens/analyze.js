@@ -185,6 +185,17 @@ function FinanceScreen({ clubId, clubProfile }) {
   const markEarningPaid = async (id) => {
     if (!confirm("Bu hakedi\u015Fi \xF6dendi olarak i\u015Faretle?")) return;
     await sb.from("coach_earnings").update({ payment_status: "paid", paid_at: (/* @__PURE__ */ new Date()).toISOString() }).eq("id", id);
+    const _e = coachEarnings.find((x) => x.id === id);
+    if (_e && Number(_e.amount) > 0 && /Ders Paketi/.test(_e.description || "")) {
+      await sb.from("club_finances").insert({
+        club_id: clubId,
+        type: "expense",
+        category: "Hoca Maa\u015F \xD6demesi",
+        amount: _e.amount,
+        description: `${_e.coach_name || "Hoca"} hoca maa\u015F \xF6demesi`,
+        date: (/* @__PURE__ */ new Date()).toISOString().split("T")[0]
+      });
+    }
     loadAll();
   };
   const markAllEarningsPaid = async (coachName) => {
@@ -196,6 +207,17 @@ function FinanceScreen({ clubId, clubProfile }) {
     const total = unpaid.reduce((s, e) => s + e.amount, 0);
     if (!confirm(`${coachName} adl\u0131 hocan\u0131n ${unpaid.length} hakedi\u015Fi toplam ${fmtMoney(total)} \xF6dendi olarak i\u015Faretlensin mi?`)) return;
     await sb.from("coach_earnings").update({ payment_status: "paid", paid_at: (/* @__PURE__ */ new Date()).toISOString() }).eq("club_id", clubId).eq("coach_name", coachName).eq("payment_status", "unpaid").eq("collected_by_coach", false);
+    const pkgTotal = unpaid.filter((e) => /Ders Paketi/.test(e.description || "")).reduce((s, e) => s + e.amount, 0);
+    if (pkgTotal > 0) {
+      await sb.from("club_finances").insert({
+        club_id: clubId,
+        type: "expense",
+        category: "Hoca Maa\u015F \xD6demesi",
+        amount: pkgTotal,
+        description: `${coachName} hoca maa\u015F \xF6demesi`,
+        date: (/* @__PURE__ */ new Date()).toISOString().split("T")[0]
+      });
+    }
     loadAll();
   };
   const netPositive = stats.netProfit >= 0;

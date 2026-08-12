@@ -183,6 +183,7 @@ window.RecurringLessonModal = function RecurringLessonModal({ clubId, onClose, o
           description: 'Ders Paketi Oturumu', payment_status: 'unpaid',
         });
         if (seErr) throw new Error(`Seans işlendi ancak hoca hakediş kaydı yazılamadı: ${seErr.message}`);
+        // NOT: Kulüp gideri BURADA yazılmaz — hoca hakedişi "Ödendi" olunca yazılır (analyze.jsx).
       }
     }
   };

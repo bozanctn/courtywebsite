@@ -173,6 +173,17 @@ function FinanceScreen({ clubId, clubProfile }) {
   const markEarningPaid = async (id) => {
     if (!confirm('Bu hakedişi ödendi olarak işaretle?')) return;
     await sb.from('coach_earnings').update({ payment_status: 'paid', paid_at: new Date().toISOString() }).eq('id', id);
+    // Kulüp gideri YALNIZCA paket hakedişlerinde (açıklaması "Ders Paketi...") ödeme anında yazılır.
+    // Normal derslerde kulüp zaten sadece kendi net payını gelir yazdı → gider yazılmaz (çift-düşüm olmaz).
+    const _e = coachEarnings.find(x => x.id === id);
+    if (_e && Number(_e.amount) > 0 && /Ders Paketi/.test(_e.description || '')) {
+      await sb.from('club_finances').insert({
+        club_id: clubId, type: 'expense', category: 'Hoca Maaş Ödemesi',
+        amount: _e.amount,
+        description: `${_e.coach_name || 'Hoca'} hoca maaş ödemesi`,
+        date: new Date().toISOString().split('T')[0],
+      });
+    }
     loadAll();
   };
 
@@ -186,6 +197,19 @@ function FinanceScreen({ clubId, clubProfile }) {
       .update({ payment_status: 'paid', paid_at: new Date().toISOString() })
       .eq('club_id', clubId).eq('coach_name', coachName).eq('payment_status', 'unpaid')
       .eq('collected_by_coach', false);
+    // Kulüp gideri YALNIZCA paket hakedişleri toplamı kadar (açıklaması "Ders Paketi...").
+    // Normal ders hakedişleri gidere girmez (kulüp zaten net gelir yazdı → çift-düşüm olmaz).
+    const pkgTotal = unpaid
+      .filter(e => /Ders Paketi/.test(e.description || ''))
+      .reduce((s, e) => s + e.amount, 0);
+    if (pkgTotal > 0) {
+      await sb.from('club_finances').insert({
+        club_id: clubId, type: 'expense', category: 'Hoca Maaş Ödemesi',
+        amount: pkgTotal,
+        description: `${coachName} hoca maaş ödemesi`,
+        date: new Date().toISOString().split('T')[0],
+      });
+    }
     loadAll();
   };
 

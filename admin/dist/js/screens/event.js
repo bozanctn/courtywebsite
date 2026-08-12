@@ -1530,7 +1530,7 @@ function LessonPackagesScreen({ clubId }) {
     setStats(s);
   };
   const openCreate = () => {
-    setForm({ name: "", description: "", total_lessons: 10, price: "", validity_days: 90, coach_id: "", is_active: true, coach_payout_mode: "upfront", coach_percentage: "" });
+    setForm({ name: "", description: "", total_lessons: 10, price: "", validity_days: 90, coach_id: "", is_active: true, coach_payout_mode: "per_session", coach_percentage: "" });
     setPkgModal({ type: "add" });
   };
   const openEdit = (pkg) => {
@@ -1562,8 +1562,8 @@ function LessonPackagesScreen({ clubId }) {
         coach_id: coachProfileId(form.coach_id) || null,
         is_active: form.is_active !== false,
         coach_payout_mode: form.coach_payout_mode === "per_session" ? "per_session" : "upfront",
-        coach_percentage: null
-        // Paket bazlı sabit pay kaldırıldı — finans, antrenöre tanımlı coach_pay_rate'i kullanır.
+        coach_percentage: 0
+        // Paket bazlı sabit pay kaldırıldı (kolon NOT NULL → 0). Finans, antrenöre tanımlı coach_pay_rate'i kullanır (kod: pct>0 ? pct : coach_pay_rate).
       };
       if (pkgModal.type === "add") {
         await LessonPackageSvc.createPackage(clubId, payload);

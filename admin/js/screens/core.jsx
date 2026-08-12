@@ -1532,6 +1532,7 @@ function ReservationsScreen({ clubId, setScreen, clubProfile }) {
                       description:    'Ders Paketi Oturumu',
                       payment_status: 'unpaid',
                     });
+                    // NOT: Kulüp gideri BURADA yazılmaz — hoca hakedişi "Ödendi" olunca yazılır (analyze.jsx).
                   }
                 }
               }
