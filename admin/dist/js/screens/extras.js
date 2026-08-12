@@ -444,6 +444,7 @@ function MyProgramScreen({ clubId, setScreen, clubProfile }) {
         if (playerId && lsSelectedCustomer?.full_name) {
           queries.push(baseQ().is("player_id", null).eq("manual_player_name", lsSelectedCustomer.full_name));
         }
+        if (lsSelectedCustomer?.id) queries.push(baseQ().eq("club_customer_id", lsSelectedCustomer.id));
         const results = await Promise.all(queries);
         const seen = /* @__PURE__ */ new Set();
         const allData = results.flatMap((r) => r.data || []).filter((r) => {
@@ -1843,6 +1844,7 @@ ${lines}
         if (_pid) qs.push(baseQ().eq("player_id", _pid));
         if (_mname) qs.push(baseQ().is("player_id", null).eq("manual_player_name", _mname));
         if (_pid && selCustomer?.full_name) qs.push(baseQ().is("player_id", null).eq("manual_player_name", selCustomer.full_name));
+        if (selCustomer?.id) qs.push(baseQ().eq("club_customer_id", selCustomer.id));
         const rs = await Promise.all(qs);
         const seen = /* @__PURE__ */ new Set();
         const allPkgs = rs.flatMap((r) => r.data || []).filter((r) => {
@@ -2099,6 +2101,13 @@ ${lines}
     if (lsUsePkg && !lsSelectedPkgId) {
       alert('"Paketi Kullan" a\xE7\u0131k ama bir paket se\xE7ilmedi. Bir paket se\xE7in ya da "Paketi Kullan"\u0131 kapat\u0131n.');
       return;
+    }
+    if (!lsUsePkg && lsForm.payment_status === "paid") {
+      const _effAmt = lsPriceMode === "normal" ? (parseFloat(String(lsCoachAmount).replace(",", ".")) || 0) + (parseFloat(String(lsClubAmount).replace(",", ".")) || 0) : lsForm.amount ? parseFloat(String(lsForm.amount).replace(",", ".")) || 0 : 0;
+      const _hasAvailPkg = (lsPackages || []).some((p) => (p.total_lessons || 0) - (p.used_lessons || 0) > 0);
+      if (_effAmt === 0 && _hasAvailPkg) {
+        if (!confirm('Bu \xF6\u011Frencinin kullan\u0131labilir bir ders paketi var, ama "Paketi Kullan" KAPALI.\n\nDers 0\u20BA / \xF6dendi olarak kaydedilecek ve paketten D\xDC\u015E\xDCLMEYECEK (\xFCcretsiz ders gibi).\n\nDevam edilsin mi?\n\nPaketten d\xFC\u015Fmek istiyorsan\u0131z \u0130ptal edip "Paketi Kullan"\u0131 a\xE7\u0131n.')) return;
+      }
     }
     if (lsSavingGuard.current) return;
     lsSavingGuard.current = true;

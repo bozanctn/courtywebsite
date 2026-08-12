@@ -1044,6 +1044,13 @@ Tutar: \u20BA${amount.toLocaleString("tr-TR")}` : "";
       alert('"Paketten Kullan" a\xE7\u0131k ama bir paket se\xE7ilmedi. Bir paket se\xE7in ya da kapat\u0131n.');
       return;
     }
+    if (!lessonUsePackage && lessonForm.payment_status === "paid") {
+      const _effAmt = lessonPriceMode === "normal" ? (parseFloat(String(lessonCoachAmountInput).replace(",", ".")) || 0) + (parseFloat(String(lessonClubAmountInput).replace(",", ".")) || 0) : lessonForm.amount ? parseFloat(String(lessonForm.amount).replace(",", ".")) || 0 : 0;
+      const _hasAvailPkg = (lessonPackages || []).some((p) => (p.total_lessons || 0) - (p.used_lessons || 0) > 0);
+      if (_effAmt === 0 && _hasAvailPkg) {
+        if (!confirm('Bu \xF6\u011Frencinin kullan\u0131labilir bir ders paketi var, ama "Paketten Kullan" KAPALI.\n\nDers 0\u20BA / \xF6dendi olarak kaydedilecek ve paketten D\xDC\u015E\xDCLMEYECEK (\xFCcretsiz ders gibi).\n\nDevam edilsin mi?\n\nPaketten d\xFC\u015Fmek istiyorsan\u0131z \u0130ptal edip "Paketten Kullan"\u0131 a\xE7\u0131n.')) return;
+      }
+    }
     if (isNew) {
       if (/* @__PURE__ */ new Date(`${lessonForm.date}T${lessonForm.start_time}`) < /* @__PURE__ */ new Date()) {
         if (!confirm("Ge\xE7mi\u015F bir tarihe ders eklensin mi?")) return;

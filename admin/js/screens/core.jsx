@@ -1255,6 +1255,16 @@ function ReservationsScreen({ clubId, setScreen, clubProfile }) {
     if (lessonUsePackage && !lessonSelectedPackageId) {
       alert('"Paketten Kullan" açık ama bir paket seçilmedi. Bir paket seçin ya da kapatın.'); return;
     }
+    // Fix D: Paketi olan öğrenciye, paket KULLANILMADAN 0₺/ödendi ders → sessiz "hayalet" riski. Uyar.
+    if (!lessonUsePackage && lessonForm.payment_status === 'paid') {
+      const _effAmt = lessonPriceMode === 'normal'
+        ? ((parseFloat(String(lessonCoachAmountInput).replace(',', '.')) || 0) + (parseFloat(String(lessonClubAmountInput).replace(',', '.')) || 0))
+        : (lessonForm.amount ? (parseFloat(String(lessonForm.amount).replace(',', '.')) || 0) : 0);
+      const _hasAvailPkg = (lessonPackages || []).some(p => ((p.total_lessons || 0) - (p.used_lessons || 0)) > 0);
+      if (_effAmt === 0 && _hasAvailPkg) {
+        if (!confirm('Bu öğrencinin kullanılabilir bir ders paketi var, ama "Paketten Kullan" KAPALI.\n\nDers 0₺ / ödendi olarak kaydedilecek ve paketten DÜŞÜLMEYECEK (ücretsiz ders gibi).\n\nDevam edilsin mi?\n\nPaketten düşmek istiyorsanız İptal edip "Paketten Kullan"ı açın.')) return;
+      }
+    }
 
     // Geçmiş tarih kontrolü (yalnızca yeni ders) — engellemek yerine onay iste
     if (isNew) {

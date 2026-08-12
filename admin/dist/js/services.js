@@ -1593,6 +1593,8 @@ const CustomerSvc = {
     const name = customerName?.trim()?.toLowerCase();
     return (data ?? []).filter(p =>
       p.status !== 'cancelled' && (
+        // Öncelik: değişmez müşteri id bağı (ad değişse/çakışsa da korunur) — bkz. Fix B
+        (customerId && p.club_customer_id === customerId) ||
         (customerUserId && p.player_id === customerUserId) ||
         (name && p.manual_player_name?.trim()?.toLowerCase() === name) ||
         (name && p.player?.full_name?.trim()?.toLowerCase() === name)
