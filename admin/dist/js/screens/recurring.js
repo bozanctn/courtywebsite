@@ -185,7 +185,7 @@ window.RecurringLessonModal = function RecurringLessonModal({ clubId, onClose, o
           student_name: plRes.data?.full_name ?? "\xD6\u011Frenci",
           amount: coachAmount,
           date: sessionDate,
-          description: "Ders Paketi Oturumu",
+          description: `Ders Paketi Oturumu \xB7 ${(isCustom ? plp.custom_name : pkg?.name) || "Paket"}`,
           payment_status: "unpaid"
         });
         if (seErr) throw new Error(`Seans i\u015Flendi ancak hoca hakedi\u015F kayd\u0131 yaz\u0131lamad\u0131: ${seErr.message}`);

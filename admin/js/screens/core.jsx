@@ -1529,7 +1529,7 @@ function ReservationsScreen({ clubId, setScreen, clubProfile }) {
                       amount:         coachEarning,
                       court_fee:      0,
                       date:           lessonForm.date,
-                      description:    'Ders Paketi Oturumu',
+                      description:    `Ders Paketi Oturumu · ${pkg.package_name || 'Paket'}`,
                       payment_status: 'unpaid',
                     });
                     // NOT: Kulüp gideri BURADA yazılmaz — hoca hakedişi "Ödendi" olunca yazılır (analyze.jsx).

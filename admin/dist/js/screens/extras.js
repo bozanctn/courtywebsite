@@ -333,6 +333,7 @@ function MyProgramScreen({ clubId, setScreen, clubProfile }) {
   const [closureGroups, setClosureGroups] = useState([]);
   const [closureType, setClosureType] = useState(null);
   const [closureIsRecurring, setClosureIsRecurring] = useState(false);
+  const [closureNote, setClosureNote] = useState("");
   const [selectedGroup, setSelectedGroup] = useState("");
   const [slotSaving, setSlotSaving] = useState(false);
   const [dragState, setDragState] = useState(null);
@@ -1025,7 +1026,7 @@ function MyProgramScreen({ clubId, setScreen, clubProfile }) {
       const rows = slotClickInfo.courtIds.map((cId) => ({
         court_id: cId,
         closure_type: isRecurring ? "recurring_weekly" : "one_time",
-        reason: closureType === "group" ? "Grup Dersi" : "Kapal\u0131",
+        reason: closureType === "group" ? "Grup Dersi" : closureNote.trim() || "Kapal\u0131",
         start_hour: slotClickInfo.startHour,
         start_minute: slotClickInfo.startMinute || 0,
         end_hour: slotClickInfo.endHour,
@@ -1041,6 +1042,7 @@ function MyProgramScreen({ clubId, setScreen, clubProfile }) {
       setSlotClickInfo(null);
       setClosureType(null);
       setClosureIsRecurring(false);
+      setClosureNote("");
       await load();
     } catch (e) {
       alert("Hata: " + e.message);
@@ -1631,7 +1633,7 @@ ${lines}
       }
       await sb.from("lesson_package_sessions").delete().eq("id", oldSessId);
     }
-    await sb.from("coach_earnings").delete().eq("manual_lesson_id", editId).eq("description", "Ders Paketi Oturumu");
+    await sb.from("coach_earnings").delete().eq("manual_lesson_id", editId).like("description", "Ders Paketi Oturumu%");
     const oldSig = `${oldCoachDisplay || "Antren\xF6r"} - ${oldStu} - Ders Paketi Oturumu`;
     const { data: cfOld } = await sb.from("club_finances").select("id").eq("club_id", clubId).eq("date", orig.date).eq("category", "Ders Paketi Geliri").eq("description", oldSig);
     if (cfOld?.length === 1) await sb.from("club_finances").delete().eq("id", cfOld[0].id);
@@ -1689,7 +1691,7 @@ ${lines}
           amount: coachEarning,
           court_fee: 0,
           date,
-          description: "Ders Paketi Oturumu",
+          description: `Ders Paketi Oturumu \xB7 ${pkg.lesson_packages?.name || pkg.custom_name || "Paket"}`,
           payment_status: "unpaid"
         });
       }
@@ -2398,7 +2400,7 @@ Kaydedilsin mi?`)) {
                       amount: coachEarning,
                       court_fee: 0,
                       date: lsForm.date,
-                      description: "Ders Paketi Oturumu",
+                      description: `Ders Paketi Oturumu \xB7 ${pkg.package_name || "Paket"}`,
                       payment_status: "unpaid"
                     });
                   }
@@ -2963,6 +2965,7 @@ Kaydedilsin mi?`)) {
           setSlotTypeModal(false);
           setSlotClickInfo(null);
           setClosureType(null);
+          setClosureNote("");
         }
       }
     },
@@ -3006,7 +3009,16 @@ Kaydedilsin mi?`)) {
         /* @__PURE__ */ React.createElement("div", { style: { display: "flex", alignItems: "center", gap: 6, marginBottom: 4 } }, /* @__PURE__ */ React.createElement("span", { className: "material-icons", style: { fontSize: 17, color: sel ? "#DC2626" : "var(--text-2)" } }, icon), /* @__PURE__ */ React.createElement("span", { style: { fontSize: 13, fontWeight: 700, color: sel ? "#B91C1C" : "var(--text-1)" } }, label)),
         /* @__PURE__ */ React.createElement("div", { style: { fontSize: 11, color: "var(--text-2)" } }, desc)
       );
-    })), closureType === "group" && /* @__PURE__ */ React.createElement(
+    })), closureType === "closure" && /* @__PURE__ */ React.createElement(
+      "input",
+      {
+        type: "text",
+        value: closureNote,
+        onChange: (e) => setClosureNote(e.target.value),
+        placeholder: "A\xE7\u0131klama (opsiyonel) \u2014 \xF6r. Bak\u0131m, \xF6zel etkinlik",
+        style: { border: "1.5px solid var(--border)", borderRadius: 10, padding: "10px 12px", fontSize: 14, width: "100%", boxSizing: "border-box" }
+      }
+    ), closureType === "group" && /* @__PURE__ */ React.createElement(
       "select",
       {
         value: selectedGroup,
@@ -3030,6 +3042,7 @@ Kaydedilsin mi?`)) {
         onClick: () => {
           setClosureType(null);
           setClosureIsRecurring(false);
+          setClosureNote("");
         }
       },
       "\u2190 Geri"
@@ -3042,6 +3055,7 @@ Kaydedilsin mi?`)) {
           setSlotClickInfo(null);
           setClosureType(null);
           setClosureIsRecurring(false);
+          setClosureNote("");
         }
       },
       "\u0130ptal"

@@ -1270,7 +1270,7 @@ Yine de eklensin mi?`)) return;
                       amount: coachEarning,
                       court_fee: 0,
                       date: lessonForm.date,
-                      description: "Ders Paketi Oturumu",
+                      description: `Ders Paketi Oturumu \xB7 ${pkg.package_name || "Paket"}`,
                       payment_status: "unpaid"
                     });
                   }

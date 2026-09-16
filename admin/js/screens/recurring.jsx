@@ -180,7 +180,7 @@ window.RecurringLessonModal = function RecurringLessonModal({ clubId, onClose, o
         const { error: seErr } = await sb.from('coach_earnings').insert({
           coach_id: ccRes.data.id, club_id: cid, coach_name: ccRes.data.full_name ?? 'Antrenör',
           student_name: plRes.data?.full_name ?? 'Öğrenci', amount: coachAmount, date: sessionDate,
-          description: 'Ders Paketi Oturumu', payment_status: 'unpaid',
+          description: `Ders Paketi Oturumu · ${(isCustom ? plp.custom_name : pkg?.name) || 'Paket'}`, payment_status: 'unpaid',
         });
         if (seErr) throw new Error(`Seans işlendi ancak hoca hakediş kaydı yazılamadı: ${seErr.message}`);
         // NOT: Kulüp gideri BURADA yazılmaz — hoca hakedişi "Ödendi" olunca yazılır (analyze.jsx).

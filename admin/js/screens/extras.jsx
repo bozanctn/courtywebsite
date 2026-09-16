@@ -587,6 +587,7 @@ function MyProgramScreen({ clubId, setScreen, clubProfile }) {
   const [closureGroups,  setClosureGroups]  = useState([]);
   const [closureType,        setClosureType]        = useState(null); // 'closure' | 'group'
   const [closureIsRecurring, setClosureIsRecurring] = useState(false);
+  const [closureNote,        setClosureNote]        = useState(''); // hızlı kapatma açıklaması → court_closures.reason
   const [selectedGroup,      setSelectedGroup]      = useState('');
   const [slotSaving,         setSlotSaving]         = useState(false);
   const [dragState,      setDragState]      = useState(null); // { courtId, startHour, currentHour }
@@ -1311,7 +1312,7 @@ function MyProgramScreen({ clubId, setScreen, clubProfile }) {
       const rows = slotClickInfo.courtIds.map(cId => ({
         court_id:     cId,
         closure_type: isRecurring ? 'recurring_weekly' : 'one_time',
-        reason:       closureType === 'group' ? 'Grup Dersi' : 'Kapalı',
+        reason:       closureType === 'group' ? 'Grup Dersi' : (closureNote.trim() || 'Kapalı'),
         start_hour:   slotClickInfo.startHour,
         start_minute: slotClickInfo.startMinute || 0,
         end_hour:     slotClickInfo.endHour,
@@ -1327,6 +1328,7 @@ function MyProgramScreen({ clubId, setScreen, clubProfile }) {
       setSlotClickInfo(null);
       setClosureType(null);
       setClosureIsRecurring(false);
+      setClosureNote('');
       await load();
     } catch (e) { alert('Hata: ' + e.message); }
     finally { setSlotSaving(false); }
@@ -1952,7 +1954,7 @@ function MyProgramScreen({ clubId, setScreen, clubProfile }) {
       await sb.from('lesson_package_sessions').delete().eq('id', oldSessId);
     }
     // Eski paket mali kayıtları
-    await sb.from('coach_earnings').delete().eq('manual_lesson_id', editId).eq('description', 'Ders Paketi Oturumu');
+    await sb.from('coach_earnings').delete().eq('manual_lesson_id', editId).like('description', 'Ders Paketi Oturumu%');
     const oldSig = `${oldCoachDisplay || 'Antrenör'} - ${oldStu} - Ders Paketi Oturumu`;
     const { data: cfOld } = await sb.from('club_finances').select('id')
       .eq('club_id', clubId).eq('date', orig.date).eq('category', 'Ders Paketi Geliri').eq('description', oldSig);
@@ -2006,7 +2008,7 @@ function MyProgramScreen({ clubId, setScreen, clubProfile }) {
         await sb.from('coach_earnings').insert({
           club_id: clubId, coach_id: coachId, individual_coach_id: coachRec.individual_coach_id || null, coach_name: coachRec.full_name,
           student_name: studentName || null, manual_lesson_id: editId,
-          amount: coachEarning, court_fee: 0, date, description: 'Ders Paketi Oturumu', payment_status: 'unpaid',
+          amount: coachEarning, court_fee: 0, date, description: `Ders Paketi Oturumu · ${pkg.lesson_packages?.name || pkg.custom_name || 'Paket'}`, payment_status: 'unpaid',
         });
       }
     }
@@ -2744,7 +2746,7 @@ function MyProgramScreen({ clubId, setScreen, clubProfile }) {
                     club_id: clubId, coach_id: coachId, individual_coach_id: coachRec.individual_coach_id || null, coach_name: coachRec.full_name,
                     student_name: lsForm.student_name || null, manual_lesson_id: inserted.id,
                     amount: coachEarning, court_fee: 0,
-                    date: lsForm.date, description: 'Ders Paketi Oturumu', payment_status: 'unpaid',
+                    date: lsForm.date, description: `Ders Paketi Oturumu · ${pkg.package_name || 'Paket'}`, payment_status: 'unpaid',
                   });
                   // NOT: Kulüp gideri BURADA yazılmaz. Gider yalnızca hoca hakedişi "Ödendi" yapıldığında
                   // (analyze.jsx) "<Hoca> hoca maaş ödemesi" olarak yazılır.
@@ -3341,7 +3343,7 @@ function MyProgramScreen({ clubId, setScreen, clubProfile }) {
       {/* Slot Tip Seçim Modalı */}
       {slotTypeModal && slotClickInfo && (
         <div style={{ position:'fixed', inset:0, background:'rgba(0,0,0,0.45)', zIndex:1100, display:'flex', alignItems:'center', justifyContent:'center' }}
-          onClick={e => { if (e.target === e.currentTarget) { setSlotTypeModal(false); setSlotClickInfo(null); setClosureType(null); } }}>
+          onClick={e => { if (e.target === e.currentTarget) { setSlotTypeModal(false); setSlotClickInfo(null); setClosureType(null); setClosureNote(''); } }}>
           <div style={{ background:'#fff', borderRadius:20, padding:24, width:340, display:'flex', flexDirection:'column', gap:10 }}>
             <div style={{ fontWeight:800, fontSize:17, color:'var(--text-1)', marginBottom:2 }}>
               {slotClickInfo.courtIds.map(id => { const c = courts.find(x => x.id === id); return c ? `Kort ${c.court_number}` : ''; }).join(', ')}
@@ -3398,6 +3400,15 @@ function MyProgramScreen({ clubId, setScreen, clubProfile }) {
                     })}
                   </div>
                 )}
+                {closureType === 'closure' && (
+                  <input
+                    type="text"
+                    value={closureNote}
+                    onChange={e => setClosureNote(e.target.value)}
+                    placeholder="Açıklama (opsiyonel) — ör. Bakım, özel etkinlik"
+                    style={{ border:'1.5px solid var(--border)', borderRadius:10, padding:'10px 12px', fontSize:14, width:'100%', boxSizing:'border-box' }}
+                  />
+                )}
                 {closureType === 'group' && (
                   <select value={selectedGroup} onChange={e => setSelectedGroup(e.target.value)}
                     style={{ border:'1.5px solid var(--border)', borderRadius:10, padding:'10px 12px', fontSize:14 }}>
@@ -3411,14 +3422,14 @@ function MyProgramScreen({ clubId, setScreen, clubProfile }) {
                   {slotSaving ? 'Kaydediliyor…' : closureType === 'group' ? 'Grup Dersi Ekle' : 'Kapat'}
                 </button>
                 <button style={{ padding:'10px', borderRadius:12, border:'1px solid var(--border)', background:'var(--bg)', cursor:'pointer', fontSize:13, color:'var(--text-2)', fontWeight:600 }}
-                  onClick={() => { setClosureType(null); setClosureIsRecurring(false); }}>
+                  onClick={() => { setClosureType(null); setClosureIsRecurring(false); setClosureNote(''); }}>
                   ← Geri
                 </button>
               </>
             )}
 
             <button style={{ marginTop:2, padding:'10px', borderRadius:12, border:'1px solid var(--border)', background:'var(--bg)', cursor:'pointer', fontSize:13, color:'var(--text-2)', fontWeight:600 }}
-              onClick={() => { setSlotTypeModal(false); setSlotClickInfo(null); setClosureType(null); setClosureIsRecurring(false); }}>
+              onClick={() => { setSlotTypeModal(false); setSlotClickInfo(null); setClosureType(null); setClosureIsRecurring(false); setClosureNote(''); }}>
               İptal
             </button>
           </div>

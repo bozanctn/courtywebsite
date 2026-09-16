@@ -497,6 +497,12 @@ function FinanceScreen({ clubId, clubProfile }) {
                       <div style={{ fontSize: 12, color: 'var(--text-2)', marginTop: 2 }}>
                         {fmtDate(e.date)}{e.student_name ? ` • ${e.student_name}` : ''}
                       </div>
+                      {!isRefund && /Ders Paketi/.test(e.description || '') && (
+                        <div style={{ fontSize: 11, color: 'var(--brand-navy)', marginTop: 2, display: 'flex', alignItems: 'center', gap: 4 }}>
+                          <span className="material-icons" style={{ fontSize: 13 }}>inventory_2</span>
+                          {(e.description || '').replace(/^Ders Paketi Oturumu · /, '')}
+                        </div>
+                      )}
                       {isRefund && e.description
                         ? <div style={{ fontSize: 11, color: '#EF4444', marginTop: 2 }}>{e.description}</div>
                         : (collected && (e.court_fee || 0) > 0 && (
