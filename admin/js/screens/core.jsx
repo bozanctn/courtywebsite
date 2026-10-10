@@ -1646,6 +1646,17 @@ function ReservationsScreen({ clubId, setScreen, clubProfile }) {
           await cancelCourtBooking(lesson.court_id, lesson.date, lesson.start_time, lesson.end_time);
         }
       }
+      // Tüm hocalara push: özel ders kulüp tarafından iptal edildi.
+      try {
+        const _coachIds = [...new Set((coaches || []).map(c => c.individual_coach_id).filter(Boolean))];
+        if (_coachIds.length > 0) {
+          const _msg = `${lesson.date} ${(lesson.start_time || '').slice(0, 5)} — ${lesson.student_name || 'Öğrenci'} özel dersi kulüp tarafından iptal edildi.`;
+          await sb.from('notifications').insert(_coachIds.map(uid => ({
+            user_id: uid, title: 'Özel Ders İptal Edildi', message: _msg, type: 'general',
+            data: { kind: 'lesson_cancelled', by: 'club' },
+          })));
+        }
+      } catch (_) { /* bildirim hatası sessizce geç */ }
     } catch (e) { console.warn('Ders iptal hatası:', e.message); }
     loadLessons();
   };

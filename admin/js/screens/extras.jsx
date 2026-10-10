@@ -1012,7 +1012,7 @@ function MyProgramScreen({ clubId, setScreen, clubProfile }) {
       const courtNum  = courts.find(c => c.id === b.court_id)?.court_number;
       const playerName = bkPlayerMap.get(b.id) || null;
       all.push({ id: b.id, type: 'booking', courtId: b.court_id, courtNum,
-        label: playerName || 'Rezervasyon', sh, sm, eh, em, color: '#22C55E',
+        label: playerName ? `${playerName} - Rezervasyon` : 'Rezervasyon', sh, sm, eh, em, color: '#22C55E',
         status: b.status, paymentStatus: b.payment_status,
         totalAmount: b.total_amount, userId: b.user_id, playerName });
     });
@@ -1802,6 +1802,20 @@ function MyProgramScreen({ clubId, setScreen, clubProfile }) {
           await cancelCourtBooking(lsDetail.courtId, lsDetail.lessonDate, lsDetail.sh, lsDetail.sm, lsDetail.eh, lsDetail.em);
         }
       }
+      // Tüm hocalara push bildirim: özel ders kulüp tarafından iptal edildi.
+      // (notifications tablosuna satır eklenince DB trigger push gönderir.)
+      try {
+        const _coachIds = [...new Set((coachesList || []).map(c => c.individual_coach_id).filter(Boolean))];
+        if (_coachIds.length > 0) {
+          const _hh = String(lsDetail.sh ?? 0).padStart(2, '0');
+          const _mm = String(lsDetail.sm ?? 0).padStart(2, '0');
+          const _msg = `${lsDetail.lessonDate} ${_hh}:${_mm} — ${lsDetail.studentName || 'Öğrenci'} özel dersi kulüp tarafından iptal edildi.`;
+          await sb.from('notifications').insert(_coachIds.map(uid => ({
+            user_id: uid, title: 'Özel Ders İptal Edildi', message: _msg, type: 'general',
+            data: { kind: 'lesson_cancelled', by: 'club' },
+          })));
+        }
+      } catch (_) { /* bildirim hatası sessizce geç */ }
       setLsDetail(null);
       load();
     } catch (e) { console.warn('Ders iptal hatası:', e.message); alert(e.message); }

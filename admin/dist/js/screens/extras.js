@@ -686,7 +686,7 @@ function MyProgramScreen({ clubId, setScreen, clubProfile }) {
         type: "booking",
         courtId: b.court_id,
         courtNum,
-        label: playerName || "Rezervasyon",
+        label: playerName ? `${playerName} - Rezervasyon` : "Rezervasyon",
         sh,
         sm,
         eh,
@@ -1470,6 +1470,22 @@ ${lines}
         if (lsDetail.courtId) {
           await cancelCourtBooking(lsDetail.courtId, lsDetail.lessonDate, lsDetail.sh, lsDetail.sm, lsDetail.eh, lsDetail.em);
         }
+      }
+      try {
+        const _coachIds = [...new Set((coachesList || []).map((c) => c.individual_coach_id).filter(Boolean))];
+        if (_coachIds.length > 0) {
+          const _hh = String(lsDetail.sh ?? 0).padStart(2, "0");
+          const _mm = String(lsDetail.sm ?? 0).padStart(2, "0");
+          const _msg = `${lsDetail.lessonDate} ${_hh}:${_mm} \u2014 ${lsDetail.studentName || "\xD6\u011Frenci"} \xF6zel dersi kul\xFCp taraf\u0131ndan iptal edildi.`;
+          await sb.from("notifications").insert(_coachIds.map((uid) => ({
+            user_id: uid,
+            title: "\xD6zel Ders \u0130ptal Edildi",
+            message: _msg,
+            type: "general",
+            data: { kind: "lesson_cancelled", by: "club" }
+          })));
+        }
+      } catch (_) {
       }
       setLsDetail(null);
       load();

@@ -1018,6 +1018,18 @@ function GroupsScreen({ clubId }) {
     setGroupModal({ type: 'edit', group: g });
   };
 
+  // Kart üzerinde hızlı ad değiştirme — tam "Grubu Düzenle" modalına girmeden. Program ekranındaki
+  // grup blokları adı join'den (cl.group.name) aldığı için yeniden adlandırma oraya da yansır.
+  const renameGroup = async (g, newName) => {
+    const nm = (newName || '').trim();
+    if (!nm || nm === g.name) return; // boş ya da değişmemişse dokunma
+    try {
+      const { error } = await sb.from('club_groups').update({ name: nm }).eq('id', g.id);
+      if (error) throw error;
+      loadGroups();
+    } catch (e) { alert('Grup adı güncellenemedi: ' + e.message); loadGroups(); }
+  };
+
   const updateNewMember = (idx, field, val) => {
     setNewMembers(prev => prev.map((m, i) => i === idx ? { ...m, [field]: val } : m));
   };
@@ -1275,7 +1287,17 @@ function GroupsScreen({ clubId }) {
               <div key={g.id} className="card" style={{ display:'flex', flexDirection:'column', gap:10 }}>
                 {/* Başlık satırı */}
                 <div style={{ display:'flex', justifyContent:'space-between', alignItems:'flex-start' }}>
-                  <div style={{ fontWeight:800, fontSize:16 }}>{g.name}</div>
+                  <input
+                    key={g.id + '|' + g.name}
+                    defaultValue={g.name}
+                    title="Grup adını düzenle — yaz, Enter'a bas veya başka yere tıkla"
+                    onKeyDown={e => { if (e.key === 'Enter') e.currentTarget.blur(); }}
+                    onFocus={e => { e.target.style.borderColor = 'var(--border)'; e.target.style.background = 'var(--bg)'; }}
+                    onBlur={e => { e.target.style.borderColor = 'transparent'; e.target.style.background = 'transparent'; renameGroup(g, e.target.value); }}
+                    style={{ fontWeight:800, fontSize:16, flex:1, minWidth:0, marginRight:8,
+                      border:'1px solid transparent', borderRadius:8, padding:'2px 6px',
+                      background:'transparent', color:'var(--text-1)', outline:'none', fontFamily:'inherit' }}
+                  />
                   <button
                     style={{ background:'none', border:'none', cursor:'pointer', padding:'3px 10px', borderRadius:20,
                       backgroundColor: g.is_active ? '#DCFCE7' : '#FEF3C7',

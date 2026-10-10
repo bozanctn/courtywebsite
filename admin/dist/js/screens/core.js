@@ -1377,6 +1377,20 @@ Yine de eklensin mi?`)) return;
           await cancelCourtBooking(lesson.court_id, lesson.date, lesson.start_time, lesson.end_time);
         }
       }
+      try {
+        const _coachIds = [...new Set((coaches || []).map((c) => c.individual_coach_id).filter(Boolean))];
+        if (_coachIds.length > 0) {
+          const _msg = `${lesson.date} ${(lesson.start_time || "").slice(0, 5)} \u2014 ${lesson.student_name || "\xD6\u011Frenci"} \xF6zel dersi kul\xFCp taraf\u0131ndan iptal edildi.`;
+          await sb.from("notifications").insert(_coachIds.map((uid) => ({
+            user_id: uid,
+            title: "\xD6zel Ders \u0130ptal Edildi",
+            message: _msg,
+            type: "general",
+            data: { kind: "lesson_cancelled", by: "club" }
+          })));
+        }
+      } catch (_) {
+      }
     } catch (e) {
       console.warn("Ders iptal hatas\u0131:", e.message);
     }

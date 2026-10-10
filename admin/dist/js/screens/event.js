@@ -858,6 +858,18 @@ function GroupsScreen({ clubId }) {
     setSchedConflicts([]);
     setGroupModal({ type: "edit", group: g });
   };
+  const renameGroup = async (g, newName) => {
+    const nm = (newName || "").trim();
+    if (!nm || nm === g.name) return;
+    try {
+      const { error } = await sb.from("club_groups").update({ name: nm }).eq("id", g.id);
+      if (error) throw error;
+      loadGroups();
+    } catch (e) {
+      alert("Grup ad\u0131 g\xFCncellenemedi: " + e.message);
+      loadGroups();
+    }
+  };
   const updateNewMember = (idx, field, val) => {
     setNewMembers((prev) => prev.map((m, i) => i === idx ? { ...m, [field]: val } : m));
   };
@@ -1115,7 +1127,40 @@ function GroupsScreen({ clubId }) {
   };
   return /* @__PURE__ */ React.createElement("div", { className: "page fade-in" }, /* @__PURE__ */ React.createElement("div", { className: "page-head" }, /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("h1", null, "Gruplar"), /* @__PURE__ */ React.createElement("div", { className: "sub" }, groups.length, " grup kay\u0131tl\u0131")), /* @__PURE__ */ React.createElement("button", { className: "btn btn-pri", onClick: openCreate }, /* @__PURE__ */ React.createElement("span", { className: "material-icons" }, "add"), " Grup Olu\u015Ftur")), loading ? /* @__PURE__ */ React.createElement(Spinner, null) : groups.length === 0 ? /* @__PURE__ */ React.createElement(EmptyState, { icon: "groups", title: "Hen\xFCz grup yok", sub: "\u0130lk grubunuzu olu\u015Fturun." }) : /* @__PURE__ */ React.createElement("div", { style: { display: "grid", gridTemplateColumns: "repeat(auto-fill,minmax(300px,1fr))", gap: 14 } }, groups.map((g) => {
     const coachShare = 100 - (g.club_percentage ?? 100);
-    return /* @__PURE__ */ React.createElement("div", { key: g.id, className: "card", style: { display: "flex", flexDirection: "column", gap: 10 } }, /* @__PURE__ */ React.createElement("div", { style: { display: "flex", justifyContent: "space-between", alignItems: "flex-start" } }, /* @__PURE__ */ React.createElement("div", { style: { fontWeight: 800, fontSize: 16 } }, g.name), /* @__PURE__ */ React.createElement(
+    return /* @__PURE__ */ React.createElement("div", { key: g.id, className: "card", style: { display: "flex", flexDirection: "column", gap: 10 } }, /* @__PURE__ */ React.createElement("div", { style: { display: "flex", justifyContent: "space-between", alignItems: "flex-start" } }, /* @__PURE__ */ React.createElement(
+      "input",
+      {
+        key: g.id + "|" + g.name,
+        defaultValue: g.name,
+        title: "Grup ad\u0131n\u0131 d\xFCzenle \u2014 yaz, Enter'a bas veya ba\u015Fka yere t\u0131kla",
+        onKeyDown: (e) => {
+          if (e.key === "Enter") e.currentTarget.blur();
+        },
+        onFocus: (e) => {
+          e.target.style.borderColor = "var(--border)";
+          e.target.style.background = "var(--bg)";
+        },
+        onBlur: (e) => {
+          e.target.style.borderColor = "transparent";
+          e.target.style.background = "transparent";
+          renameGroup(g, e.target.value);
+        },
+        style: {
+          fontWeight: 800,
+          fontSize: 16,
+          flex: 1,
+          minWidth: 0,
+          marginRight: 8,
+          border: "1px solid transparent",
+          borderRadius: 8,
+          padding: "2px 6px",
+          background: "transparent",
+          color: "var(--text-1)",
+          outline: "none",
+          fontFamily: "inherit"
+        }
+      }
+    ), /* @__PURE__ */ React.createElement(
       "button",
       {
         style: {
