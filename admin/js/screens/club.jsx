@@ -60,12 +60,42 @@ function ClubProfileScreen({ clubId, clubProfile: initialProfile }) {
     setModal('edit');
   };
 
+  // Logo yükleme — mobil ile AYNI bucket ve yol şeması (club-photos/club-logos/<id>/)
+  const [logoBusy, setLogoBusy] = useState(false);
+  const uploadLogo = async (file) => {
+    if (!file) return;
+    if (!file.type.startsWith('image/')) { alert('Lütfen bir görsel dosyası seçin.'); return; }
+    if (file.size > 5 * 1024 * 1024) { alert('Logo 5 MB’tan küçük olmalı.'); return; }
+    setLogoBusy(true);
+    try {
+      const ext = (file.name.split('.').pop() || 'jpg').toLowerCase();
+      const path = `club-logos/${clubId}/${Date.now()}.${ext}`;
+      const { error } = await sb.storage.from('club-photos')
+        .upload(path, file, { contentType: file.type, cacheControl: '3600', upsert: false });
+      if (error) throw error;
+      const { data } = sb.storage.from('club-photos').getPublicUrl(path);
+      setForm(prev => ({ ...prev, logo_url: data.publicUrl }));
+    } catch (e) {
+      alert('Logo yüklenemedi: ' + e.message);
+    } finally { setLogoBusy(false); }
+  };
+
   const saveProfile = async () => {
     setSaving(true);
     try {
+      // Sayıyı DB CHECK sınırlarına sıkıştır; boş/geçersiz girişte varsayılana dön
+      const clampInt = (raw, min, max, fallback) => {
+        const n = parseInt(raw, 10);
+        if (isNaN(n)) return fallback;
+        return Math.min(max, Math.max(min, n));
+      };
+
       const payload = {
         club_name:        form.club_name,
         description:      form.description      || null,
+        // city FORMDA VARDI AMA KAYDEDİLMİYORDU — kullanıcı yazıyor, kayboluyordu
+        city:             form.city             || null,
+        logo_url:         form.logo_url         || null,
         address:          form.address          || null,
         contact_phone:    form.contact_phone    || null,
         contact_email:    form.contact_email    || null,
@@ -90,9 +120,49 @@ function ClubProfileScreen({ clubId, clubProfile: initialProfile }) {
         primetime_end:                       form.primetime_end   || null,
         non_member_cancellation_limit:       form.non_member_cancellation_limit ? Number(form.non_member_cancellation_limit) : null,
         non_member_cancellation_penalty_days: form.non_member_cancellation_penalty_days ? Number(form.non_member_cancellation_penalty_days) : null,
+
+        // ── Mobille eşitlenen ayarlar ──────────────────────────────────────
+        // İzin verilen süreler: boş bırakılamaz (oyuncuya hiç seçenek kalmaz)
+        allowed_reservation_durations: (Array.isArray(form.allowed_reservation_durations) && form.allowed_reservation_durations.length > 0)
+          ? form.allowed_reservation_durations : [60, 90, 120],
+
+        // Haftalık rezervasyon açılışı (oyuncu)
+        booking_weekly_release:       form.booking_weekly_release === true,
+        booking_release_day_of_week:  form.booking_release_day_of_week != null ? Number(form.booking_release_day_of_week) : 1,
+        booking_release_hour:         clampInt(form.booking_release_hour, 0, 23, 8),
+
+        // Hoca izinleri. NULL = slot kilidi kapalı (mobildeki semantiğin aynısı)
+        coaches_can_add_lessons:        form.coaches_can_add_lessons !== false,
+        coaches_require_lesson_package: form.coaches_require_lesson_package === true,
+        coaches_must_use_package:       form.coaches_must_use_package === true,
+        coach_cancel_slot_lock_minutes: form.coach_cancel_slot_lock_minutes
+          ? clampInt(form.coach_cancel_slot_lock_minutes, 1, 10080, 60) : null,
+
+        // Ders iptal politikası. Saatler kural kapalıyken de kaydedilir →
+        // kulüp ayarını kaybetmez (mobildeki kalıp).
+        late_cancel_charge_enabled:         form.late_cancel_charge_enabled === true,
+        late_cancel_threshold_hour:         clampInt(form.late_cancel_threshold_hour, 0, 23, 12),
+        late_cancel_hours_before_threshold: clampInt(form.late_cancel_hours_before_threshold, 1, 168, 12),
+        late_cancel_hours_after_threshold:  clampInt(form.late_cancel_hours_after_threshold, 1, 168, 8),
+
+        // Hocalara haftalık ders açılışı
+        coach_booking_window_enabled: form.coach_booking_window_enabled === true,
+        coach_release_day_of_week:    form.coach_release_day_of_week != null ? Number(form.coach_release_day_of_week) : 6,
+        coach_release_hour:           clampInt(form.coach_release_hour, 0, 23, 9),
+        coach_weekly_window_days:     clampInt(form.coach_weekly_window_days, 1, 60, 7),
       };
       const { error } = await sb.from('club_profiles').update(payload).eq('id', clubId);
       if (error) throw error;
+
+      // Mobil ile aynı: kulüp adı/telefon/şehir profiles tablosuna da yazılır,
+      // yoksa iki tablo birbirinden ayrışır. E-posta BİLEREK yazılmaz —
+      // auth e-postası değişmez, unique constraint hatası verir.
+      const { error: profErr } = await sb.from('profiles').update({
+        full_name: form.club_name,
+        phone:     form.contact_phone || null,
+        city:      form.city || null,
+      }).eq('id', clubId);
+      if (profErr) console.warn('profiles güncellenemedi:', profErr.message);
       setProfile({ ...profile, ...payload });
       setModal(null);
     } catch (e) { alert(e.message); }
@@ -247,6 +317,22 @@ function ClubProfileScreen({ clubId, clubProfile: initialProfile }) {
             </div>
 
             <div style={{ fontWeight:700, fontSize:12, color:'var(--text-2)', textTransform:'uppercase', letterSpacing:'.5px', borderBottom:'1px solid var(--border)', paddingBottom:6 }}>Temel Bilgiler</div>
+            <Field label="Kulüp Logosu" hint="Oyuncu uygulamasında kulüp kartınızda görünür.">
+              <div style={{ display:'flex', alignItems:'center', gap:12 }}>
+                {form.logo_url
+                  ? <img src={form.logo_url} alt="logo" style={{ width:56, height:56, borderRadius:10, objectFit:'cover', border:'1px solid var(--border)' }} />
+                  : <div style={{ width:56, height:56, borderRadius:10, border:'1px dashed var(--border)', display:'flex', alignItems:'center', justifyContent:'center', fontSize:10, color:'var(--text-2)' }}>Logo</div>}
+                <div style={{ display:'flex', flexDirection:'column', gap:6 }}>
+                  <input type="file" accept="image/*" disabled={logoBusy}
+                    onChange={e => { uploadLogo(e.target.files?.[0]); e.target.value = ''; }} />
+                  {logoBusy && <span style={{ fontSize:11, color:'var(--text-2)' }}>Yükleniyor…</span>}
+                  {form.logo_url && !logoBusy && (
+                    <button type="button" className="btn btn-ghost btn-sm" style={{ alignSelf:'flex-start' }}
+                      onClick={() => setForm({...form, logo_url: ''})}>Logoyu kaldır</button>
+                  )}
+                </div>
+              </div>
+            </Field>
             <Field label="Kulüp Adı">
               <input value={form.club_name || ''} onChange={e => setForm({...form, club_name: e.target.value})} />
             </Field>
@@ -358,6 +444,51 @@ function ClubProfileScreen({ clubId, clubProfile: initialProfile }) {
                 ))}
               </div>
             </Field>
+            <Field label="İzin Verilen Rezervasyon Süreleri" hint="Oyunculara yalnız seçtikleriniz gösterilir. En az bir süre seçili olmalı.">
+              <div style={{ display:'flex', gap:8, marginTop:4 }}>
+                {[60, 90, 120].map(m => {
+                  const list = Array.isArray(form.allowed_reservation_durations) ? form.allowed_reservation_durations : [60, 90, 120];
+                  const on = list.includes(m);
+                  return (
+                    <div key={m} className={`chip${on ? ' active' : ''}`} style={{ cursor:'pointer' }}
+                      onClick={() => {
+                        const next = on ? list.filter(x => x !== m) : [...list, m].sort((a, b) => a - b);
+                        if (next.length === 0) return;   // hepsini kapatmaya izin yok
+                        setForm({...form, allowed_reservation_durations: next});
+                      }}>{m} dk</div>
+                  );
+                })}
+              </div>
+            </Field>
+
+            {/* Haftalık rezervasyon açılışı */}
+            <div style={{ background: form.booking_weekly_release ? '#EEF2FF' : 'var(--surface-2, #F8FAFC)', borderRadius:10, padding:'12px 14px', border:'1px solid var(--border)' }}>
+              <Switch on={form.booking_weekly_release === true} onChange={v => setForm({...form, booking_weekly_release: v})} label="Haftalık Rezervasyon Açılışı" />
+              <p style={{ fontSize:11, color:'var(--text-2)', margin:'6px 0 0 0' }}>
+                {form.booking_weekly_release
+                  ? 'Seçtiğiniz gün ve saatte 1 haftalık pencere blok olarak açılır. Yukarıdaki gün sayısı ve açılış saati kullanılmaz.'
+                  : 'Kapalı: pencere her gün bir gün ileri kayar.'}
+              </p>
+              {form.booking_weekly_release && (
+                <div style={{ marginTop:12, display:'flex', flexDirection:'column', gap:10 }}>
+                  <div>
+                    <div style={{ fontSize:12, fontWeight:600, marginBottom:6 }}>Açılış Günü</div>
+                    <div style={{ display:'flex', flexWrap:'wrap', gap:8 }}>
+                      {['Paz','Pzt','Sal','Çar','Per','Cum','Cmt'].map((l, i) => (
+                        <div key={i} className={`chip${form.booking_release_day_of_week == i ? ' active' : ''}`}
+                          style={{ cursor:'pointer' }}
+                          onClick={() => setForm({...form, booking_release_day_of_week: i})}>{l}</div>
+                      ))}
+                    </div>
+                  </div>
+                  <Field label="Açılış Saati">
+                    <input type="number" min={0} max={23} value={form.booking_release_hour ?? 8}
+                      onChange={e => setForm({...form, booking_release_hour: e.target.value})} />
+                  </Field>
+                </div>
+              )}
+            </div>
+
             <div className="fields-2">
               <Field label="Primetime Başlangıç"><input type="time" value={form.primetime_start || ''} onChange={e => setForm({...form, primetime_start: e.target.value})} /></Field>
               <Field label="Primetime Bitiş"><input type="time" value={form.primetime_end || ''} onChange={e => setForm({...form, primetime_end: e.target.value})} /></Field>
@@ -369,6 +500,103 @@ function ClubProfileScreen({ clubId, clubProfile: initialProfile }) {
               <Field label="Yaptırım Süresi (gün)">
                 <input type="number" min={0} value={form.non_member_cancellation_penalty_days || ''} placeholder="örn. 7" onChange={e => setForm({...form, non_member_cancellation_penalty_days: e.target.value})} />
               </Field>
+            </div>
+
+            <div style={{ fontWeight:700, fontSize:12, color:'var(--text-2)', textTransform:'uppercase', letterSpacing:'.5px', borderBottom:'1px solid var(--border)', paddingBottom:6 }}>Hoca İzinleri</div>
+
+            <div style={{ background: form.coaches_can_add_lessons !== false ? '#F0FDF4' : '#FEF2F2', borderRadius:10, padding:'12px 14px', border:'1px solid var(--border)' }}>
+              <Switch on={form.coaches_can_add_lessons !== false} onChange={v => setForm({...form, coaches_can_add_lessons: v})} label="Hocalar Ders Ekleyebilir" />
+              <p style={{ fontSize:11, color:'var(--text-2)', margin:'6px 0 0 0' }}>
+                {form.coaches_can_add_lessons !== false
+                  ? 'Hocalar kendi takvimlerinden ders ekleyebilir.'
+                  : 'Dersleri yalnız siz ve çalışanlarınız ekleyebilir.'}
+              </p>
+            </div>
+
+            <div style={{ background:'var(--surface-2, #F8FAFC)', borderRadius:10, padding:'12px 14px', border:'1px solid var(--border)', opacity: form.coaches_can_add_lessons === false ? 0.5 : 1 }}>
+              <Switch on={form.coaches_require_lesson_package === true} onChange={v => setForm({...form, coaches_require_lesson_package: v})} label="Paketsiz Öğrenciye Ders Yasağı" />
+              <p style={{ fontSize:11, color:'var(--text-2)', margin:'6px 0 0 0' }}>
+                Hocalar yalnızca kullanılabilir ders paketi olan öğrencilere ders yazabilir. Siz ve çalışanlarınız muafsınız.
+              </p>
+            </div>
+
+            <div style={{ background:'var(--surface-2, #F8FAFC)', borderRadius:10, padding:'12px 14px', border:'1px solid var(--border)', opacity: form.coaches_can_add_lessons === false ? 0.5 : 1 }}>
+              <Switch on={form.coaches_must_use_package === true} onChange={v => setForm({...form, coaches_must_use_package: v})} label="Paket Dışı Ders Yasağı" />
+              <p style={{ fontSize:11, color:'var(--text-2)', margin:'6px 0 0 0' }}>
+                Paketi olan öğrenciye yalnız paketten düşen ders yazılabilir; hoca “Paketten Düş” seçeneğini kapatamaz.
+              </p>
+            </div>
+
+            <Field label="İptal Sonrası Slot Kilidi (dakika)" hint="Hoca kendi dersini iptal ederse aynı kort ve saate bu süre boyunca yeni ders ekleyemez. Boş = kapalı.">
+              <input type="number" min={0} value={form.coach_cancel_slot_lock_minutes || ''} placeholder="Kapalı (boş bırakın)"
+                onChange={e => setForm({...form, coach_cancel_slot_lock_minutes: e.target.value})} />
+            </Field>
+
+            <div style={{ fontWeight:700, fontSize:12, color:'var(--text-2)', textTransform:'uppercase', letterSpacing:'.5px', borderBottom:'1px solid var(--border)', paddingBottom:6 }}>Ders İptal Politikası</div>
+
+            <div style={{ background: form.late_cancel_charge_enabled ? '#FEF2F2' : 'var(--surface-2, #F8FAFC)', borderRadius:10, padding:'12px 14px', border:'1px solid var(--border)' }}>
+              <Switch on={form.late_cancel_charge_enabled === true} onChange={v => setForm({...form, late_cancel_charge_enabled: v})} label="Geç İptal = Ders Yapıldı Sayılır" />
+              <p style={{ fontSize:11, color:'var(--text-2)', margin:'6px 0 0 0' }}>
+                {form.late_cancel_charge_enabled
+                  ? 'Son iptal saatinden sonra iptal edilen ders yapılmış sayılır; ödemesi tahsilat listenize düşer, paket seansı iade edilmez. Hem hocaları hem oyuncuları kapsar; siz ve çalışanlarınız muafsınız.'
+                  : 'Dersler her an bedelsiz iptal edilebilir.'}
+              </p>
+              {form.late_cancel_charge_enabled && (
+                <div style={{ marginTop:12, display:'flex', flexDirection:'column', gap:10 }}>
+                  <Field label="Öğleden Önce / Sonra Eşiği (saat)" hint="Bu saatten önce başlayan dersler ilk limite, bu saatte/sonra başlayanlar ikinci limite tabidir.">
+                    <input type="number" min={0} max={23} value={form.late_cancel_threshold_hour ?? 12}
+                      onChange={e => setForm({...form, late_cancel_threshold_hour: e.target.value})} />
+                  </Field>
+                  <div className="fields-2">
+                    <Field label="Eşikten Önce (saat önce)">
+                      <input type="number" min={1} max={168} value={form.late_cancel_hours_before_threshold ?? 12}
+                        onChange={e => setForm({...form, late_cancel_hours_before_threshold: e.target.value})} />
+                    </Field>
+                    <Field label="Eşikte / Sonra (saat önce)">
+                      <input type="number" min={1} max={168} value={form.late_cancel_hours_after_threshold ?? 8}
+                        onChange={e => setForm({...form, late_cancel_hours_after_threshold: e.target.value})} />
+                    </Field>
+                  </div>
+                </div>
+              )}
+            </div>
+
+            <div style={{ fontWeight:700, fontSize:12, color:'var(--text-2)', textTransform:'uppercase', letterSpacing:'.5px', borderBottom:'1px solid var(--border)', paddingBottom:6 }}>Hocalara Haftalık Ders Açılışı</div>
+
+            <div style={{ background: form.coach_booking_window_enabled ? '#EEF2FF' : 'var(--surface-2, #F8FAFC)', borderRadius:10, padding:'12px 14px', border:'1px solid var(--border)' }}>
+              <Switch on={form.coach_booking_window_enabled === true} onChange={v => setForm({...form, coach_booking_window_enabled: v})} label="Hocalara Haftalık Ders Açılışı" />
+              <p style={{ fontSize:11, color:'var(--text-2)', margin:'6px 0 0 0' }}>
+                {form.coach_booking_window_enabled
+                  ? 'Hocalar yalnız açılan pencere içine ders yazabilir ve tekrarlayan (seri) ders ekleyemez. Siz ve çalışanlarınız etkilenmezsiniz.'
+                  : 'Hocalar istedikleri kadar ileriye ders yazabilir ve seri ders ekleyebilir.'}
+              </p>
+              {form.coach_booking_window_enabled && (
+                <div style={{ marginTop:12, display:'flex', flexDirection:'column', gap:10 }}>
+                  <div>
+                    <div style={{ fontSize:12, fontWeight:600, marginBottom:6 }}>Açılış Günü</div>
+                    <div style={{ display:'flex', flexWrap:'wrap', gap:8 }}>
+                      {['Paz','Pzt','Sal','Çar','Per','Cum','Cmt'].map((l, i) => (
+                        <div key={i} className={`chip${form.coach_release_day_of_week == i ? ' active' : ''}`}
+                          style={{ cursor:'pointer' }}
+                          onClick={() => setForm({...form, coach_release_day_of_week: i})}>{l}</div>
+                      ))}
+                    </div>
+                  </div>
+                  <div className="fields-2">
+                    <Field label="Açılış Saati">
+                      <input type="number" min={0} max={23} value={form.coach_release_hour ?? 9}
+                        onChange={e => setForm({...form, coach_release_hour: e.target.value})} />
+                    </Field>
+                    <Field label="Açılan Pencere (gün)">
+                      <input type="number" min={1} max={60} value={form.coach_weekly_window_days ?? 7}
+                        onChange={e => setForm({...form, coach_weekly_window_days: e.target.value})} />
+                    </Field>
+                  </div>
+                  <p style={{ fontSize:11, color:'var(--text-2)', margin:0 }}>
+                    {`Örn. ${['Pazar','Pazartesi','Salı','Çarşamba','Perşembe','Cuma','Cumartesi'][form.coach_release_day_of_week ?? 6]} ${form.coach_release_hour ?? 9}:00 + ${form.coach_weekly_window_days ?? 7} gün: hocalar her hafta o gün ve saatte, sonraki ${form.coach_weekly_window_days ?? 7} günün derslerini yazabilir.`}
+                  </p>
+                </div>
+              )}
             </div>
 
             <div style={{ fontWeight:700, fontSize:12, color:'var(--text-2)', textTransform:'uppercase', letterSpacing:'.5px', borderBottom:'1px solid var(--border)', paddingBottom:6 }}>Olanaklar</div>
