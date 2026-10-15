@@ -1757,8 +1757,9 @@ function MyProgramScreen({ clubId, setScreen, clubProfile }) {
 
     setLsDetailSaving(true);
     try {
-      // Paket seans geri yükle — core.jsx cancelLesson ile birebir aynı mantık
-      if (pkgSessionId && playerPackageId) {
+      // Paket seans geri yükle — YALNIZ manuel derste. Gerçek derste (lessons)
+      // bunu cancel_lesson_with_policy RPC'si yapıyor (hakediş iadesiyle birlikte).
+      if (lsDetail.source === 'manual' && pkgSessionId && playerPackageId) {
         const { data: plp } = await sb.from('player_lesson_packages')
           .select('used_lessons').eq('id', playerPackageId).single();
         if (plp) {
@@ -1796,8 +1797,22 @@ function MyProgramScreen({ clubId, setScreen, clubProfile }) {
         if (lsDetail.courtId) {
           await cancelCourtBooking(lsDetail.courtId, lsDetail.lessonDate, lsDetail.sh, lsDetail.sm, lsDetail.eh, lsDetail.em);
         }
+      // SIZINTI DÜZELTMESİ — gerçek ders (lessons) iptali artık RPC'den geçer:
+      //   cancel_lesson_with_policy = status + paket seansı iadesi + per_session
+      //   HAKEDİŞ İADESİ + gölge booking, hepsi tek transaction'da.
+      // Önceden burası yalnız seansı iade ediyordu; mobilden (hoca uygulaması)
+      // açılmış per_session paket dersi kulüp web'den iptal edilince hocanın
+      // hakedişi duruyordu → öğrenci kredisini geri alıyor, hoca yapılmamış
+      // dersin parasını alıyordu. Manuel derste (club_manual_lessons) bu sorun
+      // yoktu: orada hakediş manual_lesson_id ile zaten siliniyor.
+      // Kulüp ve çalışan geç iptal kuralından MUAF → p_acknowledge sonucu
+      // değiştirmez, outcome her zaman 'cancelled' olur.
       } else {
-        await sb.from('lessons').update({ status: 'cancelled' }).eq('id', lsDetail.rawId);
+        const { error: _rpcErr } = await sb.rpc('cancel_lesson_with_policy', {
+          p_lesson_id: lsDetail.rawId, p_acknowledge: true, p_reason: null,
+        });
+        // Ders bu arada başka yerden iptal edildiyse akışı durdurma
+        if (_rpcErr && !String(_rpcErr.message || '').includes('lesson_not_active')) throw _rpcErr;
         if (lsDetail.courtId) {
           await cancelCourtBooking(lsDetail.courtId, lsDetail.lessonDate, lsDetail.sh, lsDetail.sm, lsDetail.eh, lsDetail.em);
         }

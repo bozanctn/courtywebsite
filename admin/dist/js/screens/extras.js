@@ -1436,7 +1436,7 @@ ${lines}
     if (!confirm(msg)) return;
     setLsDetailSaving(true);
     try {
-      if (pkgSessionId && playerPackageId) {
+      if (lsDetail.source === "manual" && pkgSessionId && playerPackageId) {
         const { data: plp } = await sb.from("player_lesson_packages").select("used_lessons").eq("id", playerPackageId).single();
         if (plp) {
           await Promise.all([
@@ -1466,7 +1466,12 @@ ${lines}
           await cancelCourtBooking(lsDetail.courtId, lsDetail.lessonDate, lsDetail.sh, lsDetail.sm, lsDetail.eh, lsDetail.em);
         }
       } else {
-        await sb.from("lessons").update({ status: "cancelled" }).eq("id", lsDetail.rawId);
+        const { error: _rpcErr } = await sb.rpc("cancel_lesson_with_policy", {
+          p_lesson_id: lsDetail.rawId,
+          p_acknowledge: true,
+          p_reason: null
+        });
+        if (_rpcErr && !String(_rpcErr.message || "").includes("lesson_not_active")) throw _rpcErr;
         if (lsDetail.courtId) {
           await cancelCourtBooking(lsDetail.courtId, lsDetail.lessonDate, lsDetail.sh, lsDetail.sm, lsDetail.eh, lsDetail.em);
         }

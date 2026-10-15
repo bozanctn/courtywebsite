@@ -1343,7 +1343,7 @@ Yine de eklensin mi?`)) return;
     const msg = lesson.is_package_lesson ? "Bu dersi silmek istedi\u011Finizden emin misiniz? Paketten d\xFC\u015F\xFClm\xFC\u015Fse kredi geri y\xFCklenir." : "Bu dersi iptal etmek istedi\u011Finize emin misiniz?";
     if (!confirm(msg)) return;
     try {
-      if (lesson.pkg_session_id && lesson.player_package_id) {
+      if (lesson.source !== "lesson" && lesson.pkg_session_id && lesson.player_package_id) {
         const { data: plp } = await sb.from("player_lesson_packages").select("used_lessons").eq("id", lesson.player_package_id).single();
         if (plp) {
           await Promise.all([
@@ -1367,7 +1367,12 @@ Yine de eklensin mi?`)) return;
         ]);
       };
       if (lesson.source === "lesson") {
-        await sb.from("lessons").update({ status: "cancelled" }).eq("id", lesson.id);
+        const { error: _rpcErr } = await sb.rpc("cancel_lesson_with_policy", {
+          p_lesson_id: lesson.id,
+          p_acknowledge: true,
+          p_reason: null
+        });
+        if (_rpcErr && !String(_rpcErr.message || "").includes("lesson_not_active")) throw _rpcErr;
         if (lesson.court_id) {
           await cancelCourtBooking(lesson.court_id, lesson.date, lesson.start_time, lesson.end_time);
         }
