@@ -574,6 +574,17 @@ function StudentNotesScreen({ clubId }) {
 // Mobil MyProgramScreen.tsx yapısının birebir kopyası:
 // Tüm veriler tek seferde çekilir, tarih filtresi JS'de useMemo ile yapılır.
 // ═══════════════════════════════════════════════════════════════
+
+// Program kutucukları için uygulama paleti (css/tokens.css) — iç içe görünmesinler diye
+// her kutucuğa bu paletten bir renk atanır.
+const PROGRAM_PALETTE = ['#003399', '#8B5CF6', '#0D9488', '#0EA5E9', '#F97316', '#D97706', '#22C55E', '#475569'];
+// Kimlikten türetilen "rastgele" renk: her render'da değişmez, aynı ders hep aynı renkte kalır.
+const programColorFor = (key) => {
+  let h = 0;
+  for (const ch of String(key)) h = (h * 31 + ch.charCodeAt(0)) | 0;
+  return PROGRAM_PALETTE[Math.abs(h) % PROGRAM_PALETTE.length];
+};
+
 function MyProgramScreen({ clubId, setScreen, clubProfile }) {
   const { useState, useEffect, useMemo } = React;
   const [selDate,    setSelDate]    = useState(todayISO());
@@ -1098,7 +1109,7 @@ function MyProgramScreen({ clubId, setScreen, clubProfile }) {
     // Manuel derslerle (web'den eklenen) aynı kort+saatte örtüşen booking'leri çıkar
     // (web'den ders eklenince bookings tablosuna da yazılır; burada çift blok oluşmasın)
     const manualLessonEvents = all.filter(e => e.type === 'lesson' && e.source === 'manual');
-    return all.filter(e => {
+    const visible = all.filter(e => {
       if (e.type !== 'booking') return true;
       return !manualLessonEvents.some(m =>
         m.courtId === e.courtId &&
@@ -1106,6 +1117,20 @@ function MyProgramScreen({ clubId, setScreen, clubProfile }) {
         (m.eh * 60 + m.em) > (e.sh * 60 + e.sm)
       );
     });
+
+    // Kutucuk renkleri: kimlikten paletten renk seç; aynı kortta art arda gelen iki
+    // kutucuk tesadüfen aynı rengi alırsa bir sonraki palet rengine kaydır.
+    const lastColorByCourt = new Map();
+    [...visible]
+      .sort((a, b) => (a.sh * 60 + a.sm) - (b.sh * 60 + b.sm))
+      .forEach(e => {
+        let color = programColorFor(e.id);
+        const prev = lastColorByCourt.get(e.courtId);
+        if (color === prev) color = PROGRAM_PALETTE[(PROGRAM_PALETTE.indexOf(color) + 1) % PROGRAM_PALETTE.length];
+        e.color = color;
+        lastColorByCourt.set(e.courtId, color);
+      });
+    return visible;
   }, [selDate, allBookings, allLessons, allManualLessons, allClosureEvents, courts, coachMap, bkPlayerMap]);
 
   const displayCourts = useMemo(() =>
@@ -3322,15 +3347,6 @@ function MyProgramScreen({ clubId, setScreen, clubProfile }) {
               background: occupiedCourtIds.has(c.id) ? '#EF4444' : '#22C55E' }} />
             Kort {c.court_number}
           </button>
-        ))}
-      </div>
-
-      <div style={{ display:'flex', gap:14, marginBottom:12, flexWrap:'wrap' }}>
-        {[{color:'#22C55E',label:'Rezervasyon'},{color:'#8B5CF6',label:'Ders'},{color:'#F97316',label:'Kapalı / Blok'}].map(l => (
-          <div key={l.label} style={{ display:'flex', alignItems:'center', gap:6, fontSize:12 }}>
-            <div style={{ width:10, height:10, borderRadius:3, background:l.color }} />
-            <span style={{ color:'var(--text-2)' }}>{l.label}</span>
-          </div>
         ))}
       </div>
 
