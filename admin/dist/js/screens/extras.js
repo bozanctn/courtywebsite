@@ -322,6 +322,12 @@ function StudentNotesScreen({ clubId }) {
     )))
   ));
 }
+const PROGRAM_PALETTE = ["#003399", "#8B5CF6", "#0D9488", "#0EA5E9", "#F97316", "#D97706", "#22C55E", "#475569"];
+const programColorFor = (key) => {
+  let h = 0;
+  for (const ch of String(key)) h = h * 31 + ch.charCodeAt(0) | 0;
+  return PROGRAM_PALETTE[Math.abs(h) % PROGRAM_PALETTE.length];
+};
 function MyProgramScreen({ clubId, setScreen, clubProfile }) {
   const { useState, useEffect, useMemo } = React;
   const [selDate, setSelDate] = useState(todayISO());
@@ -823,12 +829,21 @@ function MyProgramScreen({ clubId, setScreen, clubProfile }) {
     });
     groupedClosures.forEach((ev) => all.push(ev));
     const manualLessonEvents = all.filter((e) => e.type === "lesson" && e.source === "manual");
-    return all.filter((e) => {
+    const visible = all.filter((e) => {
       if (e.type !== "booking") return true;
       return !manualLessonEvents.some(
         (m) => m.courtId === e.courtId && m.sh * 60 + m.sm < e.eh * 60 + e.em && m.eh * 60 + m.em > e.sh * 60 + e.sm
       );
     });
+    const lastColorByCourt = /* @__PURE__ */ new Map();
+    [...visible].sort((a, b) => a.sh * 60 + a.sm - (b.sh * 60 + b.sm)).forEach((e) => {
+      let color = programColorFor(e.id);
+      const prev = lastColorByCourt.get(e.courtId);
+      if (color === prev) color = PROGRAM_PALETTE[(PROGRAM_PALETTE.indexOf(color) + 1) % PROGRAM_PALETTE.length];
+      e.color = color;
+      lastColorByCourt.set(e.courtId, color);
+    });
+    return visible;
   }, [selDate, allBookings, allLessons, allManualLessons, allClosureEvents, courts, coachMap, bkPlayerMap]);
   const displayCourts = useMemo(
     () => selCourtId ? courts.filter((c) => c.id === selCourtId) : courts,
@@ -2967,7 +2982,7 @@ Kaydedilsin mi?`)) {
     } }),
     "Kort ",
     c.court_number
-  ))), /* @__PURE__ */ React.createElement("div", { style: { display: "flex", gap: 14, marginBottom: 12, flexWrap: "wrap" } }, [{ color: "#22C55E", label: "Rezervasyon" }, { color: "#8B5CF6", label: "Ders" }, { color: "#F97316", label: "Kapal\u0131 / Blok" }].map((l) => /* @__PURE__ */ React.createElement("div", { key: l.label, style: { display: "flex", alignItems: "center", gap: 6, fontSize: 12 } }, /* @__PURE__ */ React.createElement("div", { style: { width: 10, height: 10, borderRadius: 3, background: l.color } }), /* @__PURE__ */ React.createElement("span", { style: { color: "var(--text-2)" } }, l.label)))), loading ? /* @__PURE__ */ React.createElement(Spinner, null) : /* @__PURE__ */ React.createElement("div", { style: { background: "var(--bg-card,#fff)", borderRadius: 12, border: "1px solid var(--border)", overflow: "auto" } }, /* @__PURE__ */ React.createElement("div", { style: { display: "flex", minWidth: displayCourts.length * 160 + 52 + "px" } }, /* @__PURE__ */ React.createElement("div", { style: { width: 52, flexShrink: 0, borderRight: "1px solid var(--border)" } }, /* @__PURE__ */ React.createElement("div", { style: { height: 36, borderBottom: "1px solid var(--border)" } }), Array.from({ length: END_H - START_H }, (_, i) => /* @__PURE__ */ React.createElement("div", { key: i, style: { height: SLOT_H, borderBottom: "1px solid #cbd5e1", position: "relative" } }, [0, 15, 30, 45].map((min) => /* @__PURE__ */ React.createElement("div", { key: min, style: {
+  ))), loading ? /* @__PURE__ */ React.createElement(Spinner, null) : /* @__PURE__ */ React.createElement("div", { style: { background: "var(--bg-card,#fff)", borderRadius: 12, border: "1px solid var(--border)", overflow: "auto" } }, /* @__PURE__ */ React.createElement("div", { style: { display: "flex", minWidth: displayCourts.length * 160 + 52 + "px" } }, /* @__PURE__ */ React.createElement("div", { style: { width: 52, flexShrink: 0, borderRight: "1px solid var(--border)" } }, /* @__PURE__ */ React.createElement("div", { style: { height: 36, borderBottom: "1px solid var(--border)" } }), Array.from({ length: END_H - START_H }, (_, i) => /* @__PURE__ */ React.createElement("div", { key: i, style: { height: SLOT_H, borderBottom: "1px solid #cbd5e1", position: "relative" } }, [0, 15, 30, 45].map((min) => /* @__PURE__ */ React.createElement("div", { key: min, style: {
     position: "absolute",
     top: `${min / 60 * 100}%`,
     right: 8,
