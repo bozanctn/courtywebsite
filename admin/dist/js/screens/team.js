@@ -299,6 +299,56 @@ function CoachesScreen({ clubId }) {
       setScheduleLoading(false);
     }
   };
+  const [studentsCoach, setStudentsCoach] = useState(null);
+  const [stuLoading, setStuLoading] = useState(false);
+  const [stuManual, setStuManual] = useState([]);
+  const [stuPackages, setStuPackages] = useState([]);
+  const [stuGroups, setStuGroups] = useState([]);
+  const openStudents = async (coach) => {
+    setStudentsCoach(coach);
+    setStuManual([]);
+    setStuPackages([]);
+    setStuGroups([]);
+    setModal("students");
+    setStuLoading(true);
+    try {
+      const authId = coach.individual_coach_id || null;
+      const ccId = coach.id;
+      const manualP = authId ? sb.from("coach_manual_students").select("id, name, phone, notes").eq("coach_id", authId).order("name") : Promise.resolve({ data: [] });
+      const coachIds = [ccId, authId].filter(Boolean);
+      const pkgP = sb.from("player_lesson_packages").select("id, player_id, manual_player_name, total_lessons, used_lessons, expiry_date, status, package_id, custom_name, lesson_packages(name), profiles!player_lesson_packages_player_id_fkey(full_name, email)").eq("club_id", clubId).in("coach_id", coachIds).eq("status", "active");
+      const grpP = sb.from("club_groups").select("id, name, billing_type, members:club_group_members(id, member_name, contact_number, contact_person)").eq("coach_id", ccId).eq("is_active", true).order("name");
+      const [manualR, pkgR, grpR] = await Promise.all([manualP, pkgP, grpP]);
+      setStuManual(manualR.data || []);
+      const now = (/* @__PURE__ */ new Date()).toISOString();
+      const seen = /* @__PURE__ */ new Set();
+      const pkgs = [];
+      for (const p of pkgR.data || []) {
+        if (p.expiry_date && p.expiry_date < now) continue;
+        const name = p.profiles?.full_name || p.manual_player_name || "Bilinmeyen";
+        const key = p.player_id || `name:${(p.manual_player_name || "").toLowerCase().trim()}`;
+        if (seen.has(key)) continue;
+        seen.add(key);
+        pkgs.push({
+          id: p.id,
+          name,
+          email: p.profiles?.email || null,
+          pkgName: p.lesson_packages?.name || p.custom_name || "Paket",
+          remaining: Math.max(0, (p.total_lessons || 0) - (p.used_lessons || 0)),
+          total: p.total_lessons || 0,
+          expiry: p.expiry_date,
+          registered: !!p.player_id
+        });
+      }
+      pkgs.sort((a, b) => a.name.localeCompare(b.name, "tr"));
+      setStuPackages(pkgs);
+      setStuGroups((grpR.data || []).filter((g) => (g.members || []).length > 0));
+    } catch (e) {
+      alert("\xD6\u011Frenciler y\xFCklenemedi: " + e.message);
+    } finally {
+      setStuLoading(false);
+    }
+  };
   const openSchedule = (coach) => {
     setScheduleCoach(coach);
     setWeekOffset(0);
@@ -326,7 +376,7 @@ function CoachesScreen({ clubId }) {
     },
     /* @__PURE__ */ React.createElement("span", { className: "material-icons", style: { fontSize: 13 } }, c.is_active ? "check_circle" : "pause_circle"),
     c.is_active ? "Aktif" : "Pasif"
-  )), /* @__PURE__ */ React.createElement("div", { style: { display: "flex", flexWrap: "wrap", gap: 6 } }, c.experience_years > 0 && /* @__PURE__ */ React.createElement("span", { style: { display: "flex", alignItems: "center", gap: 4, fontSize: 12, color: "var(--text-2)", background: "var(--bg)", border: "1px solid var(--border)", borderRadius: 8, padding: "4px 9px" } }, /* @__PURE__ */ React.createElement("span", { className: "material-icons", style: { fontSize: 13 } }, "schedule"), " ", c.experience_years, " y\u0131l"), c.hourly_rate > 0 && /* @__PURE__ */ React.createElement("span", { style: { display: "flex", alignItems: "center", gap: 4, fontSize: 12, color: "var(--text-2)", background: "var(--bg)", border: "1px solid var(--border)", borderRadius: 8, padding: "4px 9px" } }, /* @__PURE__ */ React.createElement("span", { className: "material-icons", style: { fontSize: 13 } }, "payments"), " ", fmtMoney(c.hourly_rate), "/saat"), c.coach_pay_rate > 0 && /* @__PURE__ */ React.createElement("span", { style: { display: "flex", alignItems: "center", gap: 4, fontSize: 12, color: "#16A34A", background: "#DCFCE7", border: "1px solid #BBF7D0", borderRadius: 8, padding: "4px 9px", fontWeight: 600 } }, /* @__PURE__ */ React.createElement("span", { className: "material-icons", style: { fontSize: 13 } }, "account_balance_wallet"), " Pay: %", c.coach_pay_rate), c.specialization && /* @__PURE__ */ React.createElement("span", { style: { fontSize: 12, color: "var(--brand-navy)", background: "#EEF2FF", border: "1px solid #C7D2FE", borderRadius: 8, padding: "4px 9px", fontWeight: 600 } }, c.specialization), c.day_off != null && /* @__PURE__ */ React.createElement("span", { style: { display: "flex", alignItems: "center", gap: 4, fontSize: 12, color: "#DC2626", background: "#FEF2F2", border: "1px solid #FECACA", borderRadius: 8, padding: "4px 9px", fontWeight: 600 } }, /* @__PURE__ */ React.createElement("span", { className: "material-icons", style: { fontSize: 13 } }, "beach_access"), ["Pzt", "Sal", "\xC7ar", "Per", "Cum", "Cmt", "Paz"][c.day_off], " \u0130zin")), c.bio && /* @__PURE__ */ React.createElement("p", { style: { fontSize: 13, color: "var(--text-2)", margin: 0, lineHeight: 1.5 } }, c.bio), /* @__PURE__ */ React.createElement("div", { style: { height: 1, background: "var(--border)" } }), /* @__PURE__ */ React.createElement("div", { style: { display: "flex", gap: 8 } }, /* @__PURE__ */ React.createElement("button", { className: "btn btn-ghost btn-sm", style: { flex: 1, color: "#22C55E" }, onClick: () => openSchedule(c) }, /* @__PURE__ */ React.createElement("span", { className: "material-icons", style: { fontSize: 15 } }, "calendar_today"), " Program"), /* @__PURE__ */ React.createElement("button", { className: "btn btn-ghost btn-sm", style: { flex: 1 }, onClick: () => openEdit(c) }, /* @__PURE__ */ React.createElement("span", { className: "material-icons", style: { fontSize: 15 } }, "edit"), " D\xFCzenle"), /* @__PURE__ */ React.createElement("button", { className: "btn btn-danger btn-sm btn-icon", onClick: () => del(c) }, /* @__PURE__ */ React.createElement("span", { className: "material-icons", style: { fontSize: 15 } }, "delete")))))), modal === "invite" && /* @__PURE__ */ React.createElement(
+  )), /* @__PURE__ */ React.createElement("div", { style: { display: "flex", flexWrap: "wrap", gap: 6 } }, c.experience_years > 0 && /* @__PURE__ */ React.createElement("span", { style: { display: "flex", alignItems: "center", gap: 4, fontSize: 12, color: "var(--text-2)", background: "var(--bg)", border: "1px solid var(--border)", borderRadius: 8, padding: "4px 9px" } }, /* @__PURE__ */ React.createElement("span", { className: "material-icons", style: { fontSize: 13 } }, "schedule"), " ", c.experience_years, " y\u0131l"), c.hourly_rate > 0 && /* @__PURE__ */ React.createElement("span", { style: { display: "flex", alignItems: "center", gap: 4, fontSize: 12, color: "var(--text-2)", background: "var(--bg)", border: "1px solid var(--border)", borderRadius: 8, padding: "4px 9px" } }, /* @__PURE__ */ React.createElement("span", { className: "material-icons", style: { fontSize: 13 } }, "payments"), " ", fmtMoney(c.hourly_rate), "/saat"), c.coach_pay_rate > 0 && /* @__PURE__ */ React.createElement("span", { style: { display: "flex", alignItems: "center", gap: 4, fontSize: 12, color: "#16A34A", background: "#DCFCE7", border: "1px solid #BBF7D0", borderRadius: 8, padding: "4px 9px", fontWeight: 600 } }, /* @__PURE__ */ React.createElement("span", { className: "material-icons", style: { fontSize: 13 } }, "account_balance_wallet"), " Pay: %", c.coach_pay_rate), c.specialization && /* @__PURE__ */ React.createElement("span", { style: { fontSize: 12, color: "var(--brand-navy)", background: "#EEF2FF", border: "1px solid #C7D2FE", borderRadius: 8, padding: "4px 9px", fontWeight: 600 } }, c.specialization), c.day_off != null && /* @__PURE__ */ React.createElement("span", { style: { display: "flex", alignItems: "center", gap: 4, fontSize: 12, color: "#DC2626", background: "#FEF2F2", border: "1px solid #FECACA", borderRadius: 8, padding: "4px 9px", fontWeight: 600 } }, /* @__PURE__ */ React.createElement("span", { className: "material-icons", style: { fontSize: 13 } }, "beach_access"), ["Pzt", "Sal", "\xC7ar", "Per", "Cum", "Cmt", "Paz"][c.day_off], " \u0130zin")), c.bio && /* @__PURE__ */ React.createElement("p", { style: { fontSize: 13, color: "var(--text-2)", margin: 0, lineHeight: 1.5 } }, c.bio), /* @__PURE__ */ React.createElement("div", { style: { height: 1, background: "var(--border)" } }), /* @__PURE__ */ React.createElement("div", { style: { display: "flex", gap: 8 } }, /* @__PURE__ */ React.createElement("button", { className: "btn btn-ghost btn-sm", style: { flex: 1, color: "#22C55E" }, onClick: () => openSchedule(c) }, /* @__PURE__ */ React.createElement("span", { className: "material-icons", style: { fontSize: 15 } }, "calendar_today"), " Program"), /* @__PURE__ */ React.createElement("button", { className: "btn btn-ghost btn-sm", style: { flex: 1, color: "#6366F1" }, onClick: () => openStudents(c) }, /* @__PURE__ */ React.createElement("span", { className: "material-icons", style: { fontSize: 15 } }, "groups"), " \xD6\u011Frenciler"), /* @__PURE__ */ React.createElement("button", { className: "btn btn-ghost btn-sm", style: { flex: 1 }, onClick: () => openEdit(c) }, /* @__PURE__ */ React.createElement("span", { className: "material-icons", style: { fontSize: 15 } }, "edit"), " D\xFCzenle"), /* @__PURE__ */ React.createElement("button", { className: "btn btn-danger btn-sm btn-icon", onClick: () => del(c) }, /* @__PURE__ */ React.createElement("span", { className: "material-icons", style: { fontSize: 15 } }, "delete")))))), modal === "invite" && /* @__PURE__ */ React.createElement(
     Modal,
     {
       title: "Hoca Davet Et",
@@ -480,6 +530,22 @@ function CoachesScreen({ clubId }) {
         style: { resize: "vertical" }
       }
     )), /* @__PURE__ */ React.createElement(Switch, { on: form.is_active !== false, onChange: (v) => setForm({ ...form, is_active: v }), label: "Aktif Ko\xE7" }))
+  ), modal === "students" && studentsCoach && /* @__PURE__ */ React.createElement(
+    Modal,
+    {
+      title: `${studentsCoach.full_name} \u2014 \xD6\u011Frenciler`,
+      wide: true,
+      onClose: () => setModal(null),
+      footer: /* @__PURE__ */ React.createElement("button", { className: "btn btn-ghost btn-sm", onClick: () => setModal(null) }, "Kapat")
+    },
+    stuLoading ? /* @__PURE__ */ React.createElement("div", { style: { padding: 24, textAlign: "center", color: "var(--text-2)" } }, "Y\xFCkleniyor\u2026") : (() => {
+      const groupMemberCount = stuGroups.reduce((n, g) => n + (g.members || []).length, 0);
+      const total = stuManual.length + stuPackages.length + groupMemberCount;
+      if (total === 0) {
+        return /* @__PURE__ */ React.createElement("div", { style: { padding: 24, textAlign: "center", color: "var(--text-2)" } }, "Bu hocaya ba\u011Fl\u0131 \xF6\u011Frenci bulunamad\u0131.", /* @__PURE__ */ React.createElement("br", null), /* @__PURE__ */ React.createElement("span", { style: { fontSize: 12 } }, "Paketli \xF6\u011Frenciler, pakette antren\xF6r olarak bu hoca se\xE7ilmi\u015Fse burada g\xF6r\xFCn\xFCr."));
+      }
+      return /* @__PURE__ */ React.createElement("div", { style: { display: "flex", flexDirection: "column", gap: 18 } }, /* @__PURE__ */ React.createElement("div", { style: { fontSize: 13, color: "var(--text-2)" } }, "Toplam ", /* @__PURE__ */ React.createElement("b", null, total), " \xF6\u011Frenci \xB7 ", stuPackages.length, " paketli \xB7 ", stuManual.length, " manuel \xB7 ", groupMemberCount, " grup \xFCyesi"), stuPackages.length > 0 && /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("div", { style: { fontWeight: 700, fontSize: 12, color: "var(--text-2)", textTransform: "uppercase", letterSpacing: ".5px", borderBottom: "1px solid var(--border)", paddingBottom: 6, marginBottom: 10 } }, "Paketli \xD6\u011Frenciler (", stuPackages.length, ")"), /* @__PURE__ */ React.createElement("div", { style: { display: "flex", flexDirection: "column", gap: 6 } }, stuPackages.map((st) => /* @__PURE__ */ React.createElement("div", { key: st.id, style: { display: "flex", alignItems: "center", gap: 10, padding: "8px 10px", border: "1px solid var(--border)", borderRadius: 10 } }, /* @__PURE__ */ React.createElement("div", { style: { flex: 1 } }, /* @__PURE__ */ React.createElement("div", { style: { fontWeight: 600, fontSize: 14 } }, st.name, !st.registered && /* @__PURE__ */ React.createElement("span", { style: { fontSize: 11, color: "var(--text-2)", marginLeft: 6 } }, "(hesaps\u0131z)")), /* @__PURE__ */ React.createElement("div", { style: { fontSize: 12, color: "var(--text-2)" } }, st.pkgName, " \xB7 ", st.remaining, "/", st.total, " ders kald\u0131", st.expiry ? ` \xB7 son ${fmtDate(st.expiry)}` : "")), /* @__PURE__ */ React.createElement("span", { className: `badge${st.remaining === 0 ? " badge-red" : ""}` }, st.remaining))))), stuManual.length > 0 && /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("div", { style: { fontWeight: 700, fontSize: 12, color: "var(--text-2)", textTransform: "uppercase", letterSpacing: ".5px", borderBottom: "1px solid var(--border)", paddingBottom: 6, marginBottom: 10 } }, "Hocan\u0131n Ekledi\u011Fi \xD6\u011Frenciler (", stuManual.length, ")"), /* @__PURE__ */ React.createElement("div", { style: { display: "flex", flexDirection: "column", gap: 6 } }, stuManual.map((m) => /* @__PURE__ */ React.createElement("div", { key: m.id, style: { padding: "8px 10px", border: "1px solid var(--border)", borderRadius: 10 } }, /* @__PURE__ */ React.createElement("div", { style: { fontWeight: 600, fontSize: 14 } }, m.name), /* @__PURE__ */ React.createElement("div", { style: { fontSize: 12, color: "var(--text-2)" } }, m.phone || "telefon yok", m.notes ? ` \xB7 ${m.notes}` : ""))))), stuGroups.length > 0 && /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("div", { style: { fontWeight: 700, fontSize: 12, color: "var(--text-2)", textTransform: "uppercase", letterSpacing: ".5px", borderBottom: "1px solid var(--border)", paddingBottom: 6, marginBottom: 10 } }, "Gruplar (", stuGroups.length, " grup \xB7 ", groupMemberCount, " ki\u015Fi)"), /* @__PURE__ */ React.createElement("div", { style: { display: "flex", flexDirection: "column", gap: 12 } }, stuGroups.map((g) => /* @__PURE__ */ React.createElement("div", { key: g.id }, /* @__PURE__ */ React.createElement("div", { style: { fontWeight: 600, fontSize: 13, marginBottom: 6 } }, g.name, " ", /* @__PURE__ */ React.createElement("span", { style: { fontSize: 12, color: "var(--text-2)" } }, "(", g.members.length, " ki\u015Fi)")), /* @__PURE__ */ React.createElement("div", { style: { display: "flex", flexWrap: "wrap", gap: 6 } }, g.members.map((mem) => /* @__PURE__ */ React.createElement("div", { key: mem.id, className: "chip", style: { cursor: "default" } }, mem.member_name, mem.contact_number ? ` \xB7 ${mem.contact_number}` : ""))))))));
+    })()
   ), modal === "schedule" && scheduleCoach && (() => {
     const { monday, sunday } = getWeekBounds(weekOffset);
     const days = getWeekDays(weekOffset);

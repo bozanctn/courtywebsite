@@ -351,6 +351,16 @@ function AddPackageModal({ customer, clubId, onClose, onSaved }) {
         totalPaid: +totalPaid,
         notes: notes.trim() || null
       });
+      await waOfferPackageRules({
+        clubId,
+        phone: customer.phone,
+        studentName: customer.full_name,
+        packageName: mode === "predefined" ? selectedPkg.name : customName.trim(),
+        totalLessons: mode === "predefined" ? selectedPkg.total_lessons : +customLessons,
+        validityDays: mode === "predefined" ? selectedPkg.validity_days || null : +customValidity || null,
+        price: mode === "predefined" ? selectedPkg.price ?? null : +customPrice || null,
+        coachName: null
+      });
       onSaved();
       onClose();
     } catch (e) {

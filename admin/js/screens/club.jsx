@@ -80,6 +80,32 @@ function ClubProfileScreen({ clubId, clubProfile: initialProfile }) {
     } finally { setLogoBusy(false); }
   };
 
+  // ── Ayar arama + katlanabilir bölümler ───────────────────────────
+  // 10 bölüm tek modalda: kaydırma asıl darboğaz. Bölümler kapalı başlar,
+  // aranınca eşleşenler kendiliğinden açılır. Mobildeki davranışın aynısı.
+  const [secQuery, setSecQuery] = useState('');
+  const [secOpenMap, setSecOpenMap] = useState({});
+  const secToggle = (t) => setSecOpenMap(prev => ({ ...prev, [t]: !prev[t] }));
+
+  // Başlıkta geçmeyen ama aranacak kelimeler — bölüm başına tek satır.
+  const SEC_KEYWORDS = {
+    'Temel Bilgiler':       'isim ad logo açıklama şehir adres telefon eposta website',
+    'Konum':                'harita koordinat enlem boylam google maps',
+    'Tesis Detayları':      'kort sayısı ışık ücret çalışma saati açılış kapanış',
+    'Sistem Ayarları':      'üyelik kafe market çalışan personel',
+    'Rezervasyon Ayarları': 'süre kaç gün önce açılış haftalık primetime iptal limiti onay',
+    'Hoca İzinleri':        'antrenör ders ekleme paket zorunlu slot kilidi',
+    'Ders İptal Politikası':'geç iptal yapıldı sayılır saat eşik ceza',
+    'Ders Paketi Kuralları':'whatsapp mesaj şablon paket kuralları',
+    'Hocalara Haftalık Ders Açılışı': 'pencere açılış günü saat seri tekrarlayan',
+    'Olanaklar':            'amenity duş otopark kafeterya özellik',
+  };
+
+  const _sq = trFold(secQuery.trim());
+  const secVisible = (t) => !_sq || trFold(`${t} ${SEC_KEYWORDS[t] || ''}`).includes(_sq);
+  // Arama varken eşleşen bölüm kendiliğinden açılır
+  const secOpen = (t) => (_sq ? true : !!secOpenMap[t]);
+
   const saveProfile = async () => {
     setSaving(true);
     try {
@@ -150,6 +176,11 @@ function ClubProfileScreen({ clubId, clubProfile: initialProfile }) {
         coach_release_day_of_week:    form.coach_release_day_of_week != null ? Number(form.coach_release_day_of_week) : 6,
         coach_release_hour:           clampInt(form.coach_release_hour, 0, 23, 9),
         coach_weekly_window_days:     clampInt(form.coach_weekly_window_days, 1, 60, 7),
+
+        // Paket kuralları WhatsApp mesajı. Metin toggle kapalıyken de
+        // kaydedilir → kulüp yazdığını kaybetmez.
+        package_rules_whatsapp_enabled: form.package_rules_whatsapp_enabled === true,
+        package_rules_message:          (form.package_rules_message || '').trim() || null,
       };
       const { error } = await sb.from('club_profiles').update(payload).eq('id', clubId);
       if (error) throw error;
@@ -308,6 +339,18 @@ function ClubProfileScreen({ clubId, clubProfile: initialProfile }) {
         }>
           <div className="fields" style={{ gap:16 }}>
 
+            {/* ── Ayar arama (bölüm düzeyinde) ── */}
+            <div style={{ display:'flex', alignItems:'center', gap:8, border:'1px solid var(--border)',
+                          borderRadius:10, padding:'8px 12px', background:'var(--bg)' }}>
+              <span style={{ color:'var(--text-2)', fontSize:14 }}>🔍</span>
+              <input value={secQuery} onChange={e => setSecQuery(e.target.value)}
+                placeholder="Ayar ara (ör. iptal, paket, hoca, whatsapp)"
+                style={{ flex:1, border:'none', outline:'none', background:'transparent', fontSize:14 }} />
+              {secQuery && (
+                <button type="button" className="btn btn-ghost btn-sm" onClick={() => setSecQuery('')}>Temizle</button>
+              )}
+            </div>
+
             {/* Görünürlük */}
             <div style={{ background: form.is_visible !== false ? 'var(--success-soft, #f0fdf4)' : 'var(--accent-red-bg)', borderRadius:10, padding:'12px 14px', border: `1px solid ${form.is_visible !== false ? 'rgba(34,197,94,0.2)' : 'rgba(239,68,68,0.2)'}` }}>
               <Switch on={form.is_visible !== false} onChange={v => setForm({...form, is_visible: v})} label="Kulübü Listelemelerde Göster" />
@@ -316,7 +359,15 @@ function ClubProfileScreen({ clubId, clubProfile: initialProfile }) {
               </p>
             </div>
 
-            <div style={{ fontWeight:700, fontSize:12, color:'var(--text-2)', textTransform:'uppercase', letterSpacing:'.5px', borderBottom:'1px solid var(--border)', paddingBottom:6 }}>Temel Bilgiler</div>
+            {secVisible('Temel Bilgiler') && (<>
+            <div onClick={() => secToggle('Temel Bilgiler')}
+              style={{ display:'flex', alignItems:'center', gap:8, cursor:'pointer', userSelect:'none',
+                       fontWeight:700, fontSize:12, color:'var(--text-2)', textTransform:'uppercase',
+                       letterSpacing:'.5px', borderBottom:'1px solid var(--border)', paddingBottom:6 }}>
+              <span style={{ flex:1 }}>Temel Bilgiler</span>
+              <span style={{ fontSize:14 }}>{secOpen('Temel Bilgiler') ? '\u2212' : '+'}</span>
+            </div>
+            {secOpen('Temel Bilgiler') && (<>
             <Field label="Kulüp Logosu" hint="Oyuncu uygulamasında kulüp kartınızda görünür.">
               <div style={{ display:'flex', alignItems:'center', gap:12 }}>
                 {form.logo_url
@@ -351,7 +402,16 @@ function ClubProfileScreen({ clubId, clubProfile: initialProfile }) {
               <Field label="Web Sitesi"><input type="url" value={form.website || ''} placeholder="https://…" onChange={e => setForm({...form, website: e.target.value})} /></Field>
             </div>
 
-            <div style={{ fontWeight:700, fontSize:12, color:'var(--text-2)', textTransform:'uppercase', letterSpacing:'.5px', borderBottom:'1px solid var(--border)', paddingBottom:6 }}>Konum</div>
+            </>)}
+            </>)}{secVisible('Konum') && (<>
+            <div onClick={() => secToggle('Konum')}
+              style={{ display:'flex', alignItems:'center', gap:8, cursor:'pointer', userSelect:'none',
+                       fontWeight:700, fontSize:12, color:'var(--text-2)', textTransform:'uppercase',
+                       letterSpacing:'.5px', borderBottom:'1px solid var(--border)', paddingBottom:6 }}>
+              <span style={{ flex:1 }}>Konum</span>
+              <span style={{ fontSize:14 }}>{secOpen('Konum') ? '\u2212' : '+'}</span>
+            </div>
+            {secOpen('Konum') && (<>
             <Field label="Google Maps Linki" hint="Enlem/boylam koordinatları linkten otomatik çıkarılır.">
               <input value={form.google_maps_link || ''} placeholder="https://maps.google.com/…"
                 onChange={e => {
@@ -365,7 +425,16 @@ function ClubProfileScreen({ clubId, clubProfile: initialProfile }) {
               <Field label="Boylam (Otomatik)"><input value={form.longitude || ''} readOnly style={{ color:'var(--text-2)' }} placeholder="Otomatik çıkarılır" /></Field>
             </div>
 
-            <div style={{ fontWeight:700, fontSize:12, color:'var(--text-2)', textTransform:'uppercase', letterSpacing:'.5px', borderBottom:'1px solid var(--border)', paddingBottom:6 }}>Tesis Detayları</div>
+            </>)}
+            </>)}{secVisible('Tesis Detayları') && (<>
+            <div onClick={() => secToggle('Tesis Detayları')}
+              style={{ display:'flex', alignItems:'center', gap:8, cursor:'pointer', userSelect:'none',
+                       fontWeight:700, fontSize:12, color:'var(--text-2)', textTransform:'uppercase',
+                       letterSpacing:'.5px', borderBottom:'1px solid var(--border)', paddingBottom:6 }}>
+              <span style={{ flex:1 }}>Tesis Detayları</span>
+              <span style={{ fontSize:14 }}>{secOpen('Tesis Detayları') ? '\u2212' : '+'}</span>
+            </div>
+            {secOpen('Tesis Detayları') && (<>
             <div className="fields-2">
               <Field label="Kort Sayısı"><input type="number" min={1} value={form.number_of_courts || ''} onChange={e => setForm({...form, number_of_courts: e.target.value})} /></Field>
               <Field label="Işık Ücreti (₺/saat)"><input type="number" min={0} value={form.light_fee || ''} onChange={e => setForm({...form, light_fee: e.target.value})} /></Field>
@@ -387,7 +456,16 @@ function ClubProfileScreen({ clubId, clubProfile: initialProfile }) {
               </Field>
             </div>
 
-            <div style={{ fontWeight:700, fontSize:12, color:'var(--text-2)', textTransform:'uppercase', letterSpacing:'.5px', borderBottom:'1px solid var(--border)', paddingBottom:6 }}>Sistem Ayarları</div>
+            </>)}
+            </>)}{secVisible('Sistem Ayarları') && (<>
+            <div onClick={() => secToggle('Sistem Ayarları')}
+              style={{ display:'flex', alignItems:'center', gap:8, cursor:'pointer', userSelect:'none',
+                       fontWeight:700, fontSize:12, color:'var(--text-2)', textTransform:'uppercase',
+                       letterSpacing:'.5px', borderBottom:'1px solid var(--border)', paddingBottom:6 }}>
+              <span style={{ flex:1 }}>Sistem Ayarları</span>
+              <span style={{ fontSize:14 }}>{secOpen('Sistem Ayarları') ? '\u2212' : '+'}</span>
+            </div>
+            {secOpen('Sistem Ayarları') && (<>
 
             <div style={{ background: form.has_membership_system !== false ? '#F0FDF4' : '#FEF2F2', borderRadius:10, padding:'12px 14px', border: `1px solid ${form.has_membership_system !== false ? 'rgba(34,197,94,0.2)' : 'rgba(239,68,68,0.2)'}` }}>
               <Switch on={form.has_membership_system !== false} onChange={v => setForm({...form, has_membership_system: v})} label="Üyelik Sistemi" />
@@ -416,7 +494,16 @@ function ClubProfileScreen({ clubId, clubProfile: initialProfile }) {
               </p>
             </div>
 
-            <div style={{ fontWeight:700, fontSize:12, color:'var(--text-2)', textTransform:'uppercase', letterSpacing:'.5px', borderBottom:'1px solid var(--border)', paddingBottom:6 }}>Rezervasyon Ayarları</div>
+            </>)}
+            </>)}{secVisible('Rezervasyon Ayarları') && (<>
+            <div onClick={() => secToggle('Rezervasyon Ayarları')}
+              style={{ display:'flex', alignItems:'center', gap:8, cursor:'pointer', userSelect:'none',
+                       fontWeight:700, fontSize:12, color:'var(--text-2)', textTransform:'uppercase',
+                       letterSpacing:'.5px', borderBottom:'1px solid var(--border)', paddingBottom:6 }}>
+              <span style={{ flex:1 }}>Rezervasyon Ayarları</span>
+              <span style={{ fontSize:14 }}>{secOpen('Rezervasyon Ayarları') ? '\u2212' : '+'}</span>
+            </div>
+            {secOpen('Rezervasyon Ayarları') && (<>
 
             {/* Rezervasyon Onayı */}
             <div style={{ background: form.requires_booking_approval ? '#FEFCE8' : '#F0FDF4', borderRadius:10, padding:'12px 14px', border: `1px solid ${form.requires_booking_approval ? '#FDE68A' : 'rgba(34,197,94,0.2)'}` }}>
@@ -502,7 +589,16 @@ function ClubProfileScreen({ clubId, clubProfile: initialProfile }) {
               </Field>
             </div>
 
-            <div style={{ fontWeight:700, fontSize:12, color:'var(--text-2)', textTransform:'uppercase', letterSpacing:'.5px', borderBottom:'1px solid var(--border)', paddingBottom:6 }}>Hoca İzinleri</div>
+            </>)}
+            </>)}{secVisible('Hoca İzinleri') && (<>
+            <div onClick={() => secToggle('Hoca İzinleri')}
+              style={{ display:'flex', alignItems:'center', gap:8, cursor:'pointer', userSelect:'none',
+                       fontWeight:700, fontSize:12, color:'var(--text-2)', textTransform:'uppercase',
+                       letterSpacing:'.5px', borderBottom:'1px solid var(--border)', paddingBottom:6 }}>
+              <span style={{ flex:1 }}>Hoca İzinleri</span>
+              <span style={{ fontSize:14 }}>{secOpen('Hoca İzinleri') ? '\u2212' : '+'}</span>
+            </div>
+            {secOpen('Hoca İzinleri') && (<>
 
             <div style={{ background: form.coaches_can_add_lessons !== false ? '#F0FDF4' : '#FEF2F2', borderRadius:10, padding:'12px 14px', border:'1px solid var(--border)' }}>
               <Switch on={form.coaches_can_add_lessons !== false} onChange={v => setForm({...form, coaches_can_add_lessons: v})} label="Hocalar Ders Ekleyebilir" />
@@ -532,7 +628,16 @@ function ClubProfileScreen({ clubId, clubProfile: initialProfile }) {
                 onChange={e => setForm({...form, coach_cancel_slot_lock_minutes: e.target.value})} />
             </Field>
 
-            <div style={{ fontWeight:700, fontSize:12, color:'var(--text-2)', textTransform:'uppercase', letterSpacing:'.5px', borderBottom:'1px solid var(--border)', paddingBottom:6 }}>Ders İptal Politikası</div>
+            </>)}
+            </>)}{secVisible('Ders İptal Politikası') && (<>
+            <div onClick={() => secToggle('Ders İptal Politikası')}
+              style={{ display:'flex', alignItems:'center', gap:8, cursor:'pointer', userSelect:'none',
+                       fontWeight:700, fontSize:12, color:'var(--text-2)', textTransform:'uppercase',
+                       letterSpacing:'.5px', borderBottom:'1px solid var(--border)', paddingBottom:6 }}>
+              <span style={{ flex:1 }}>Ders İptal Politikası</span>
+              <span style={{ fontSize:14 }}>{secOpen('Ders İptal Politikası') ? '\u2212' : '+'}</span>
+            </div>
+            {secOpen('Ders İptal Politikası') && (<>
 
             <div style={{ background: form.late_cancel_charge_enabled ? '#FEF2F2' : 'var(--surface-2, #F8FAFC)', borderRadius:10, padding:'12px 14px', border:'1px solid var(--border)' }}>
               <Switch on={form.late_cancel_charge_enabled === true} onChange={v => setForm({...form, late_cancel_charge_enabled: v})} label="Geç İptal = Ders Yapıldı Sayılır" />
@@ -561,7 +666,68 @@ function ClubProfileScreen({ clubId, clubProfile: initialProfile }) {
               )}
             </div>
 
-            <div style={{ fontWeight:700, fontSize:12, color:'var(--text-2)', textTransform:'uppercase', letterSpacing:'.5px', borderBottom:'1px solid var(--border)', paddingBottom:6 }}>Hocalara Haftalık Ders Açılışı</div>
+            </>)}
+            </>)}{secVisible('Ders Paketi Kuralları') && (<>
+            <div onClick={() => secToggle('Ders Paketi Kuralları')}
+              style={{ display:'flex', alignItems:'center', gap:8, cursor:'pointer', userSelect:'none',
+                       fontWeight:700, fontSize:12, color:'var(--text-2)', textTransform:'uppercase',
+                       letterSpacing:'.5px', borderBottom:'1px solid var(--border)', paddingBottom:6 }}>
+              <span style={{ flex:1 }}>Ders Paketi Kuralları</span>
+              <span style={{ fontSize:14 }}>{secOpen('Ders Paketi Kuralları') ? '\u2212' : '+'}</span>
+            </div>
+            {secOpen('Ders Paketi Kuralları') && (<>
+
+            {/* Mesajı panel GÖNDERMEZ: paket tanımlandıktan sonra WhatsApp Web
+                hazır metinle açılır, kulüp kendi numarasından gönderir. */}
+            <div style={{ background: form.package_rules_whatsapp_enabled ? '#F0FDF4' : 'var(--surface-2, #F8FAFC)', borderRadius:10, padding:'12px 14px', border:'1px solid var(--border)' }}>
+              <Switch on={form.package_rules_whatsapp_enabled === true} onChange={v => setForm({...form, package_rules_whatsapp_enabled: v})} label="Paket Kurallarını WhatsApp'tan Gönder" />
+              <p style={{ fontSize:11, color:'var(--text-2)', margin:'6px 0 0 0' }}>
+                {form.package_rules_whatsapp_enabled
+                  ? 'Bir müşteriye paket tanımladıktan sonra WhatsApp hazır mesajla açılır; size yalnız "Gönder"e basmak kalır.'
+                  : 'Kapalı: paket tanımlandıktan sonra hiçbir şey sorulmaz.'}
+              </p>
+
+              {form.package_rules_whatsapp_enabled && (
+                <div style={{ marginTop:12 }}>
+                  <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', marginBottom:6 }}>
+                    <span style={{ fontSize:12, fontWeight:700 }}>Mesaj</span>
+                    {!((form.package_rules_message || '').trim()) && (
+                      <button type="button" className="btn btn-ghost btn-sm"
+                        onClick={() => setForm({...form, package_rules_message: PACKAGE_RULES_SAMPLE})}>
+                        Örnek metni doldur
+                      </button>
+                    )}
+                  </div>
+                  <textarea rows={12} style={{ width:'100%', boxSizing:'border-box', resize:'vertical' }}
+                    value={form.package_rules_message || ''}
+                    placeholder="Merhaba {ogrenci}, ... paketiniz tanımlanmıştır."
+                    onChange={e => setForm({...form, package_rules_message: e.target.value})} />
+                  <p style={{ fontSize:11, color:'var(--text-2)', margin:'8px 0 6px 0' }}>
+                    Kullanabileceğiniz değişkenler — gönderim anında otomatik dolar:
+                  </p>
+                  <div style={{ display:'flex', flexWrap:'wrap', gap:6 }}>
+                    {['{ogrenci}','{paket}','{ders}','{gecerlilik}','{ucret}','{hoca}','{kulup}'].map(v => (
+                      <div key={v} className="chip" style={{ cursor:'default' }}>{v}</div>
+                    ))}
+                  </div>
+                  <p style={{ fontSize:11, color:'var(--text-2)', margin:'10px 0 0 0' }}>
+                    Mesaj boş bırakılırsa gönderim önerilmez. Müşterinin telefonu kayıtlı
+                    değilse de hiçbir şey sorulmaz — paket normal şekilde kaydedilir.
+                  </p>
+                </div>
+              )}
+            </div>
+
+            </>)}
+            </>)}{secVisible('Hocalara Haftalık Ders Açılışı') && (<>
+            <div onClick={() => secToggle('Hocalara Haftalık Ders Açılışı')}
+              style={{ display:'flex', alignItems:'center', gap:8, cursor:'pointer', userSelect:'none',
+                       fontWeight:700, fontSize:12, color:'var(--text-2)', textTransform:'uppercase',
+                       letterSpacing:'.5px', borderBottom:'1px solid var(--border)', paddingBottom:6 }}>
+              <span style={{ flex:1 }}>Hocalara Haftalık Ders Açılışı</span>
+              <span style={{ fontSize:14 }}>{secOpen('Hocalara Haftalık Ders Açılışı') ? '\u2212' : '+'}</span>
+            </div>
+            {secOpen('Hocalara Haftalık Ders Açılışı') && (<>
 
             <div style={{ background: form.coach_booking_window_enabled ? '#EEF2FF' : 'var(--surface-2, #F8FAFC)', borderRadius:10, padding:'12px 14px', border:'1px solid var(--border)' }}>
               <Switch on={form.coach_booking_window_enabled === true} onChange={v => setForm({...form, coach_booking_window_enabled: v})} label="Hocalara Haftalık Ders Açılışı" />
@@ -599,13 +765,23 @@ function ClubProfileScreen({ clubId, clubProfile: initialProfile }) {
               )}
             </div>
 
-            <div style={{ fontWeight:700, fontSize:12, color:'var(--text-2)', textTransform:'uppercase', letterSpacing:'.5px', borderBottom:'1px solid var(--border)', paddingBottom:6 }}>Olanaklar</div>
+            </>)}
+            </>)}{secVisible('Olanaklar') && (<>
+            <div onClick={() => secToggle('Olanaklar')}
+              style={{ display:'flex', alignItems:'center', gap:8, cursor:'pointer', userSelect:'none',
+                       fontWeight:700, fontSize:12, color:'var(--text-2)', textTransform:'uppercase',
+                       letterSpacing:'.5px', borderBottom:'1px solid var(--border)', paddingBottom:6 }}>
+              <span style={{ flex:1 }}>Olanaklar</span>
+              <span style={{ fontSize:14 }}>{secOpen('Olanaklar') ? '\u2212' : '+'}</span>
+            </div>
+            {secOpen('Olanaklar') && (<>
             <div style={{ display:'flex', flexWrap:'wrap', gap:8 }}>
               {AMENITIES_LIST.map(a => (
                 <div key={a} className={`chip${formAmenities.includes(a) ? ' active' : ''}`} onClick={() => toggleAmenity(a)} style={{ cursor:'pointer' }}>{a}</div>
               ))}
             </div>
-          </div>
+</>)}
+            </>)}          </div>
         </Modal>
       )}
 

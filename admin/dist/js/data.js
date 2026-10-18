@@ -167,3 +167,99 @@ async function getClubCourtIds(clubId) {
 
 // ── Boş veri ───────────────────────────────────────────────────
 window._sb = sb; // hata ayıklama için erişilebilir
+
+// ── WhatsApp: hazır mesajla yönlendirme ─────────────────────────
+// Mesajı panel GÖNDERMEZ; WhatsApp Web açılır, metin kutuda hazır gelir.
+// Arka planda gönderim WhatsApp Business API gerektirir (onaylı şablon,
+// aylık ücret, numara doğrulama) — bu akış onu gerektirmeden aynı işi görür.
+//
+// Kurallar mobildeki src/utils/whatsapp.ts ile BİREBİR AYNI olmalı; ikisi
+// ayrışırsa aynı müşteriye iki farklı numara/metin üretilir.
+
+/** Telefonu wa.me biçimine çevirir (ülke kodu + numara). Çözülemezse null. */
+function waNormalizePhone(raw) {
+  const d = String(raw ?? '').replace(/\D/g, '');
+  if (!d) return null;
+  if (d.length === 11 && d.startsWith('0')) return '90' + d.slice(1);   // 0532…
+  if (d.length === 10 && d.startsWith('5')) return '90' + d;            // 532…
+  if (d.length === 12 && d.startsWith('90')) return d;                  // 90532…
+  if (d.length === 13 && d.startsWith('0')) return d.slice(1);          // 0090532…
+  return d.length >= 10 ? d : null;   // ülke koduyla girilmiş yabancı numara
+}
+
+/** 905321234567 → +90 532 *** ** 67 */
+function waMaskPhone(p) {
+  if (!p || p.length < 6) return p || '';
+  return `+${p.slice(0, p.length - 6)} *** ** ${p.slice(-2)}`;
+}
+
+/** {anahtar} doldurur; tanınmayan {...} OLDUĞU GİBİ kalır. */
+function waFillTemplate(tpl, vars) {
+  return String(tpl).replace(/\{(\w+)\}/g, (m, k) =>
+    (vars[k] === undefined || vars[k] === null) ? m : String(vars[k]));
+}
+
+/** Kulübün paket kuralları ayarını GÖNDERİM ANINDA okur. Kapalı/boşsa null. */
+async function waGetPackageRules(clubId) {
+  if (!clubId) return null;
+  try {
+    const { data, error } = await sb.from('club_profiles')
+      .select('package_rules_whatsapp_enabled, package_rules_message, club_name')
+      .eq('id', clubId).maybeSingle();
+    if (error) throw error;
+    if (!data?.package_rules_whatsapp_enabled) return null;
+    const tpl = (data.package_rules_message || '').trim();
+    if (!tpl) return null;
+    return { template: tpl, clubName: data.club_name || '' };
+  } catch (e) {
+    console.warn('waGetPackageRules:', e.message);
+    return null;   // sessiz geç: paket zaten kaydedildi
+  }
+}
+
+/**
+ * Paket kaydedildikten SONRA çağrılır. Ayar kapalı / şablon boş / telefon yok
+ * → sessizce hiçbir şey olmaz. Paket kaydını hiçbir koşulda etkilemez.
+ */
+async function waOfferPackageRules({ clubId, phone, studentName, packageName,
+                                     totalLessons, validityDays, price, coachName }) {
+  const cfg = await waGetPackageRules(clubId);
+  if (!cfg) return;
+
+  const p = waNormalizePhone(phone);
+  if (!p) return;
+
+  const text = waFillTemplate(cfg.template, {
+    ogrenci:    studentName || 'Öğrenci',
+    paket:      packageName,
+    ders:       String(totalLessons),
+    gecerlilik: validityDays ? `${validityDays} gün` : 'süresiz',
+    ucret:      (price !== null && price !== undefined) ? `${price} TL` : '-',
+    hoca:       coachName || '-',
+    kulup:      cfg.clubName,
+  });
+
+  const ok = confirm(
+    `${studentName || 'Müşteri'} · ${waMaskPhone(p)}\n\n` +
+    'Paket kurallarını WhatsApp\'tan göndermek ister misiniz?\n' +
+    'Mesaj hazır gelecek, yalnız "Gönder"e basmanız yeterli.'
+  );
+  if (!ok) return;
+
+  window.open(`https://wa.me/${p}?text=${encodeURIComponent(text)}`, '_blank');
+}
+
+/** Ayar ekranındaki "Örnek metni doldur" taslağı (mobil ile aynı metin) */
+const PACKAGE_RULES_SAMPLE =
+  'Merhaba {ogrenci} 👋\n\n' +
+  '{kulup} olarak "{paket}" paketiniz tanımlanmıştır.\n\n' +
+  '• Ders sayısı: {ders}\n' +
+  '• Geçerlilik: {gecerlilik}\n' +
+  '• Ücret: {ucret}\n' +
+  '• Antrenör: {hoca}\n\n' +
+  'Paket kuralları:\n' +
+  '1) Dersler paket geçerlilik süresi içinde kullanılmalıdır.\n' +
+  '2) İptal için en geç ders saatinden belirtilen süre önce haber verilmelidir; ' +
+  'geç iptal edilen dersler yapılmış sayılır.\n' +
+  '3) Kullanılmayan dersler süre sonunda iade edilmez.\n\n' +
+  'Sorularınız için bize yazabilirsiniz. İyi antrenmanlar! 🎾';

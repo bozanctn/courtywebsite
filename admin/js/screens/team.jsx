@@ -301,6 +301,84 @@ function CoachesScreen({ clubId }) {
     finally { setScheduleLoading(false); }
   };
 
+  // ── Hocanın öğrencileri ─────────────────────────────────────────
+  // KAPSAM: bu hocaya BAĞLI olanlar. Hocanın telefondaki "Öğrencilerim"
+  // ekranı paketli öğrencileri club_id ile çekiyor (hoca filtresi YOK), yani
+  // orada aynı kulüpteki her hoca aynı listeyi görüyor. Kulüp panelinde bu
+  // yanıltıcı olurdu ("hangi hocaya tıklasam aynı isimler") — burada paket
+  // kayıtlarını hocaya göre süzüyoruz.
+  const [studentsCoach, setStudentsCoach] = useState(null);
+  const [stuLoading, setStuLoading]       = useState(false);
+  const [stuManual, setStuManual]         = useState([]);
+  const [stuPackages, setStuPackages]     = useState([]);
+  const [stuGroups, setStuGroups]         = useState([]);
+
+  const openStudents = async (coach) => {
+    setStudentsCoach(coach);
+    setStuManual([]); setStuPackages([]); setStuGroups([]);
+    setModal('students');
+    setStuLoading(true);
+    try {
+      const authId = coach.individual_coach_id || null;   // hocanın hesap id'si
+      const ccId   = coach.id;                            // club_coaches satır id'si
+
+      // 1) Hocanın kendi eklediği manuel öğrenciler (coach_id = auth id)
+      const manualP = authId
+        ? sb.from('coach_manual_students')
+            .select('id, name, phone, notes')
+            .eq('coach_id', authId).order('name')
+        : Promise.resolve({ data: [] });
+
+      // 2) Paketli öğrenciler — bu hocaya atanmış olanlar.
+      //    DİKKAT: player_lesson_packages.coach_id kolonunda İKİ FARKLI şey
+      //    bulunabiliyor (mobil auth id, web club_coaches.id yazıyor).
+      //    İkisini birden karşılıyoruz, yoksa yarısı kaybolur.
+      const coachIds = [ccId, authId].filter(Boolean);
+      const pkgP = sb.from('player_lesson_packages')
+        .select('id, player_id, manual_player_name, total_lessons, used_lessons, expiry_date, status, package_id, custom_name, lesson_packages(name), profiles!player_lesson_packages_player_id_fkey(full_name, email)')
+        .eq('club_id', clubId)
+        .in('coach_id', coachIds)
+        .eq('status', 'active');
+
+      // 3) Hocanın grupları + üyeleri (club_groups.coach_id = club_coaches.id)
+      const grpP = sb.from('club_groups')
+        .select('id, name, billing_type, members:club_group_members(id, member_name, contact_number, contact_person)')
+        .eq('coach_id', ccId).eq('is_active', true).order('name');
+
+      const [manualR, pkgR, grpR] = await Promise.all([manualP, pkgP, grpP]);
+
+      setStuManual(manualR.data || []);
+
+      const now = new Date().toISOString();
+      const seen = new Set();
+      const pkgs = [];
+      for (const p of (pkgR.data || [])) {
+        if (p.expiry_date && p.expiry_date < now) continue;   // süresi dolmuş
+        const name = p.profiles?.full_name || p.manual_player_name || 'Bilinmeyen';
+        const key  = p.player_id || `name:${(p.manual_player_name || '').toLowerCase().trim()}`;
+        if (seen.has(key)) continue;                           // aynı kişi birden çok pakette
+        seen.add(key);
+        pkgs.push({
+          id: p.id, name,
+          email: p.profiles?.email || null,
+          pkgName: p.lesson_packages?.name || p.custom_name || 'Paket',
+          remaining: Math.max(0, (p.total_lessons || 0) - (p.used_lessons || 0)),
+          total: p.total_lessons || 0,
+          expiry: p.expiry_date,
+          registered: !!p.player_id,
+        });
+      }
+      pkgs.sort((a, b) => a.name.localeCompare(b.name, 'tr'));
+      setStuPackages(pkgs);
+
+      setStuGroups((grpR.data || []).filter(g => (g.members || []).length > 0));
+    } catch (e) {
+      alert('Öğrenciler yüklenemedi: ' + e.message);
+    } finally {
+      setStuLoading(false);
+    }
+  };
+
   const openSchedule = (coach) => {
     setScheduleCoach(coach);
     setWeekOffset(0);
@@ -409,6 +487,9 @@ function CoachesScreen({ clubId }) {
               <div style={{ display: 'flex', gap: 8 }}>
                 <button className="btn btn-ghost btn-sm" style={{ flex: 1, color: '#22C55E' }} onClick={() => openSchedule(c)}>
                   <span className="material-icons" style={{ fontSize: 15 }}>calendar_today</span> Program
+                </button>
+                <button className="btn btn-ghost btn-sm" style={{ flex: 1, color: '#6366F1' }} onClick={() => openStudents(c)}>
+                  <span className="material-icons" style={{ fontSize: 15 }}>groups</span> Öğrenciler
                 </button>
                 <button className="btn btn-ghost btn-sm" style={{ flex: 1 }} onClick={() => openEdit(c)}>
                   <span className="material-icons" style={{ fontSize: 15 }}>edit</span> Düzenle
@@ -588,6 +669,111 @@ function CoachesScreen({ clubId }) {
       )}
 
       {/* ── Schedule Modal ── */}
+      {/* ── Hocanın Öğrencileri ── */}
+      {modal === 'students' && studentsCoach && (
+        <Modal
+          title={`${studentsCoach.full_name} — Öğrenciler`}
+          wide
+          onClose={() => setModal(null)}
+          footer={<button className="btn btn-ghost btn-sm" onClick={() => setModal(null)}>Kapat</button>}
+        >
+          {stuLoading ? (
+            <div style={{ padding: 24, textAlign: 'center', color: 'var(--text-2)' }}>Yükleniyor…</div>
+          ) : (() => {
+            const groupMemberCount = stuGroups.reduce((n, g) => n + (g.members || []).length, 0);
+            const total = stuManual.length + stuPackages.length + groupMemberCount;
+            if (total === 0) {
+              return (
+                <div style={{ padding: 24, textAlign: 'center', color: 'var(--text-2)' }}>
+                  Bu hocaya bağlı öğrenci bulunamadı.<br />
+                  <span style={{ fontSize: 12 }}>
+                    Paketli öğrenciler, pakette antrenör olarak bu hoca seçilmişse burada görünür.
+                  </span>
+                </div>
+              );
+            }
+            return (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 18 }}>
+                <div style={{ fontSize: 13, color: 'var(--text-2)' }}>
+                  Toplam <b>{total}</b> öğrenci · {stuPackages.length} paketli · {stuManual.length} manuel · {groupMemberCount} grup üyesi
+                </div>
+
+                {/* Paketli */}
+                {stuPackages.length > 0 && (
+                  <div>
+                    <div style={{ fontWeight: 700, fontSize: 12, color: 'var(--text-2)', textTransform: 'uppercase', letterSpacing: '.5px', borderBottom: '1px solid var(--border)', paddingBottom: 6, marginBottom: 10 }}>
+                      Paketli Öğrenciler ({stuPackages.length})
+                    </div>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                      {stuPackages.map(st => (
+                        <div key={st.id} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '8px 10px', border: '1px solid var(--border)', borderRadius: 10 }}>
+                          <div style={{ flex: 1 }}>
+                            <div style={{ fontWeight: 600, fontSize: 14 }}>
+                              {st.name}
+                              {!st.registered && <span style={{ fontSize: 11, color: 'var(--text-2)', marginLeft: 6 }}>(hesapsız)</span>}
+                            </div>
+                            <div style={{ fontSize: 12, color: 'var(--text-2)' }}>
+                              {st.pkgName} · {st.remaining}/{st.total} ders kaldı
+                              {st.expiry ? ` · son ${fmtDate(st.expiry)}` : ''}
+                            </div>
+                          </div>
+                          <span className={`badge${st.remaining === 0 ? ' badge-red' : ''}`}>{st.remaining}</span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                {/* Manuel */}
+                {stuManual.length > 0 && (
+                  <div>
+                    <div style={{ fontWeight: 700, fontSize: 12, color: 'var(--text-2)', textTransform: 'uppercase', letterSpacing: '.5px', borderBottom: '1px solid var(--border)', paddingBottom: 6, marginBottom: 10 }}>
+                      Hocanın Eklediği Öğrenciler ({stuManual.length})
+                    </div>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                      {stuManual.map(m => (
+                        <div key={m.id} style={{ padding: '8px 10px', border: '1px solid var(--border)', borderRadius: 10 }}>
+                          <div style={{ fontWeight: 600, fontSize: 14 }}>{m.name}</div>
+                          <div style={{ fontSize: 12, color: 'var(--text-2)' }}>
+                            {m.phone || 'telefon yok'}{m.notes ? ` · ${m.notes}` : ''}
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                {/* Gruplar */}
+                {stuGroups.length > 0 && (
+                  <div>
+                    <div style={{ fontWeight: 700, fontSize: 12, color: 'var(--text-2)', textTransform: 'uppercase', letterSpacing: '.5px', borderBottom: '1px solid var(--border)', paddingBottom: 6, marginBottom: 10 }}>
+                      Gruplar ({stuGroups.length} grup · {groupMemberCount} kişi)
+                    </div>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+                      {stuGroups.map(g => (
+                        <div key={g.id}>
+                          <div style={{ fontWeight: 600, fontSize: 13, marginBottom: 6 }}>
+                            {g.name} <span style={{ fontSize: 12, color: 'var(--text-2)' }}>({g.members.length} kişi)</span>
+                          </div>
+                          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+                            {g.members.map(mem => (
+                              <div key={mem.id} className="chip" style={{ cursor: 'default' }}>
+                                {mem.member_name}
+                                {mem.contact_number ? ` · ${mem.contact_number}` : ''}
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+              </div>
+            );
+          })()}
+        </Modal>
+      )}
+
       {modal === 'schedule' && scheduleCoach && (() => {
         const { monday, sunday } = getWeekBounds(weekOffset);
         const days = getWeekDays(weekOffset);
