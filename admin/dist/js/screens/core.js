@@ -1981,7 +1981,7 @@ ${lines}
           setLessonForm({ ...lessonForm, end_time: e.target.value, duration: dur });
         }
       }
-    )), /* @__PURE__ */ React.createElement("div", { style: { fontSize: 12, fontWeight: 700, color: "var(--text-2)", marginBottom: 8, letterSpacing: 0.4, marginTop: 14 } }, "S\xDCRE (opsiyonel \u2014 biti\u015F saatini otomatik doldurur)"), /* @__PURE__ */ React.createElement("div", { style: { display: "flex", flexWrap: "wrap", gap: 8, marginBottom: 16 } }, [{ label: "30 dk", value: 0.5 }, { label: "45 dk", value: 0.75 }, { label: "1 saat", value: 1 }, { label: "1.5 saat", value: 1.5 }, { label: "2 saat", value: 2 }].map((d) => /* @__PURE__ */ React.createElement(
+    )), /* @__PURE__ */ React.createElement("div", { style: { fontSize: 12, fontWeight: 700, color: "var(--text-2)", marginBottom: 8, letterSpacing: 0.4, marginTop: 14 } }, "S\xDCRE (opsiyonel \u2014 biti\u015F saatini otomatik doldurur)"), /* @__PURE__ */ React.createElement("div", { style: { display: "flex", flexWrap: "wrap", gap: 8, marginBottom: 16 } }, (clubProfile?.allowed_lesson_durations?.length ? clubProfile.allowed_lesson_durations : [30, 45, 60, 90, 120]).slice().sort((a, b) => a - b).map((m) => ({ label: m < 60 ? `${m} dk` : `${m / 60} saat`, value: m / 60 })).map((d) => /* @__PURE__ */ React.createElement(
       "div",
       {
         key: d.value,

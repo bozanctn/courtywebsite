@@ -2463,7 +2463,15 @@ function ReservationsScreen({ clubId, setScreen, clubProfile }) {
               {/* ── Süre hızlı seçim ─────────────────────────── */}
               <div style={{ fontSize:12, fontWeight:700, color:'var(--text-2)', marginBottom:8, letterSpacing:0.4, marginTop:14 }}>SÜRE (opsiyonel — bitiş saatini otomatik doldurur)</div>
               <div style={{ display:'flex', flexWrap:'wrap', gap:8, marginBottom:16 }}>
-                {[{label:'30 dk', value:0.5}, {label:'45 dk', value:0.75}, {label:'1 saat', value:1}, {label:'1.5 saat', value:1.5}, {label:'2 saat', value:2}].map(d => (
+                {/* Süre seçenekleri KULÜP AYARINDAN (allowed_lesson_durations).
+                    Mobildeki ders ekleme ekranlarıyla aynı liste; ayar yoksa
+                    eski beş seçenek kullanılır. */}
+                {((clubProfile?.allowed_lesson_durations?.length
+                    ? clubProfile.allowed_lesson_durations
+                    : [30, 45, 60, 90, 120])
+                  .slice().sort((a, b) => a - b)
+                  .map(m => ({ label: m < 60 ? `${m} dk` : `${m / 60} saat`, value: m / 60 }))
+                 ).map(d => (
                   <div key={d.value}
                     style={{ display:'flex', alignItems:'center', gap:5, padding:'10px 14px', borderRadius:12, border: lessonForm.duration === d.value ? '1.5px solid var(--brand-navy)' : '1.5px solid var(--border)', background: lessonForm.duration === d.value ? '#EEF2FF' : 'var(--bg)', cursor:'pointer' }}
                     onClick={() => setLessonForm({...lessonForm, duration: lessonForm.duration === d.value ? null : d.value})}

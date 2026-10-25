@@ -88,7 +88,7 @@ function ClubProfileScreen({ clubId, clubProfile: initialProfile }) {
     "Tesis Detaylar\u0131": "kort say\u0131s\u0131 \u0131\u015F\u0131k \xFCcret \xE7al\u0131\u015Fma saati a\xE7\u0131l\u0131\u015F kapan\u0131\u015F",
     "Sistem Ayarlar\u0131": "\xFCyelik kafe market \xE7al\u0131\u015Fan personel",
     "Rezervasyon Ayarlar\u0131": "s\xFCre ka\xE7 g\xFCn \xF6nce a\xE7\u0131l\u0131\u015F haftal\u0131k primetime iptal limiti onay",
-    "Hoca \u0130zinleri": "antren\xF6r ders ekleme paket zorunlu slot kilidi",
+    "Hoca \u0130zinleri": "antren\xF6r ders ekleme paket zorunlu slot kilidi s\xFCre dakika saat kul\xFCp takvimi yeni d\xFC\u011Fme rezervasyon",
     "Ders \u0130ptal Politikas\u0131": "ge\xE7 iptal yap\u0131ld\u0131 say\u0131l\u0131r saat e\u015Fik ceza",
     "Ders Paketi Kurallar\u0131": "whatsapp mesaj \u015Fablon paket kurallar\u0131",
     "Hocalara Haftal\u0131k Ders A\xE7\u0131l\u0131\u015F\u0131": "pencere a\xE7\u0131l\u0131\u015F g\xFCn\xFC saat seri tekrarlayan",
@@ -161,7 +161,11 @@ function ClubProfileScreen({ clubId, clubProfile: initialProfile }) {
         // Paket kuralları WhatsApp mesajı. Metin toggle kapalıyken de
         // kaydedilir → kulüp yazdığını kaybetmez.
         package_rules_whatsapp_enabled: form.package_rules_whatsapp_enabled === true,
-        package_rules_message: (form.package_rules_message || "").trim() || null
+        package_rules_message: (form.package_rules_message || "").trim() || null,
+        // Ders süresi seçenekleri — boş bırakılamaz, yoksa ders eklenemez
+        allowed_lesson_durations: Array.isArray(form.allowed_lesson_durations) && form.allowed_lesson_durations.length > 0 ? form.allowed_lesson_durations : [60],
+        // Kulüp takvimindeki "+ Yeni" düğmesi (coaches_can_add_lessons'tan AYRI)
+        coaches_can_add_from_club_calendar: form.coaches_can_add_from_club_calendar !== false
       };
       const { error } = await sb.from("club_profiles").update(payload).eq("id", clubId);
       if (error) throw error;
@@ -453,7 +457,24 @@ function ClubProfileScreen({ clubId, clubProfile: initialProfile }) {
       placeholder: "Kapal\u0131 (bo\u015F b\u0131rak\u0131n)",
       onChange: (e) => setForm({ ...form, coach_cancel_slot_lock_minutes: e.target.value })
     }
-  )))), secVisible("Ders \u0130ptal Politikas\u0131") && /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement(
+  ))), /* @__PURE__ */ React.createElement("div", { style: { background: "var(--surface-2, #F8FAFC)", borderRadius: 10, padding: "12px 14px", border: "1px solid var(--border)", opacity: form.coaches_can_add_lessons === false ? 0.5 : 1 } }, /* @__PURE__ */ React.createElement(Switch, { on: form.coaches_can_add_from_club_calendar !== false, onChange: (v) => setForm({ ...form, coaches_can_add_from_club_calendar: v }), label: "Kul\xFCp Takviminden Ekleme" }), /* @__PURE__ */ React.createElement("p", { style: { fontSize: 11, color: "var(--text-2)", margin: "6px 0 0 0" } }, form.coaches_can_add_from_club_calendar !== false ? 'Hocalar kul\xFCp takvimindeki "+ Yeni" d\xFC\u011Fmesinden rezervasyon, ders ve tekrarlayan ders ekleyebilir.' : 'Kul\xFCp takvimindeki "+ Yeni" d\xFC\u011Fmesi hocalara g\xF6r\xFCnmez. Kendi takvimlerinden ders eklemeye devam ederler.')), /* @__PURE__ */ React.createElement(Field, { label: "Ders S\xFCresi Se\xE7enekleri", hint: 'Ders eklenirken yaln\u0131z se\xE7tikleriniz sunulur. Oyuncu kort rezervasyonu i\xE7in ayr\u0131 ayar var ("\u0130zin Verilen Rezervasyon S\xFCreleri").' }, /* @__PURE__ */ React.createElement("div", { style: { display: "flex", flexWrap: "wrap", gap: 8, marginTop: 4 } }, [30, 45, 60, 90, 120].map((m) => {
+    const list = Array.isArray(form.allowed_lesson_durations) ? form.allowed_lesson_durations : [30, 45, 60, 90, 120];
+    const on = list.includes(m);
+    return /* @__PURE__ */ React.createElement(
+      "div",
+      {
+        key: m,
+        className: `chip${on ? " active" : ""}`,
+        style: { cursor: "pointer" },
+        onClick: () => {
+          const next = on ? list.filter((x) => x !== m) : [...list, m].sort((a, b) => a - b);
+          if (next.length === 0) return;
+          setForm({ ...form, allowed_lesson_durations: next });
+        }
+      },
+      m < 60 ? `${m} dk` : `${m / 60} saat`
+    );
+  })))), secVisible("Ders \u0130ptal Politikas\u0131") && /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement(
     "div",
     {
       onClick: () => secToggle("Ders \u0130ptal Politikas\u0131"),

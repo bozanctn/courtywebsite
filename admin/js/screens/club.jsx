@@ -94,7 +94,7 @@ function ClubProfileScreen({ clubId, clubProfile: initialProfile }) {
     'Tesis Detayları':      'kort sayısı ışık ücret çalışma saati açılış kapanış',
     'Sistem Ayarları':      'üyelik kafe market çalışan personel',
     'Rezervasyon Ayarları': 'süre kaç gün önce açılış haftalık primetime iptal limiti onay',
-    'Hoca İzinleri':        'antrenör ders ekleme paket zorunlu slot kilidi',
+    'Hoca İzinleri':        'antrenör ders ekleme paket zorunlu slot kilidi süre dakika saat kulüp takvimi yeni düğme rezervasyon',
     'Ders İptal Politikası':'geç iptal yapıldı sayılır saat eşik ceza',
     'Ders Paketi Kuralları':'whatsapp mesaj şablon paket kuralları',
     'Hocalara Haftalık Ders Açılışı': 'pencere açılış günü saat seri tekrarlayan',
@@ -181,6 +181,12 @@ function ClubProfileScreen({ clubId, clubProfile: initialProfile }) {
         // kaydedilir → kulüp yazdığını kaybetmez.
         package_rules_whatsapp_enabled: form.package_rules_whatsapp_enabled === true,
         package_rules_message:          (form.package_rules_message || '').trim() || null,
+
+        // Ders süresi seçenekleri — boş bırakılamaz, yoksa ders eklenemez
+        allowed_lesson_durations: (Array.isArray(form.allowed_lesson_durations) && form.allowed_lesson_durations.length > 0)
+          ? form.allowed_lesson_durations : [60],
+        // Kulüp takvimindeki "+ Yeni" düğmesi (coaches_can_add_lessons'tan AYRI)
+        coaches_can_add_from_club_calendar: form.coaches_can_add_from_club_calendar !== false,
       };
       const { error } = await sb.from('club_profiles').update(payload).eq('id', clubId);
       if (error) throw error;
@@ -629,6 +635,35 @@ function ClubProfileScreen({ clubId, clubProfile: initialProfile }) {
             </Field>
 
             </>)}
+                        {/* Kulüp takviminden ekleme — coaches_can_add_lessons'tan AYRI.
+                O, hocanın kendi ekranından ders yazmasını yönetir; bu ise kulüp
+                takvimindeki "+ Yeni" düğmesini (rezervasyon + ders + seri). */}
+            <div style={{ background:'var(--surface-2, #F8FAFC)', borderRadius:10, padding:'12px 14px', border:'1px solid var(--border)', opacity: form.coaches_can_add_lessons === false ? 0.5 : 1 }}>
+              <Switch on={form.coaches_can_add_from_club_calendar !== false} onChange={v => setForm({...form, coaches_can_add_from_club_calendar: v})} label="Kulüp Takviminden Ekleme" />
+              <p style={{ fontSize:11, color:'var(--text-2)', margin:'6px 0 0 0' }}>
+                {form.coaches_can_add_from_club_calendar !== false
+                  ? 'Hocalar kulüp takvimindeki "+ Yeni" düğmesinden rezervasyon, ders ve tekrarlayan ders ekleyebilir.'
+                  : 'Kulüp takvimindeki "+ Yeni" düğmesi hocalara görünmez. Kendi takvimlerinden ders eklemeye devam ederler.'}
+              </p>
+            </div>
+
+            <Field label="Ders Süresi Seçenekleri" hint='Ders eklenirken yalnız seçtikleriniz sunulur. Oyuncu kort rezervasyonu için ayrı ayar var ("İzin Verilen Rezervasyon Süreleri").'>
+              <div style={{ display:'flex', flexWrap:'wrap', gap:8, marginTop:4 }}>
+                {[30, 45, 60, 90, 120].map(m => {
+                  const list = Array.isArray(form.allowed_lesson_durations) ? form.allowed_lesson_durations : [30,45,60,90,120];
+                  const on = list.includes(m);
+                  return (
+                    <div key={m} className={`chip${on ? ' active' : ''}`} style={{ cursor:'pointer' }}
+                      onClick={() => {
+                        const next = on ? list.filter(x => x !== m) : [...list, m].sort((a, b) => a - b);
+                        if (next.length === 0) return;   // hepsini kapatmaya izin yok
+                        setForm({...form, allowed_lesson_durations: next});
+                      }}>{m < 60 ? `${m} dk` : `${m / 60} saat`}</div>
+                  );
+                })}
+              </div>
+            </Field>
+
             </>)}{secVisible('Ders İptal Politikası') && (<>
             <div onClick={() => secToggle('Ders İptal Politikası')}
               style={{ display:'flex', alignItems:'center', gap:8, cursor:'pointer', userSelect:'none',
